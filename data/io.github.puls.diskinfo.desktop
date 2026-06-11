@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=PULS DiskInfo
+GenericName=Disk Health Monitor
+Comment=Monitor disk health, S.M.A.R.T. attributes, and temperature
+Exec=puls-diskinfo
+Icon=io.github.puls.diskinfo
+Terminal=false
+Type=Application
+Categories=System;Monitor;Utility;
+Keywords=disk;smart;health;temperature;nvme;ssd;hdd;monitor;
+StartupNotify=true

@@ -1,0 +1,30 @@
+puls_sources = files(
+  'main.c',
+  'puls-application.c',
+  'puls-window.c',
+  'puls-smart-data.c',
+  'puls-smart-parser.c',
+  'puls-disk-manager.c',
+  'puls-utils.c',
+  'puls-health-indicator.c',
+  'puls-temperature-widget.c',
+  'puls-smart-table.c',
+  'puls-disk-info-view.c',
+  'puls-disk-selector.c',
+  'puls-about-dialog.c',
+  'puls-preferences-window.c',
+  'puls-settings.c',
+)
+
+executable('puls-diskinfo',
+  puls_sources,
+  gresource,
+  dependencies: [
+    gtk4_dep,
+    libadwaita_dep,
+    json_glib_dep,
+    gio_dep,
+    gio_unix_dep,
+  ],
+  install: true,
+)

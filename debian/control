@@ -1,0 +1,31 @@
+Source: puls-diskinfo
+Section: utils
+Priority: optional
+Maintainer: Puls DiskInfo Contributors <puls-diskinfo@users.noreply.github.com>
+Build-Depends:
+ debhelper-compat (= 13),
+ meson (>= 0.59),
+ ninja-build,
+ pkg-config,
+ libgtk-4-dev (>= 4.0),
+ libjson-glib-dev,
+Standards-Version: 4.6.2
+Homepage: https://github.com/puls-diskinfo/puls-diskinfo
+Rules-Requires-Root: no
+
+Package: puls-diskinfo
+Architecture: any
+Depends:
+ ${shlibs:Depends},
+ ${misc:Depends},
+ smartmontools,
+ policykit-1,
+Description: Disk health and S.M.A.R.T. monitoring for Linux
+ Puls DiskInfo is a professional-grade disk health monitoring
+ application for Linux, inspired by CrystalDiskInfo. It reads
+ S.M.A.R.T. data from your drives and presents it in a clear,
+ detailed GTK4 interface.
+ .
+ Features include health status monitoring, temperature tracking,
+ complete S.M.A.R.T. attributes display, NVMe health information,
+ and support for HDD, SATA SSD, NVMe SSD, USB, and SSHD drives.

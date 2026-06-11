@@ -1,0 +1,12 @@
+puls-diskinfo (1.0.0-1) unstable; urgency=medium
+
+  * Initial release.
+  * GTK4-based disk health monitoring application.
+  * S.M.A.R.T. attribute display for ATA/SATA drives.
+  * NVMe health information support.
+  * Temperature monitoring with visual gauges.
+  * Health status indicators (Good/Caution/Bad).
+  * Support for HDD, SATA SSD, NVMe SSD, USB drives.
+  * Polkit-based privilege escalation for SMART data reading.
+
+ -- Puls DiskInfo Contributors <puls-diskinfo@users.noreply.github.com>  Wed, 11 Jun 2025 00:00:00 +0000

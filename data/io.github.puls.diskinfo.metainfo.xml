@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.puls.diskinfo</id>
+  <name>PULS DiskInfo</name>
+  <summary>Disk health and S.M.A.R.T. monitoring for Linux</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <description>
+    <p>
+      PULS DiskInfo is a professional-grade disk health monitoring application
+      for Linux, inspired by CrystalDiskInfo. It reads S.M.A.R.T. data from
+      your drives and presents it in a clear, detailed interface.
+    </p>
+    <p>Features include:</p>
+    <ul>
+      <li>Health status monitoring (Good/Caution/Bad) with color-coded indicators</li>
+      <li>Real-time temperature monitoring with visual gauges</li>
+      <li>Complete S.M.A.R.T. attributes table with threshold warnings</li>
+      <li>NVMe health information support</li>
+      <li>Support for HDD, SATA SSD, NVMe SSD, USB, and SSHD drives</li>
+      <li>Automatic drive detection and USB hotplug support</li>
+      <li>Drive identity details (model, serial, firmware, interface, capacity)</li>
+      <li>Power-on hours, cycle count, and total data written/read statistics</li>
+      <li>Periodic auto-refresh of disk health data</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">io.github.puls.diskinfo.desktop</launchable>
+
+  <url type="homepage">https://github.com/puls-diskinfo/puls-diskinfo</url>
+  <url type="bugtracker">https://github.com/puls-diskinfo/puls-diskinfo/issues</url>
+
+  <developer_name>Barın Güzeldemirci</developer_name>
+
+  <content_rating type="oars-1.1" />
+
+  <releases>
+    <release version="1.0.0" date="2024-01-01">
+      <description>
+        <p>Initial release of PULS DiskInfo.</p>
+      </description>
+    </release>
+  </releases>
+
+  <requires>
+    <display_length compare="ge">600</display_length>
+  </requires>
+
+  <recommends>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </recommends>
+</component>

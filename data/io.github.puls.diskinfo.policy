@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+  "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+  "http://www.freedesktop.org/standards/PolicyKit/1.0/policyconfig.dtd">
+
+<policyconfig>
+  <vendor>PULS DiskInfo</vendor>
+  <vendor_url>https://github.com/puls-diskinfo/puls-diskinfo</vendor_url>
+
+  <action id="io.github.puls.diskinfo.smart-read">
+    <description>Read S.M.A.R.T. data from disks</description>
+    <description xml:lang="en">Read S.M.A.R.T. data from disk drives</description>
+    <message>Authentication is required to read disk health information</message>
+    <message xml:lang="en">Authentication is required to read disk health information</message>
+    <icon_name>drive-harddisk-solidstate-symbolic</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/puls-diskinfo-helper</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+</policyconfig>

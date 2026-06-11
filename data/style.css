@@ -1,0 +1,257 @@
+/*
+ * PULS DiskInfo — Application Stylesheet
+ *
+ * Designed to complement Libadwaita's system theme (light and dark modes).
+ */
+
+@define-color card_bg_color @theme_base_color;
+@define-color card_shade_color mix(@theme_fg_color, @theme_bg_color, 0.08);
+
+/* ── Disk Selector Bar ─────────────────────────────────────── */
+
+disk-selector {
+    padding: 10px;
+    min-height: 100px;
+}
+
+.disk-card {
+    border: 1px solid alpha(@borders, 0.7);
+    background-color: @card_bg_color;
+    border-radius: 10px;
+    padding: 8px;
+    min-width: 150px;
+    transition: all 200ms ease;
+}
+
+.disk-card:hover {
+    border-color: @borders;
+    background-color: @card_shade_color;
+}
+
+.disk-card-active {
+    border-color: @accent_color;
+    background-color: @card_bg_color;
+    box-shadow: 0 0 0 1px @accent_color;
+}
+
+.card-icon {
+    margin-bottom: 2px;
+}
+
+.card-device-name {
+    font-weight: 700;
+    font-size: 13px;
+}
+
+.card-model {
+    font-size: 11px;
+}
+
+.card-health {
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.card-health-good {
+    color: #2ea043;
+}
+
+.card-health-caution {
+    color: #d29922;
+}
+
+.card-health-bad {
+    color: #f85149;
+}
+
+.card-temp {
+    font-size: 11px;
+}
+
+/* ── Info Key/Value Rows ───────────────────────────────────── */
+
+.info-key {
+    font-weight: 600;
+    font-size: 13px;
+    min-width: 160px;
+}
+
+.info-value {
+    font-size: 13px;
+    font-family: "JetBrains Mono", "Fira Code", "Source Code Pro", monospace;
+}
+
+/* ── Health Indicator ──────────────────────────────────────── */
+
+health-indicator {
+    padding: 8px 16px;
+    border-radius: 12px;
+    border: 1px solid alpha(@borders, 0.7);
+    min-width: 90px;
+    background-color: @card_bg_color;
+}
+
+.health-icon {
+    font-size: 32px;
+}
+
+.health-text {
+    font-weight: 800;
+    font-size: 14px;
+    letter-spacing: 1px;
+}
+
+health-indicator.health-good {
+    border-color: #2ea043;
+    background-color: rgba(46, 160, 67, 0.08);
+}
+
+health-indicator.health-good .health-icon {
+    color: #2ea043;
+    text-shadow: 0 0 12px rgba(46, 160, 67, 0.5);
+}
+
+health-indicator.health-good .health-text {
+    color: #2ea043;
+}
+
+health-indicator.health-caution {
+    border-color: #d29922;
+    background-color: rgba(210, 153, 34, 0.08);
+}
+
+health-indicator.health-caution .health-icon {
+    color: #d29922;
+    text-shadow: 0 0 12px rgba(210, 153, 34, 0.5);
+}
+
+health-indicator.health-caution .health-text {
+    color: #d29922;
+}
+
+health-indicator.health-bad {
+    border-color: #f85149;
+    background-color: rgba(248, 81, 73, 0.08);
+}
+
+health-indicator.health-bad .health-icon {
+    color: #f85149;
+    text-shadow: 0 0 12px rgba(248, 81, 73, 0.5);
+}
+
+health-indicator.health-bad .health-text {
+    color: #f85149;
+}
+
+health-indicator.health-unknown {
+    border-color: @borders;
+}
+
+/* ── Temperature Widget ────────────────────────────────────── */
+
+temperature-widget {
+    padding: 8px;
+}
+
+.temp-value {
+    font-size: 18px;
+    font-weight: 700;
+    margin-bottom: 4px;
+}
+
+.temp-bar {
+    min-height: 10px;
+    border-radius: 5px;
+}
+
+.temp-bar.temp-cold progress {
+    background: linear-gradient(to right, #3584e4, #1c71d8);
+    border-radius: 5px;
+}
+
+.temp-bar.temp-normal progress {
+    background: linear-gradient(to right, #2ea043, #56d364);
+    border-radius: 5px;
+}
+
+.temp-bar.temp-warm progress {
+    background: linear-gradient(to right, #d29922, #e3b341);
+    border-radius: 5px;
+}
+
+.temp-bar.temp-hot progress {
+    background: linear-gradient(to right, #f85149, #ff7b72);
+    border-radius: 5px;
+}
+
+.temp-range {
+    font-size: 11px;
+    margin-top: 2px;
+}
+
+/* ── SMART Table ───────────────────────────────────────────── */
+
+smart-table {
+    padding: 0;
+}
+
+.smart-cell {
+    font-size: 12px;
+    font-family: "JetBrains Mono", "Fira Code", "Source Code Pro", monospace;
+    padding: 4px 8px;
+}
+
+/* SMART status colors */
+.status-ok {
+    color: #2ea043;
+    font-weight: 600;
+}
+
+.status-warn {
+    color: #d29922;
+    font-weight: 600;
+}
+
+.status-fail {
+    color: #f85149;
+    font-weight: 700;
+}
+
+.attr-good {
+    /* default color */
+}
+
+.attr-caution {
+    color: #d29922;
+}
+
+.attr-bad {
+    color: #f85149;
+    font-weight: 700;
+}
+
+/* ── Status Bar ────────────────────────────────────────────── */
+
+.status-bar {
+    border-top: 1px solid @borders;
+    padding: 4px 12px;
+}
+
+.status-text {
+    font-size: 11px;
+}
+
+.status-version {
+    font-size: 11px;
+    font-weight: 600;
+}
+
+/* ── General Transitions ───────────────────────────────────── */
+
+button {
+    transition: all 200ms ease;
+}
+
+label {
+    transition: color 200ms ease;
+}
