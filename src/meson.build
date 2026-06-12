@@ -14,6 +14,7 @@ puls_sources = files(
   'puls-about-dialog.c',
   'puls-preferences-window.c',
   'puls-settings.c',
+  'puls-benchmark.c',
 )
 
 executable('puls-diskinfo',

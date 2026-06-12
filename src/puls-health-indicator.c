@@ -3,7 +3,7 @@
  *
  * Health status badge — large colored circle with text label.
  *
- * Copyright (C) 2024 Barın Güzeldemirci
+ * Copyright (C) 2026 Barın Güzeldemirci
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,7 +17,6 @@ struct _PulsHealthIndicator {
     GtkWidget parent_instance;
 
     GtkWidget *box;
-    GtkWidget *icon_label;
     GtkWidget *text_label;
 
     PulsHealthStatus status;
@@ -28,35 +27,29 @@ G_DEFINE_TYPE (PulsHealthIndicator, puls_health_indicator, GTK_TYPE_WIDGET)
 static void
 update_display (PulsHealthIndicator *self)
 {
-    const gchar *icon = "⚪";
-    const gchar *text = "Unknown";
+    const gchar *text = "UNKNOWN";
     const gchar *css_class = "health-unknown";
 
     switch (self->status) {
     case PULS_HEALTH_GOOD:
-        icon = "●";
         text = "GOOD";
         css_class = "health-good";
         break;
     case PULS_HEALTH_CAUTION:
-        icon = "●";
         text = "CAUTION";
         css_class = "health-caution";
         break;
     case PULS_HEALTH_BAD:
-        icon = "●";
         text = "BAD";
         css_class = "health-bad";
         break;
     case PULS_HEALTH_UNKNOWN:
     default:
-        icon = "●";
         text = "UNKNOWN";
         css_class = "health-unknown";
         break;
     }
 
-    gtk_label_set_text (GTK_LABEL (self->icon_label), icon);
     gtk_label_set_text (GTK_LABEL (self->text_label), text);
 
     const gchar *classes[] = { "health-good", "health-caution", "health-bad",
@@ -91,15 +84,10 @@ puls_health_indicator_init (PulsHealthIndicator *self)
 {
     self->status = PULS_HEALTH_UNKNOWN;
 
-    self->box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 4);
+    self->box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
     gtk_widget_set_halign (self->box, GTK_ALIGN_CENTER);
     gtk_widget_set_valign (self->box, GTK_ALIGN_CENTER);
     gtk_widget_set_parent (self->box, GTK_WIDGET (self));
-
-    self->icon_label = gtk_label_new ("●");
-    gtk_widget_add_css_class (self->icon_label, "health-icon");
-    gtk_widget_set_halign (self->icon_label, GTK_ALIGN_CENTER);
-    gtk_box_append (GTK_BOX (self->box), self->icon_label);
 
     self->text_label = gtk_label_new ("UNKNOWN");
     gtk_widget_add_css_class (self->text_label, "health-text");

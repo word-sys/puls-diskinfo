@@ -5,7 +5,7 @@
  * This small binary runs via pkexec to execute smartctl with root privileges.
  * It validates the device path and runs smartctl, outputting JSON.
  *
- * Copyright (C) 2024 Barın Güzeldemirci
+ * Copyright (C) 2026 Barın Güzeldemirci
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by

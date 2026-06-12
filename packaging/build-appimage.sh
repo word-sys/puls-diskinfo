@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# build-appimage.sh — Build an AppImage for Puls DiskInfo
+# build-appimage.sh — Build an AppImage for PULS DiskInfo
 #
 # Usage: ./packaging/build-appimage.sh
 #
@@ -16,7 +16,7 @@ DIST_DIR="$PROJECT_DIR/dist"
 ARCH="${ARCH:-x86_64}"
 
 echo "══════════════════════════════════════════════════════════"
-echo "  Puls DiskInfo — AppImage Builder"
+echo "  PULS DiskInfo — AppImage Builder"
 echo "══════════════════════════════════════════════════════════"
 
 # Clean previous build

@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# build-binary.sh — Build a portable binary tarball for Puls DiskInfo
+# build-binary.sh — Build a portable binary tarball for PULS DiskInfo
 #
 # Usage: ./packaging/build-binary.sh
 #
@@ -23,7 +23,7 @@ PKG_NAME="puls-diskinfo-${VERSION}-linux-${ARCH}"
 PKG_DIR="$BUILD_DIR/$PKG_NAME"
 
 echo "══════════════════════════════════════════════════════════"
-echo "  Puls DiskInfo — Binary Release Builder"
+echo "  PULS DiskInfo — Binary Release Builder"
 echo "  Version: $VERSION  Arch: $ARCH"
 echo "══════════════════════════════════════════════════════════"
 
@@ -67,13 +67,13 @@ cp "$PROJECT_DIR/README.md" "$PKG_DIR/"
 cat > "$PKG_DIR/install.sh" << 'INSTALL_EOF'
 #!/bin/bash
 #
-# Puls DiskInfo Installer
+# PULS DiskInfo Installer
 #
 set -euo pipefail
 
 PREFIX="${PREFIX:-/usr/local}"
 
-echo "Installing Puls DiskInfo to $PREFIX..."
+echo "Installing PULS DiskInfo to $PREFIX..."
 
 # Check for root
 if [ "$(id -u)" -ne 0 ]; then
@@ -109,7 +109,7 @@ if [ -f "$SCRIPT_DIR/data/io.github.puls.diskinfo.svg" ]; then
 fi
 
 echo ""
-echo "✓ Puls DiskInfo installed successfully!"
+echo "✓ PULS DiskInfo installed successfully!"
 echo "  Binary:  $PREFIX/bin/puls-diskinfo"
 echo "  Helper:  $PREFIX/libexec/puls-diskinfo-helper"
 echo ""
@@ -130,7 +130,7 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-echo "Removing Puls DiskInfo from $PREFIX..."
+echo "Removing PULS DiskInfo from $PREFIX..."
 
 rm -f "$PREFIX/bin/puls-diskinfo"
 rm -f "$PREFIX/libexec/puls-diskinfo-helper"
@@ -138,7 +138,7 @@ rm -f "$PREFIX/share/applications/io.github.puls.diskinfo.desktop"
 rm -f "$PREFIX/share/polkit-1/actions/io.github.puls.diskinfo.policy"
 rm -f "$PREFIX/share/icons/hicolor/scalable/apps/io.github.puls.diskinfo.svg"
 
-echo "✓ Puls DiskInfo removed."
+echo "✓ PULS DiskInfo removed."
 UNINSTALL_EOF
 
 chmod +x "$PKG_DIR/uninstall.sh"

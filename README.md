@@ -1,4 +1,4 @@
-# Puls DiskInfo
+# PULS DiskInfo
 
 A professional-grade, highly detailed storage health and S.M.A.R.T. monitoring application for Linux, built with **GTK4** and **C**. Inspired by CrystalDiskInfo, it displays critical health status, temperatures, and detailed drive attributes.
 
@@ -27,6 +27,7 @@ sudo apt install -y \
   ninja-build \
   pkg-config \
   libgtk-4-dev \
+  libadwaita-1-dev \
   libjson-glib-dev \
   smartmontools
 ```

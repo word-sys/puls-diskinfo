@@ -1,9 +1,9 @@
 /*
  * puls-smart-data.h
  *
- * S.M.A.R.T. data structures for Puls DiskInfo.
+ * S.M.A.R.T. data structures for PULS DiskInfo.
  *
- * Copyright (C) 2024 Puls DiskInfo Contributors
+ * Copyright (C) 2026 Barın Güzeldemirci <baringuzeldemir@gmail.com>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -103,6 +103,15 @@ void puls_smart_data_set_capacity_bytes  (PulsSmartData *self, guint64 val);
 void puls_smart_data_set_rotation_rpm    (PulsSmartData *self, gint val);
 void puls_smart_data_set_drive_type      (PulsSmartData *self, PulsDriveType val);
 
+guint32          puls_smart_data_get_logical_sector_size (PulsSmartData *self);
+guint32          puls_smart_data_get_physical_sector_size (PulsSmartData *self);
+const gchar     *puls_smart_data_get_form_factor (PulsSmartData *self);
+
+void puls_smart_data_set_logical_sector_size (PulsSmartData *self, guint32 val);
+void puls_smart_data_set_physical_sector_size (PulsSmartData *self, guint32 val);
+void puls_smart_data_set_form_factor (PulsSmartData *self, const gchar *val);
+
+
 /* Health */
 PulsHealthStatus puls_smart_data_get_health          (PulsSmartData *self);
 gboolean         puls_smart_data_get_smart_enabled   (PulsSmartData *self);
@@ -127,10 +136,22 @@ void puls_smart_data_set_total_bytes_read    (PulsSmartData *self, guint64 val);
 gboolean puls_smart_data_get_supports_trim (PulsSmartData *self);
 gboolean puls_smart_data_get_supports_ncq  (PulsSmartData *self);
 gboolean puls_smart_data_get_supports_apm  (PulsSmartData *self);
+gboolean puls_smart_data_get_supports_aam  (PulsSmartData *self);
+gboolean puls_smart_data_get_supports_devsleep (PulsSmartData *self);
+gboolean puls_smart_data_get_supports_write_cache (PulsSmartData *self);
 
 void puls_smart_data_set_supports_trim (PulsSmartData *self, gboolean val);
 void puls_smart_data_set_supports_ncq  (PulsSmartData *self, gboolean val);
 void puls_smart_data_set_supports_apm  (PulsSmartData *self, gboolean val);
+void puls_smart_data_set_supports_aam  (PulsSmartData *self, gboolean val);
+void puls_smart_data_set_supports_devsleep (PulsSmartData *self, gboolean val);
+void puls_smart_data_set_supports_write_cache (PulsSmartData *self, gboolean val);
+
+/* Standard and Transfer Mode */
+const gchar     *puls_smart_data_get_standard     (PulsSmartData *self);
+const gchar     *puls_smart_data_get_transfer_mode (PulsSmartData *self);
+void             puls_smart_data_set_standard     (PulsSmartData *self, const gchar *val);
+void             puls_smart_data_set_transfer_mode (PulsSmartData *self, const gchar *val);
 
 /* Self-test info */
 gboolean         puls_smart_data_get_self_test_in_progress    (PulsSmartData *self);

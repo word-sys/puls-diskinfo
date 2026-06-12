@@ -1,9 +1,9 @@
 /*
  * puls-utils.h
  *
- * Utility functions for Puls DiskInfo.
+ * Utility functions for PULS DiskInfo.
  *
- * Copyright (C) 2024 Puls DiskInfo Contributors
+ * Copyright (C) 2026 Barın Güzeldemirci <baringuzeldemir@gmail.com>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -81,5 +81,6 @@ gchar   *puls_get_helper_path         (void);
 PulsDriveType puls_detect_drive_type (const gchar *device_path);
 gboolean      puls_is_rotational     (const gchar *device_name);
 gchar        *puls_get_transport     (const gchar *device_name);
+gchar        *puls_detect_usb_speed_version (const gchar *device_name);
 
 G_END_DECLS

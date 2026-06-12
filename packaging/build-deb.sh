@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# build-deb.sh — Build a .deb package for Puls DiskInfo
+# build-deb.sh — Build a .deb package for PULS DiskInfo
 #
 # Usage: ./packaging/build-deb.sh
 #
@@ -13,7 +13,7 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 DIST_DIR="$PROJECT_DIR/dist"
 
 echo "══════════════════════════════════════════════════════════"
-echo "  Puls DiskInfo — Debian Package Builder"
+echo "  PULS DiskInfo — Debian Package Builder"
 echo "══════════════════════════════════════════════════════════"
 
 # Check for required tools

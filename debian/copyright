@@ -1,10 +1,10 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: puls-diskinfo
-Upstream-Contact: Puls DiskInfo Contributors <puls-diskinfo@users.noreply.github.com>
-Source: https://github.com/puls-diskinfo/puls-diskinfo
+Upstream-Contact: Barın Güzeldemirci <baringuzeldemir@gmail.com>
+Source: https://github.com/word-sys/puls-diskinfo
 
 Files: *
-Copyright: 2024 Puls DiskInfo Contributors
+Copyright: 2026 Barın Güzeldemirci <baringuzeldemir@gmail.com>
 License: GPL-3.0+
 
 License: GPL-3.0+

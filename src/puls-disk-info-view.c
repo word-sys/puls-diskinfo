@@ -3,7 +3,7 @@
  *
  * Per-disk detail panel — shows all disk information sections.
  *
- * Copyright (C) 2024 Barın Güzeldemirci
+ * Copyright (C) 2026 Barın Güzeldemirci
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,6 +17,8 @@
 #include "puls-smart-table.h"
 #include "puls-settings.h"
 #include "puls-utils.h"
+#include "puls-benchmark.h"
+#include <glib/gstdio.h>
 
 struct _PulsDiskInfoView {
     GtkWidget parent_instance;
@@ -32,6 +34,10 @@ struct _PulsDiskInfoView {
     GtkWidget *capacity_label;
     GtkWidget *rotation_label;
     GtkWidget *features_label;
+    GtkWidget *standard_label;
+    GtkWidget *transfer_mode_label;
+    GtkWidget *sector_size_label;
+    GtkWidget *form_factor_label;
 
     GtkWidget *health_frame;
     GtkWidget *health_indicator;
@@ -51,6 +57,19 @@ struct _PulsDiskInfoView {
     GtkWidget *abort_test_btn;
     GtkWidget *test_status_label;
     GtkWidget *test_progress_bar;
+
+    GtkWidget *bench_frame;
+    GtkWidget *bench_box;
+    GtkWidget *bench_runs_combo;
+    GtkWidget *bench_size_combo;
+    GtkWidget *bench_start_btn;
+    GtkWidget *bench_stop_btn;
+    GtkWidget *bench_progress_bar;
+    GtkWidget *bench_status_label;
+    GtkWidget *bench_read_labels[4];
+    GtkWidget *bench_write_labels[4];
+    GCancellable *bench_cancellable;
+    gboolean bench_running;
 
     GtkWidget *smart_frame;
     GtkWidget *smart_table;
@@ -162,10 +181,165 @@ on_abort_test_clicked (GtkButton *btn G_GNUC_UNUSED, PulsDiskInfoView *self)
 }
 
 static void
+on_bench_progress (PulsBenchmarkTest test,
+                   gboolean          is_write,
+                   gdouble           progress,
+                   gdouble           current_speed_mbs,
+                   gpointer          user_data)
+{
+    PulsDiskInfoView *self = PULS_DISK_INFO_VIEW (user_data);
+    if (!self->bench_running)
+        return;
+
+    gint phase = (gint)test * 2 + (is_write ? 0 : 1);
+    gdouble total_progress = ((gdouble)phase + progress) / 8.0;
+    gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (self->bench_progress_bar), total_progress);
+
+    const gchar *test_names[] = {
+        "SEQ1M Q8T1",
+        "SEQ1M Q1T1",
+        "RND4K Q32T1",
+        "RND4K Q1T1"
+    };
+
+    g_autofree gchar *status = g_strdup_printf ("Running %s %s... (%d%%)",
+                                                 test_names[test],
+                                                 is_write ? "Write" : "Read",
+                                                 (gint)(progress * 100.0));
+    gtk_label_set_text (GTK_LABEL (self->bench_status_label), status);
+
+    g_autofree gchar *speed_str = g_strdup_printf ("%.2f", current_speed_mbs);
+    if (is_write) {
+        gtk_label_set_text (GTK_LABEL (self->bench_write_labels[test]), speed_str);
+    } else {
+        gtk_label_set_text (GTK_LABEL (self->bench_read_labels[test]), speed_str);
+    }
+}
+
+static void
+on_bench_finished (const PulsBenchmarkResult results[PULS_BENCHMARK_TEST_COUNT],
+                   gboolean                  cancelled,
+                   const gchar              *error_msg,
+                   gpointer                  user_data)
+{
+    PulsDiskInfoView *self = PULS_DISK_INFO_VIEW (user_data);
+
+    self->bench_running = FALSE;
+    gtk_widget_set_visible (self->bench_progress_bar, FALSE);
+
+    gtk_widget_set_sensitive (self->bench_start_btn, TRUE);
+    gtk_widget_set_sensitive (self->bench_runs_combo, TRUE);
+    gtk_widget_set_sensitive (self->bench_size_combo, TRUE);
+    gtk_widget_set_sensitive (self->bench_stop_btn, FALSE);
+
+    if (cancelled) {
+        gtk_label_set_text (GTK_LABEL (self->bench_status_label), "Benchmark stopped.");
+    } else if (error_msg) {
+        g_autofree gchar *status = g_strdup_printf ("Benchmark failed: %s", error_msg);
+        gtk_label_set_text (GTK_LABEL (self->bench_status_label), status);
+    } else {
+        gtk_label_set_text (GTK_LABEL (self->bench_status_label), "Benchmark completed successfully.");
+        for (gint i = 0; i < PULS_BENCHMARK_TEST_COUNT; i++) {
+            if (results[i].read_done) {
+                g_autofree gchar *r_str = g_strdup_printf ("%.2f", results[i].read_mbs);
+                gtk_label_set_text (GTK_LABEL (self->bench_read_labels[i]), r_str);
+            } else {
+                gtk_label_set_text (GTK_LABEL (self->bench_read_labels[i]), "—");
+            }
+
+            if (results[i].write_done) {
+                g_autofree gchar *w_str = g_strdup_printf ("%.2f", results[i].write_mbs);
+                gtk_label_set_text (GTK_LABEL (self->bench_write_labels[i]), w_str);
+            } else {
+                gtk_label_set_text (GTK_LABEL (self->bench_write_labels[i]), "—");
+            }
+        }
+    }
+
+    if (self->bench_cancellable) {
+        g_clear_object (&self->bench_cancellable);
+    }
+}
+
+static void
+on_bench_start_clicked (GtkButton *btn G_GNUC_UNUSED, PulsDiskInfoView *self)
+{
+    if (self->current_device == NULL || self->bench_running)
+        return;
+
+    GList *parts = puls_get_disk_partitions (self->current_device);
+    gchar *writeable_dir = NULL;
+    for (GList *l = parts; l != NULL; l = l->next) {
+        PulsPartitionInfo *pinfo = l->data;
+        if (g_access (pinfo->mount_point, W_OK) == 0) {
+            writeable_dir = g_strdup (pinfo->mount_point);
+            break;
+        }
+    }
+    g_list_free_full (parts, (GDestroyNotify)puls_partition_info_free);
+
+    if (writeable_dir == NULL) {
+        writeable_dir = g_strdup (g_get_home_dir ());
+    }
+
+    for (gint i = 0; i < 4; i++) {
+        gtk_label_set_text (GTK_LABEL (self->bench_read_labels[i]), "—");
+        gtk_label_set_text (GTK_LABEL (self->bench_write_labels[i]), "—");
+    }
+
+    self->bench_running = TRUE;
+    gtk_widget_set_visible (self->bench_progress_bar, TRUE);
+    gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (self->bench_progress_bar), 0.0);
+
+    gtk_widget_set_sensitive (self->bench_start_btn, FALSE);
+    gtk_widget_set_sensitive (self->bench_runs_combo, FALSE);
+    gtk_widget_set_sensitive (self->bench_size_combo, FALSE);
+    gtk_widget_set_sensitive (self->bench_stop_btn, TRUE);
+
+    gtk_label_set_text (GTK_LABEL (self->bench_status_label), "Starting benchmark...");
+
+    const gchar *runs_str = gtk_combo_box_text_get_active_text (GTK_COMBO_BOX_TEXT (self->bench_runs_combo));
+    guint runs = runs_str ? atoi (runs_str) : 2;
+
+    const gchar *size_str = gtk_combo_box_text_get_active_text (GTK_COMBO_BOX_TEXT (self->bench_size_combo));
+    guint64 size_bytes = 64ULL * 1024ULL * 1024ULL;
+    if (g_strcmp0 (size_str, "16 MiB") == 0) {
+        size_bytes = 16ULL * 1024ULL * 1024ULL;
+    } else if (g_strcmp0 (size_str, "64 MiB") == 0) {
+        size_bytes = 64ULL * 1024ULL * 1024ULL;
+    } else if (g_strcmp0 (size_str, "256 MiB") == 0) {
+        size_bytes = 256ULL * 1024ULL * 1024ULL;
+    } else if (g_strcmp0 (size_str, "512 MiB") == 0) {
+        size_bytes = 512ULL * 1024ULL * 1024ULL;
+    } else if (g_strcmp0 (size_str, "1 GiB") == 0) {
+        size_bytes = 1024ULL * 1024ULL * 1024ULL;
+    }
+
+    self->bench_cancellable = g_cancellable_new ();
+    puls_benchmark_run_async (writeable_dir, runs, size_bytes, on_bench_progress, on_bench_finished, self->bench_cancellable, self);
+
+    g_free (writeable_dir);
+}
+
+static void
+on_bench_stop_clicked (GtkButton *btn G_GNUC_UNUSED, PulsDiskInfoView *self)
+{
+    if (self->bench_running && self->bench_cancellable) {
+        g_cancellable_cancel (self->bench_cancellable);
+        gtk_label_set_text (GTK_LABEL (self->bench_status_label), "Stopping benchmark...");
+        gtk_widget_set_sensitive (self->bench_stop_btn, FALSE);
+    }
+}
+
+static void
 puls_disk_info_view_finalize (GObject *object)
 {
     PulsDiskInfoView *self = PULS_DISK_INFO_VIEW (object);
     g_free (self->current_device);
+    if (self->bench_cancellable) {
+        g_cancellable_cancel (self->bench_cancellable);
+        g_clear_object (&self->bench_cancellable);
+    }
     G_OBJECT_CLASS (puls_disk_info_view_parent_class)->finalize (object);
 }
 
@@ -212,9 +386,16 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
     GtkWidget *top_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 12);
     gtk_box_append (GTK_BOX (self->content_box), top_row);
 
+    GtkWidget *left_column = gtk_box_new (GTK_ORIENTATION_VERTICAL, 12);
+    gtk_widget_set_size_request (left_column, 260, -1);
+    gtk_box_append (GTK_BOX (top_row), left_column);
+
+    GtkWidget *right_column = gtk_box_new (GTK_ORIENTATION_VERTICAL, 12);
+    gtk_widget_set_hexpand (right_column, TRUE);
+    gtk_box_append (GTK_BOX (top_row), right_column);
+
     self->health_frame = create_section_frame ("Health & Temp");
-    gtk_widget_set_size_request (self->health_frame, 220, -1);
-    gtk_box_append (GTK_BOX (top_row), self->health_frame);
+    gtk_box_append (GTK_BOX (left_column), self->health_frame);
 
     GtkWidget *health_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 8);
     gtk_widget_set_margin_start (health_box, 12);
@@ -231,8 +412,7 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
     gtk_box_append (GTK_BOX (health_box), self->temperature_widget);
 
     self->identity_frame = create_section_frame ("Drive Information");
-    gtk_widget_set_hexpand (self->identity_frame, TRUE);
-    gtk_box_append (GTK_BOX (top_row), self->identity_frame);
+    gtk_box_append (GTK_BOX (right_column), self->identity_frame);
 
     GtkWidget *id_grid = gtk_grid_new ();
     gtk_grid_set_row_spacing (GTK_GRID (id_grid), 6);
@@ -259,13 +439,17 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
     add_info_row_to_grid (id_grid, 0, 1, "Firmware:", &self->firmware_label);
     add_info_row_to_grid (id_grid, 2, 1, "Serial Number:", &self->serial_label);
     add_info_row_to_grid (id_grid, 0, 2, "Interface:", &self->interface_label);
-    add_info_row_to_grid (id_grid, 2, 2, "Capacity:", &self->capacity_label);
-    add_info_row_to_grid (id_grid, 0, 3, "Type:", &self->rotation_label);
-    add_info_row_to_grid (id_grid, 2, 3, "Features:", &self->features_label);
-    add_info_row_to_grid (id_grid, 0, 4, "Power On Hours:", &self->power_hours_label);
-    add_info_row_to_grid (id_grid, 2, 4, "Power Cycles:", &self->power_cycles_label);
-    add_info_row_to_grid (id_grid, 0, 5, "Total Reads:", &self->total_read_label);
-    add_info_row_to_grid (id_grid, 2, 5, "Total Writes:", &self->total_written_label);
+    add_info_row_to_grid (id_grid, 2, 2, "Transfer Mode:", &self->transfer_mode_label);
+    add_info_row_to_grid (id_grid, 0, 3, "Standard:", &self->standard_label);
+    add_info_row_to_grid (id_grid, 2, 3, "Capacity:", &self->capacity_label);
+    add_info_row_to_grid (id_grid, 0, 4, "Type:", &self->rotation_label);
+    add_info_row_to_grid (id_grid, 2, 4, "Features:", &self->features_label);
+    add_info_row_to_grid (id_grid, 0, 5, "Power On Hours:", &self->power_hours_label);
+    add_info_row_to_grid (id_grid, 2, 5, "Power Cycles:", &self->power_cycles_label);
+    add_info_row_to_grid (id_grid, 0, 6, "Total Reads:", &self->total_read_label);
+    add_info_row_to_grid (id_grid, 2, 6, "Total Writes:", &self->total_written_label);
+    add_info_row_to_grid (id_grid, 0, 7, "Sector Size:", &self->sector_size_label);
+    add_info_row_to_grid (id_grid, 2, 7, "Form Factor:", &self->form_factor_label);
 
     self->partitions_frame = create_section_frame ("Mount Points & Partitions");
     gtk_box_append (GTK_BOX (self->content_box), self->partitions_frame);
@@ -278,7 +462,7 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
     gtk_frame_set_child (GTK_FRAME (self->partitions_frame), self->partitions_box);
 
     self->diag_frame = create_section_frame ("Diagnostics & Self-Tests");
-    gtk_box_append (GTK_BOX (self->content_box), self->diag_frame);
+    gtk_box_append (GTK_BOX (left_column), self->diag_frame);
 
     self->diag_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 12);
     gtk_widget_set_margin_start (self->diag_box, 16);
@@ -287,7 +471,7 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
     gtk_widget_set_margin_bottom (self->diag_box, 12);
     gtk_frame_set_child (GTK_FRAME (self->diag_frame), self->diag_box);
 
-    GtkWidget *btn_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+    GtkWidget *btn_row = gtk_box_new (GTK_ORIENTATION_VERTICAL, 8);
     gtk_box_append (GTK_BOX (self->diag_box), btn_row);
 
     self->short_test_btn = gtk_button_new_with_label ("Run Short Test");
@@ -312,6 +496,115 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
     self->test_progress_bar = gtk_progress_bar_new ();
     gtk_widget_set_visible (self->test_progress_bar, FALSE);
     gtk_box_append (GTK_BOX (self->diag_box), self->test_progress_bar);
+
+    self->bench_frame = create_section_frame ("Performance Benchmark (CrystalDiskMark style)");
+    gtk_box_append (GTK_BOX (right_column), self->bench_frame);
+
+    self->bench_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 8);
+    gtk_widget_set_margin_start (self->bench_box, 16);
+    gtk_widget_set_margin_end (self->bench_box, 16);
+    gtk_widget_set_margin_top (self->bench_box, 12);
+    gtk_widget_set_margin_bottom (self->bench_box, 12);
+    gtk_frame_set_child (GTK_FRAME (self->bench_frame), self->bench_box);
+
+    GtkWidget *ctrl_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 12);
+    gtk_box_append (GTK_BOX (self->bench_box), ctrl_row);
+
+    GtkWidget *runs_lbl = gtk_label_new ("Runs:");
+    gtk_widget_add_css_class (runs_lbl, "bold");
+    gtk_box_append (GTK_BOX (ctrl_row), runs_lbl);
+
+    self->bench_runs_combo = gtk_combo_box_text_new ();
+    gtk_combo_box_text_append_text (GTK_COMBO_BOX_TEXT (self->bench_runs_combo), "1");
+    gtk_combo_box_text_append_text (GTK_COMBO_BOX_TEXT (self->bench_runs_combo), "2");
+    gtk_combo_box_text_append_text (GTK_COMBO_BOX_TEXT (self->bench_runs_combo), "3");
+    gtk_combo_box_text_append_text (GTK_COMBO_BOX_TEXT (self->bench_runs_combo), "5");
+    gtk_combo_box_set_active (GTK_COMBO_BOX (self->bench_runs_combo), 1);
+    gtk_box_append (GTK_BOX (ctrl_row), self->bench_runs_combo);
+
+    GtkWidget *size_lbl = gtk_label_new ("Test Size:");
+    gtk_widget_add_css_class (size_lbl, "bold");
+    gtk_box_append (GTK_BOX (ctrl_row), size_lbl);
+
+    self->bench_size_combo = gtk_combo_box_text_new ();
+    gtk_combo_box_text_append_text (GTK_COMBO_BOX_TEXT (self->bench_size_combo), "16 MiB");
+    gtk_combo_box_text_append_text (GTK_COMBO_BOX_TEXT (self->bench_size_combo), "64 MiB");
+    gtk_combo_box_text_append_text (GTK_COMBO_BOX_TEXT (self->bench_size_combo), "256 MiB");
+    gtk_combo_box_text_append_text (GTK_COMBO_BOX_TEXT (self->bench_size_combo), "512 MiB");
+    gtk_combo_box_text_append_text (GTK_COMBO_BOX_TEXT (self->bench_size_combo), "1 GiB");
+    gtk_combo_box_set_active (GTK_COMBO_BOX (self->bench_size_combo), 1);
+    gtk_box_append (GTK_BOX (ctrl_row), self->bench_size_combo);
+
+    self->bench_start_btn = gtk_button_new_with_label ("Start Benchmark");
+    gtk_widget_add_css_class (self->bench_start_btn, "suggested-action");
+    gtk_box_append (GTK_BOX (ctrl_row), self->bench_start_btn);
+
+    self->bench_stop_btn = gtk_button_new_with_label ("Stop");
+    gtk_widget_add_css_class (self->bench_stop_btn, "destructive-action");
+    gtk_widget_set_sensitive (self->bench_stop_btn, FALSE);
+    gtk_box_append (GTK_BOX (ctrl_row), self->bench_stop_btn);
+
+    GtkWidget *b_grid = gtk_grid_new ();
+    gtk_widget_add_css_class (b_grid, "bench-grid");
+    gtk_grid_set_row_spacing (GTK_GRID (b_grid), 6);
+    gtk_grid_set_column_spacing (GTK_GRID (b_grid), 24);
+    gtk_box_append (GTK_BOX (self->bench_box), b_grid);
+
+    GtkWidget *hdr_test = gtk_label_new ("Test");
+    gtk_widget_add_css_class (hdr_test, "bench-header");
+    gtk_label_set_xalign (GTK_LABEL (hdr_test), 0.0);
+    gtk_grid_attach (GTK_GRID (b_grid), hdr_test, 0, 0, 1, 1);
+
+    GtkWidget *hdr_read = gtk_label_new ("Read (MB/s)");
+    gtk_widget_add_css_class (hdr_read, "bench-header");
+    gtk_label_set_xalign (GTK_LABEL (hdr_read), 1.0);
+    gtk_grid_attach (GTK_GRID (b_grid), hdr_read, 1, 0, 1, 1);
+
+    GtkWidget *hdr_write = gtk_label_new ("Write (MB/s)");
+    gtk_widget_add_css_class (hdr_write, "bench-header");
+    gtk_label_set_xalign (GTK_LABEL (hdr_write), 1.0);
+    gtk_grid_attach (GTK_GRID (b_grid), hdr_write, 2, 0, 1, 1);
+
+    const gchar *bench_test_names[] = {
+        "SEQ1M Q8T1",
+        "SEQ1M Q1T1",
+        "RND4K Q32T1",
+        "RND4K Q1T1"
+    };
+
+    for (gint i = 0; i < 4; i++) {
+        GtkWidget *t_lbl = gtk_label_new (bench_test_names[i]);
+        gtk_widget_add_css_class (t_lbl, "bench-test-name");
+        gtk_label_set_xalign (GTK_LABEL (t_lbl), 0.0);
+        gtk_grid_attach (GTK_GRID (b_grid), t_lbl, 0, i + 1, 1, 1);
+
+        self->bench_read_labels[i] = gtk_label_new ("—");
+        gtk_widget_add_css_class (self->bench_read_labels[i], "bench-val");
+        gtk_widget_add_css_class (self->bench_read_labels[i], "bench-read-val");
+        gtk_label_set_xalign (GTK_LABEL (self->bench_read_labels[i]), 1.0);
+        gtk_grid_attach (GTK_GRID (b_grid), self->bench_read_labels[i], 1, i + 1, 1, 1);
+
+        self->bench_write_labels[i] = gtk_label_new ("—");
+        gtk_widget_add_css_class (self->bench_write_labels[i], "bench-val");
+        gtk_widget_add_css_class (self->bench_write_labels[i], "bench-write-val");
+        gtk_label_set_xalign (GTK_LABEL (self->bench_write_labels[i]), 1.0);
+        gtk_grid_attach (GTK_GRID (b_grid), self->bench_write_labels[i], 2, i + 1, 1, 1);
+    }
+
+    self->bench_status_label = gtk_label_new ("Ready to benchmark.");
+    gtk_widget_add_css_class (self->bench_status_label, "dim-label");
+    gtk_label_set_xalign (GTK_LABEL (self->bench_status_label), 0.0);
+    gtk_box_append (GTK_BOX (self->bench_box), self->bench_status_label);
+
+    self->bench_progress_bar = gtk_progress_bar_new ();
+    gtk_widget_set_visible (self->bench_progress_bar, FALSE);
+    gtk_box_append (GTK_BOX (self->bench_box), self->bench_progress_bar);
+
+    self->bench_running = FALSE;
+    self->bench_cancellable = NULL;
+
+    g_signal_connect (self->bench_start_btn, "clicked", G_CALLBACK (on_bench_start_clicked), self);
+    g_signal_connect (self->bench_stop_btn, "clicked", G_CALLBACK (on_bench_stop_clicked), self);
 
     self->smart_frame = create_section_frame ("S.M.A.R.T. Attributes");
     gtk_box_append (GTK_BOX (self->content_box), self->smart_frame);
@@ -396,6 +689,29 @@ puls_disk_info_view_set_data (PulsDiskInfoView *self,
     gtk_label_set_text (GTK_LABEL (self->interface_label),
                         iface ? iface : "N/A");
 
+    const gchar *std = puls_smart_data_get_standard (data);
+    gtk_label_set_text (GTK_LABEL (self->standard_label),
+                        std ? std : "N/A");
+
+    const gchar *tm = puls_smart_data_get_transfer_mode (data);
+    gtk_label_set_text (GTK_LABEL (self->transfer_mode_label),
+                        tm ? tm : "N/A");
+
+    guint32 lbs = puls_smart_data_get_logical_sector_size (data);
+    guint32 pbs = puls_smart_data_get_physical_sector_size (data);
+    if (lbs > 0 && pbs > 0) {
+        g_autofree gchar *sector_str = g_strdup_printf ("%u B / %u B", lbs, pbs);
+        gtk_label_set_text (GTK_LABEL (self->sector_size_label), sector_str);
+    } else if (lbs > 0) {
+        g_autofree gchar *sector_str = g_strdup_printf ("%u B", lbs);
+        gtk_label_set_text (GTK_LABEL (self->sector_size_label), sector_str);
+    } else {
+        gtk_label_set_text (GTK_LABEL (self->sector_size_label), "N/A");
+    }
+
+    const gchar *ff = puls_smart_data_get_form_factor (data);
+    gtk_label_set_text (GTK_LABEL (self->form_factor_label), ff ? ff : "N/A");
+
     guint64 cap = puls_smart_data_get_capacity_bytes (data);
     if (cap > 0) {
         g_autofree gchar *cap_str = puls_format_bytes_exact (cap);
@@ -415,12 +731,29 @@ puls_disk_info_view_set_data (PulsDiskInfoView *self,
         type_str = g_strdup (puls_drive_type_to_string (dtype));
     gtk_label_set_text (GTK_LABEL (self->rotation_label), type_str);
 
+    gboolean has_smart = puls_smart_data_get_smart_enabled (data);
     gboolean trim = puls_smart_data_get_supports_trim (data);
     gboolean ncq  = puls_smart_data_get_supports_ncq (data);
     gboolean apm  = puls_smart_data_get_supports_apm (data);
-    g_autofree gchar *features = g_strdup_printf ("TRIM %s   NCQ %s   APM %s",
-        trim ? "✓" : "✗", ncq ? "✓" : "✗", apm ? "✓" : "✗");
-    gtk_label_set_text (GTK_LABEL (self->features_label), features);
+    gboolean aam  = puls_smart_data_get_supports_aam (data);
+    gboolean ds   = puls_smart_data_get_supports_devsleep (data);
+    gboolean wc   = puls_smart_data_get_supports_write_cache (data);
+
+    g_autoptr(GString) feats = g_string_new (NULL);
+    if (has_smart) g_string_append (feats, "SMART ");
+    if (aam) g_string_append (feats, "AAM ");
+    if (apm) g_string_append (feats, "APM ");
+    if (ncq) g_string_append (feats, "NCQ ");
+    if (trim) g_string_append (feats, "TRIM ");
+    if (ds) g_string_append (feats, "DevSleep ");
+    if (wc) g_string_append (feats, "WriteCache ");
+
+    if (feats->len > 0)
+        g_string_truncate (feats, feats->len - 1);
+    else
+        g_string_assign (feats, "None");
+
+    gtk_label_set_text (GTK_LABEL (self->features_label), feats->str);
 
     PulsHealthStatus health = puls_smart_data_get_health (data);
     gint temp = puls_smart_data_get_temperature (data);
@@ -551,7 +884,13 @@ puls_disk_info_view_set_data (PulsDiskInfoView *self,
         gtk_widget_set_sensitive (self->abort_test_btn, FALSE);
     }
 
-    puls_smart_table_set_data (PULS_SMART_TABLE (self->smart_table), data);
+    GArray *attrs = puls_smart_data_get_ata_attributes (data);
+    if (attrs == NULL || attrs->len == 0) {
+        gtk_widget_set_visible (self->smart_frame, FALSE);
+    } else {
+        gtk_widget_set_visible (self->smart_frame, TRUE);
+        puls_smart_table_set_data (PULS_SMART_TABLE (self->smart_table), data);
+    }
 
     PulsNvmeHealth *nvme = puls_smart_data_get_nvme_health (data);
     if (nvme) {
@@ -603,4 +942,18 @@ puls_disk_info_view_set_data (PulsDiskInfoView *self,
     } else {
         gtk_widget_set_visible (self->nvme_frame, FALSE);
     }
+
+    if (self->bench_running && self->bench_cancellable) {
+        g_cancellable_cancel (self->bench_cancellable);
+    }
+
+    for (gint i = 0; i < 4; i++) {
+        gtk_label_set_text (GTK_LABEL (self->bench_read_labels[i]), "—");
+        gtk_label_set_text (GTK_LABEL (self->bench_write_labels[i]), "—");
+    }
+
+    gtk_widget_set_sensitive (self->bench_start_btn, TRUE);
+    gtk_widget_set_sensitive (self->bench_runs_combo, TRUE);
+    gtk_widget_set_sensitive (self->bench_size_combo, TRUE);
+    gtk_label_set_text (GTK_LABEL (self->bench_status_label), "Ready to benchmark.");
 }

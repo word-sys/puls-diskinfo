@@ -3,7 +3,7 @@
  *
  * SMART attributes table using GtkColumnView.
  *
- * Copyright (C) 2024 Barın Güzeldemirci
+ * Copyright (C) 2026 Barın Güzeldemirci
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,6 +23,7 @@ struct _PulsAttrRow {
     gint     current;
     gint     worst;
     gint     threshold;
+    guint64  raw_value;
     gchar   *raw_string;
     gboolean failed_past;
     gboolean failing_now;
@@ -59,6 +60,7 @@ puls_attr_row_new (const PulsSmartAttribute *attr)
     row->current    = attr->current;
     row->worst      = attr->worst;
     row->threshold  = attr->threshold;
+    row->raw_value  = attr->raw_value;
     row->raw_string = g_strdup (attr->raw_string ? attr->raw_string : "0");
     row->failed_past  = attr->failed_past;
     row->failing_now  = attr->failing_now;
@@ -165,8 +167,11 @@ bind_raw_cell (GtkListItemFactory *factory G_GNUC_UNUSED,
 {
     GtkWidget *label = gtk_list_item_get_child (list_item);
     PulsAttrRow *row = gtk_list_item_get_item (list_item);
-    gtk_label_set_text (GTK_LABEL (label), row->raw_string);
+    
+    g_autofree gchar *hex_str = g_strdup_printf ("%012llX", (unsigned long long)row->raw_value);
+    gtk_label_set_text (GTK_LABEL (label), hex_str);
     gtk_label_set_xalign (GTK_LABEL (label), 1.0);
+    gtk_widget_set_tooltip_text (label, row->raw_string);
 }
 
 static void

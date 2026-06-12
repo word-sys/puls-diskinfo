@@ -4,7 +4,7 @@
  * Parses smartctl -a -j JSON output into PulsSmartData objects.
  * Handles both ATA/SATA and NVMe JSON schemas.
  *
- * Copyright (C) 2024 Barın Güzeldemirci
+ * Copyright (C) 2026 Barın Güzeldemirci
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -61,6 +61,20 @@ json_object_get_boolean_safe (JsonObject  *obj,
     return default_val;
 }
 
+static const gchar *
+sata_speed_to_mode (const gchar *speed_str)
+{
+    if (speed_str == NULL)
+        return NULL;
+    if (strstr (speed_str, "1.5"))
+        return "SATA/150";
+    if (strstr (speed_str, "3.0"))
+        return "SATA/300";
+    if (strstr (speed_str, "6.0"))
+        return "SATA/600";
+    return speed_str;
+}
+
 static void
 parse_device_info (JsonObject    *root,
                    PulsSmartData *data)
@@ -94,18 +108,77 @@ parse_device_info (JsonObject    *root,
         puls_smart_data_set_capacity_bytes (data, (guint64)bytes);
     }
 
+    gint64 lbs = json_object_get_int_safe (root, "logical_block_size", 0);
+    if (lbs > 0)
+        puls_smart_data_set_logical_sector_size (data, (guint32)lbs);
+
+    gint64 pbs = json_object_get_int_safe (root, "physical_block_size", 0);
+    if (pbs > 0)
+        puls_smart_data_set_physical_sector_size (data, (guint32)pbs);
+
+    if (json_object_has_member (root, "form_factor")) {
+        JsonObject *ff_obj = json_object_get_object_member (root, "form_factor");
+        const gchar *ff_name = json_object_get_string_safe (ff_obj, "name");
+        if (ff_name == NULL) {
+            ff_name = json_object_get_string_safe (ff_obj, "string");
+        }
+        if (ff_name) {
+            puls_smart_data_set_form_factor (data, ff_name);
+        }
+    }
+
     gint64 rpm = json_object_get_int_safe (root, "rotation_rate", -1);
     puls_smart_data_set_rotation_rpm (data, (gint)rpm);
 
+    if (json_object_has_member (root, "ata_version")) {
+        JsonObject *v_obj = json_object_get_object_member (root, "ata_version");
+        const gchar *v_str = json_object_get_string_safe (v_obj, "string");
+        if (v_str)
+            puls_smart_data_set_standard (data, v_str);
+    }
+
+    if (json_object_has_member (root, "nvme_version")) {
+        JsonObject *v_obj = json_object_get_object_member (root, "nvme_version");
+        const gchar *v_str = json_object_get_string_safe (v_obj, "string");
+        if (v_str) {
+            g_autofree gchar *fmt = g_strdup_printf ("NVMe %s", v_str);
+            puls_smart_data_set_standard (data, fmt);
+        }
+    }
+
+    if (json_object_has_member (root, "sata_version")) {
+        JsonObject *v_obj = json_object_get_object_member (root, "sata_version");
+        const gchar *v_str = json_object_get_string_safe (v_obj, "string");
+        if (v_str && !puls_smart_data_get_standard (data)) {
+            puls_smart_data_set_standard (data, v_str);
+        }
+    }
+
     if (json_object_has_member (root, "interface_speed")) {
         JsonObject *speed_obj = json_object_get_object_member (root, "interface_speed");
+        const gchar *curr_mode = NULL;
+        const gchar *max_mode = NULL;
+
         if (json_object_has_member (speed_obj, "current")) {
-            JsonObject *current = json_object_get_object_member (speed_obj, "current");
-            const gchar *speed_str = json_object_get_string_safe (current, "string");
-            if (speed_str) {
-                g_autofree gchar *iface = g_strdup_printf ("SATA %s", speed_str);
+            JsonObject *curr_obj = json_object_get_object_member (speed_obj, "current");
+            const gchar *s = json_object_get_string_safe (curr_obj, "string");
+            curr_mode = sata_speed_to_mode (s);
+            if (s) {
+                g_autofree gchar *iface = g_strdup_printf ("SATA %s", s);
                 puls_smart_data_set_interface_type (data, iface);
             }
+        }
+        if (json_object_has_member (speed_obj, "max")) {
+            JsonObject *max_obj = json_object_get_object_member (speed_obj, "max");
+            const gchar *s = json_object_get_string_safe (max_obj, "string");
+            max_mode = sata_speed_to_mode (s);
+        }
+
+        if (curr_mode && max_mode) {
+            g_autofree gchar *mode = g_strdup_printf ("%s | %s", curr_mode, max_mode);
+            puls_smart_data_set_transfer_mode (data, mode);
+        } else if (curr_mode) {
+            puls_smart_data_set_transfer_mode (data, curr_mode);
         }
     }
 
@@ -117,6 +190,40 @@ parse_device_info (JsonObject    *root,
         JsonObject *trim_obj = json_object_get_object_member (root, "trim");
         gboolean trim_supported = json_object_get_boolean_safe (trim_obj, "supported", FALSE);
         puls_smart_data_set_supports_trim (data, trim_supported);
+    }
+
+    if (json_object_has_member (root, "apm")) {
+        JsonObject *apm_obj = json_object_get_object_member (root, "apm");
+        gboolean apm_supported = json_object_get_boolean_safe (apm_obj, "supported", FALSE);
+        puls_smart_data_set_supports_apm (data, apm_supported);
+    }
+
+    if (json_object_has_member (root, "aam")) {
+        JsonObject *aam_obj = json_object_get_object_member (root, "aam");
+        gboolean aam_supported = json_object_get_boolean_safe (aam_obj, "supported", FALSE);
+        puls_smart_data_set_supports_aam (data, aam_supported);
+    }
+
+    if (json_object_has_member (root, "write_cache")) {
+        JsonObject *wc_obj = json_object_get_object_member (root, "write_cache");
+        gboolean wc_enabled = json_object_get_boolean_safe (wc_obj, "enabled", FALSE);
+        puls_smart_data_set_supports_write_cache (data, wc_enabled);
+    } else if (json_object_has_member (root, "wcache")) {
+        JsonObject *wc_obj = json_object_get_object_member (root, "wcache");
+        gboolean wc_enabled = json_object_get_boolean_safe (wc_obj, "enabled", FALSE);
+        puls_smart_data_set_supports_write_cache (data, wc_enabled);
+    }
+
+    if (json_object_has_member (root, "sata_ncq")) {
+        JsonObject *ncq_obj = json_object_get_object_member (root, "sata_ncq");
+        gboolean ncq_supported = json_object_get_boolean_safe (ncq_obj, "supported", FALSE);
+        puls_smart_data_set_supports_ncq (data, ncq_supported);
+    }
+
+    if (json_object_has_member (root, "sata_devsleep")) {
+        JsonObject *ds_obj = json_object_get_object_member (root, "sata_devsleep");
+        gboolean ds_supported = json_object_get_boolean_safe (ds_obj, "supported", FALSE);
+        puls_smart_data_set_supports_devsleep (data, ds_supported);
     }
 }
 

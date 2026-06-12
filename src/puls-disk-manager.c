@@ -3,7 +3,7 @@
  *
  * Disk enumeration via /sys/block + smartctl, with D-Bus/sysfs fallback.
  *
- * Copyright (C) 2024 Barın Güzeldemirci
+ * Copyright (C) 2026 Barın Güzeldemirci
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -160,6 +160,236 @@ puls_disk_manager_new (void)
     return g_object_new (PULS_TYPE_DISK_MANAGER, NULL);
 }
 
+static void
+puls_smart_data_fill_sysfs_fallbacks (PulsSmartData *data)
+{
+    const gchar *dev_path = puls_smart_data_get_device_path (data);
+    if (dev_path == NULL)
+        return;
+
+    const gchar *base = strrchr (dev_path, '/');
+    if (base)
+        base++;
+    else
+        base = dev_path;
+
+    PulsDriveType dtype = puls_smart_data_get_drive_type (data);
+    if (dtype == PULS_DRIVE_TYPE_UNKNOWN) {
+        dtype = puls_detect_drive_type (dev_path);
+        puls_smart_data_set_drive_type (data, dtype);
+    }
+
+    const gchar *model = puls_smart_data_get_model_name (data);
+    if (model == NULL || strlen (model) == 0 || g_strcmp0 (model, "Unknown") == 0) {
+        g_autofree gchar *vendor_path = g_strdup_printf ("/sys/block/%s/device/vendor", base);
+        g_autofree gchar *model_path = g_strdup_printf ("/sys/block/%s/device/model", base);
+        g_autofree gchar *name_path = g_strdup_printf ("/sys/block/%s/device/name", base);
+        g_autofree gchar *vendor_contents = NULL;
+        g_autofree gchar *model_contents = NULL;
+        g_autofree gchar *name_contents = NULL;
+
+        if (g_file_get_contents (model_path, &model_contents, NULL, NULL)) {
+            g_strstrip (model_contents);
+            if (g_file_get_contents (vendor_path, &vendor_contents, NULL, NULL)) {
+                g_strstrip (vendor_contents);
+                g_autofree gchar *full_model = g_strdup_printf ("%s %s", vendor_contents, model_contents);
+                puls_smart_data_set_model_name (data, full_model);
+            } else {
+                puls_smart_data_set_model_name (data, model_contents);
+            }
+        } else if (g_file_get_contents (name_path, &name_contents, NULL, NULL)) {
+            g_strstrip (name_contents);
+            puls_smart_data_set_model_name (data, name_contents);
+        } else {
+            puls_smart_data_set_model_name (data, "Generic Storage Device");
+        }
+    }
+
+    const gchar *serial = puls_smart_data_get_serial_number (data);
+    if (serial == NULL || strlen (serial) == 0 || g_strcmp0 (serial, "Unknown") == 0) {
+        g_autofree gchar *serial_path = g_strdup_printf ("/sys/block/%s/device/serial", base);
+        g_autofree gchar *cid_path = g_strdup_printf ("/sys/block/%s/device/cid", base);
+        g_autofree gchar *serial_contents = NULL;
+        g_autofree gchar *cid_contents = NULL;
+
+        if (g_file_get_contents (serial_path, &serial_contents, NULL, NULL)) {
+            g_strstrip (serial_contents);
+            puls_smart_data_set_serial_number (data, serial_contents);
+        } else if (g_file_get_contents (cid_path, &cid_contents, NULL, NULL)) {
+            g_strstrip (cid_contents);
+            puls_smart_data_set_serial_number (data, cid_contents);
+        } else if (dtype == PULS_DRIVE_TYPE_USB) {
+            g_autofree gchar *device_link = g_strdup_printf ("/sys/block/%s/device", base);
+            gchar real_path_buf[PATH_MAX];
+            if (realpath (device_link, real_path_buf) != NULL) {
+                gchar *current_dir = g_strdup (real_path_buf);
+                gchar *usb_serial = NULL;
+                for (gint i = 0; i < 12; i++) {
+                    g_autofree gchar *sub_serial_path = g_build_filename (current_dir, "serial", NULL);
+                    if (g_file_test (sub_serial_path, G_FILE_TEST_EXISTS)) {
+                        g_file_get_contents (sub_serial_path, &usb_serial, NULL, NULL);
+                        break;
+                    }
+                    gchar *parent_dir = g_path_get_dirname (current_dir);
+                    g_free (current_dir);
+                    current_dir = parent_dir;
+                    if (g_strcmp0 (current_dir, "/") == 0 || g_strcmp0 (current_dir, "/sys") == 0 || g_strcmp0 (current_dir, ".") == 0) {
+                        break;
+                    }
+                }
+                g_free (current_dir);
+                if (usb_serial) {
+                    g_strstrip (usb_serial);
+                    puls_smart_data_set_serial_number (data, usb_serial);
+                    g_free (usb_serial);
+                } else {
+                    puls_smart_data_set_serial_number (data, "N/A");
+                }
+            } else {
+                puls_smart_data_set_serial_number (data, "N/A");
+            }
+        } else {
+            puls_smart_data_set_serial_number (data, "N/A");
+        }
+    }
+
+    const gchar *fw = puls_smart_data_get_firmware_version (data);
+    if (fw == NULL || strlen (fw) == 0 || g_strcmp0 (fw, "Unknown") == 0) {
+        g_autofree gchar *rev_path = g_strdup_printf ("/sys/block/%s/device/rev", base);
+        g_autofree gchar *fw_rev_path = g_strdup_printf ("/sys/block/%s/device/firmware_rev", base);
+        g_autofree gchar *fw_contents = NULL;
+
+        if (g_file_get_contents (rev_path, &fw_contents, NULL, NULL)) {
+            g_strstrip (fw_contents);
+            puls_smart_data_set_firmware_version (data, fw_contents);
+        } else if (g_file_get_contents (fw_rev_path, &fw_contents, NULL, NULL)) {
+            g_strstrip (fw_contents);
+            puls_smart_data_set_firmware_version (data, fw_contents);
+        } else {
+            puls_smart_data_set_firmware_version (data, "N/A");
+        }
+    }
+
+    guint64 cap = puls_smart_data_get_capacity_bytes (data);
+    if (cap == 0) {
+        g_autofree gchar *size_path = g_strdup_printf ("/sys/block/%s/size", base);
+        g_autofree gchar *size_contents = NULL;
+        if (g_file_get_contents (size_path, &size_contents, NULL, NULL)) {
+            g_strstrip (size_contents);
+            guint64 sectors = g_ascii_strtoull (size_contents, NULL, 10);
+            puls_smart_data_set_capacity_bytes (data, sectors * 512ULL);
+        }
+    }
+
+    const gchar *iface = puls_smart_data_get_interface_type (data);
+    if (dtype == PULS_DRIVE_TYPE_USB) {
+        if (iface == NULL || strlen (iface) == 0 || g_strcmp0 (iface, "Unknown") == 0 || g_ascii_strcasecmp (iface, "usb") == 0) {
+            puls_smart_data_set_interface_type (data, "USB");
+        }
+        const gchar *tmode = puls_smart_data_get_transfer_mode (data);
+        if (tmode == NULL || strlen (tmode) == 0) {
+            g_autofree gchar *usb_mode = puls_detect_usb_speed_version (base);
+            if (usb_mode) {
+                puls_smart_data_set_transfer_mode (data, usb_mode);
+            }
+        }
+    } else if (dtype == PULS_DRIVE_TYPE_NVME_SSD) {
+        if (iface == NULL || strlen (iface) == 0 || g_strcmp0 (iface, "Unknown") == 0) {
+            puls_smart_data_set_interface_type (data, "NVMe");
+        }
+        const gchar *tmode = puls_smart_data_get_transfer_mode (data);
+        if (tmode == NULL || strlen (tmode) == 0) {
+            g_autofree gchar *curr_speed_path = g_strdup_printf ("/sys/block/%s/device/device/current_link_speed", base);
+            g_autofree gchar *curr_width_path = g_strdup_printf ("/sys/block/%s/device/device/current_link_width", base);
+            g_autofree gchar *max_speed_path = g_strdup_printf ("/sys/block/%s/device/device/max_link_speed", base);
+            g_autofree gchar *max_width_path = g_strdup_printf ("/sys/block/%s/device/device/max_link_width", base);
+
+            g_autofree gchar *curr_speed = NULL;
+            g_autofree gchar *curr_width = NULL;
+            g_autofree gchar *max_speed = NULL;
+            g_autofree gchar *max_width = NULL;
+
+            g_file_get_contents (curr_speed_path, &curr_speed, NULL, NULL);
+            g_file_get_contents (curr_width_path, &curr_width, NULL, NULL);
+            g_file_get_contents (max_speed_path, &max_speed, NULL, NULL);
+            g_file_get_contents (max_width_path, &max_width, NULL, NULL);
+
+            if (curr_speed && curr_width) {
+                g_strstrip (curr_speed);
+                g_strstrip (curr_width);
+                
+                const gchar *curr_pcie = "PCIe";
+                if (strstr (curr_speed, "2.5 GT/s")) curr_pcie = "PCIe 1.0";
+                else if (strstr (curr_speed, "5.0 GT/s")) curr_pcie = "PCIe 2.0";
+                else if (strstr (curr_speed, "8.0 GT/s")) curr_pcie = "PCIe 3.0";
+                else if (strstr (curr_speed, "16.0 GT/s")) curr_pcie = "PCIe 4.0";
+                else if (strstr (curr_speed, "32.0 GT/s")) curr_pcie = "PCIe 5.0";
+                else if (strstr (curr_speed, "64.0 GT/s")) curr_pcie = "PCIe 6.0";
+
+                g_autofree gchar *curr_full = g_strdup_printf ("%s x%s", curr_pcie, curr_width);
+
+                if (max_speed && max_width) {
+                    g_strstrip (max_speed);
+                    g_strstrip (max_width);
+
+                    const gchar *max_pcie = "PCIe";
+                    if (strstr (max_speed, "2.5 GT/s")) max_pcie = "PCIe 1.0";
+                    else if (strstr (max_speed, "5.0 GT/s")) max_pcie = "PCIe 2.0";
+                    else if (strstr (max_speed, "8.0 GT/s")) max_pcie = "PCIe 3.0";
+                    else if (strstr (max_speed, "16.0 GT/s")) max_pcie = "PCIe 4.0";
+                    else if (strstr (max_speed, "32.0 GT/s")) max_pcie = "PCIe 5.0";
+                    else if (strstr (max_speed, "64.0 GT/s")) max_pcie = "PCIe 6.0";
+
+                    g_autofree gchar *max_full = g_strdup_printf ("%s x%s", max_pcie, max_width);
+                    g_autofree gchar *full_mode = g_strdup_printf ("%s | %s", curr_full, max_full);
+                    puls_smart_data_set_transfer_mode (data, full_mode);
+                } else {
+                    puls_smart_data_set_transfer_mode (data, curr_full);
+                }
+            }
+        }
+    } else if (dtype == PULS_DRIVE_TYPE_HDD || dtype == PULS_DRIVE_TYPE_SATA_SSD) {
+        if (iface == NULL || strlen (iface) == 0 || g_strcmp0 (iface, "Unknown") == 0) {
+            puls_smart_data_set_interface_type (data, "SATA");
+        }
+    }
+
+    guint32 lbs = puls_smart_data_get_logical_sector_size (data);
+    if (lbs == 0) {
+        g_autofree gchar *lbs_path = g_strdup_printf ("/sys/block/%s/queue/logical_block_size", base);
+        g_autofree gchar *lbs_contents = NULL;
+        if (g_file_get_contents (lbs_path, &lbs_contents, NULL, NULL)) {
+            g_strstrip (lbs_contents);
+            puls_smart_data_set_logical_sector_size (data, (guint32)g_ascii_strtoull (lbs_contents, NULL, 10));
+        }
+    }
+
+    guint32 pbs = puls_smart_data_get_physical_sector_size (data);
+    if (pbs == 0) {
+        g_autofree gchar *pbs_path = g_strdup_printf ("/sys/block/%s/queue/physical_block_size", base);
+        g_autofree gchar *pbs_contents = NULL;
+        if (g_file_get_contents (pbs_path, &pbs_contents, NULL, NULL)) {
+            g_strstrip (pbs_contents);
+            puls_smart_data_set_physical_sector_size (data, (guint32)g_ascii_strtoull (pbs_contents, NULL, 10));
+        }
+    }
+
+    const gchar *ff = puls_smart_data_get_form_factor (data);
+    if (ff == NULL || strlen (ff) == 0 || g_strcmp0 (ff, "Unknown") == 0) {
+        if (dtype == PULS_DRIVE_TYPE_NVME_SSD) {
+            puls_smart_data_set_form_factor (data, "M.2");
+        } else if (dtype == PULS_DRIVE_TYPE_USB) {
+            puls_smart_data_set_form_factor (data, "USB Drive / External");
+        } else if (dtype == PULS_DRIVE_TYPE_SATA_SSD) {
+            puls_smart_data_set_form_factor (data, "2.5-inch");
+        } else if (dtype == PULS_DRIVE_TYPE_HDD) {
+            puls_smart_data_set_form_factor (data, "3.5-inch / 2.5-inch");
+        } else {
+            puls_smart_data_set_form_factor (data, "Unknown");
+        }
+    }
+}
+
 void
 puls_disk_manager_scan (PulsDiskManager *self)
 {
@@ -176,25 +406,19 @@ puls_disk_manager_scan (PulsDiskManager *self)
 
             PulsSmartData *data = NULL;
             if (json) {
-                data = puls_smart_parser_parse_json (json, &error);
+                GError *parse_err = NULL;
+                data = puls_smart_parser_parse_json (json, &parse_err);
+                g_clear_error (&parse_err);
             }
 
             if (data == NULL) {
                 data = puls_smart_data_new ();
-                puls_smart_data_set_device_path (data, dev_path);
-                puls_smart_data_set_drive_type (data, puls_detect_drive_type (dev_path));
-
-                const gchar *base = strrchr (dev_path, '/');
-                if (base) base++; else base = dev_path;
-
-                g_autofree gchar *model_path = g_strdup_printf (
-                    "/sys/block/%s/device/model", base);
-                g_autofree gchar *model = NULL;
-                if (g_file_get_contents (model_path, &model, NULL, NULL)) {
-                    g_strstrip (model);
-                    puls_smart_data_set_model_name (data, model);
-                }
             }
+            if (puls_smart_data_get_device_path (data) == NULL) {
+                puls_smart_data_set_device_path (data, dev_path);
+            }
+
+            puls_smart_data_fill_sysfs_fallbacks (data);
 
             g_hash_table_insert (self->devices, g_strdup (dev_path), data);
             self->device_paths = g_list_append (self->device_paths,
@@ -254,19 +478,23 @@ on_smartctl_done (GObject      *source G_GNUC_UNUSED,
     GError *error = NULL;
 
     g_autofree gchar *json = puls_run_smartctl_finish (result, &error);
+    g_clear_error (&error);
 
-    if (error) {
-        g_task_return_error (task, error);
-        g_object_unref (task);
-        return;
+    PulsSmartData *data = NULL;
+    if (json) {
+        GError *parse_err = NULL;
+        data = puls_smart_parser_parse_json (json, &parse_err);
+        g_clear_error (&parse_err);
     }
 
-    PulsSmartData *data = puls_smart_parser_parse_json (json, &error);
-    if (!data) {
-        g_task_return_error (task, error);
-        g_object_unref (task);
-        return;
+    if (data == NULL) {
+        data = puls_smart_data_new ();
     }
+    if (puls_smart_data_get_device_path (data) == NULL) {
+        puls_smart_data_set_device_path (data, rd->device_path);
+    }
+
+    puls_smart_data_fill_sysfs_fallbacks (data);
 
     g_hash_table_replace (rd->manager->devices,
                           g_strdup (rd->device_path),

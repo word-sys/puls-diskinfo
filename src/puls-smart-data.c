@@ -3,7 +3,7 @@
  *
  * S.M.A.R.T. data structures implementation.
  *
- * Copyright (C) 2024 Puls DiskInfo Contributors
+ * Copyright (C) 2026 Barın Güzeldemirci <baringuzeldemir@gmail.com>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -80,8 +80,13 @@ struct _PulsSmartData {
     gchar        *serial_number;
     gchar        *firmware_version;
     gchar        *interface_type;
+    gchar        *standard;
+    gchar        *transfer_mode;
+    gchar        *form_factor;
     guint64       capacity_bytes;
     gint          rotation_rpm;
+    guint32       logical_sector_size;
+    guint32       physical_sector_size;
     PulsDriveType drive_type;
 
     /* Health */
@@ -99,6 +104,9 @@ struct _PulsSmartData {
     gboolean supports_trim;
     gboolean supports_ncq;
     gboolean supports_apm;
+    gboolean supports_aam;
+    gboolean supports_devsleep;
+    gboolean supports_write_cache;
 
     /* ATA SMART attributes */
     GArray *ata_attributes;
@@ -125,6 +133,9 @@ puls_smart_data_finalize (GObject *object)
     g_free (self->serial_number);
     g_free (self->firmware_version);
     g_free (self->interface_type);
+    g_free (self->standard);
+    g_free (self->transfer_mode);
+    g_free (self->form_factor);
 
     if (self->ata_attributes) {
         for (guint i = 0; i < self->ata_attributes->len; i++) {
@@ -158,8 +169,13 @@ puls_smart_data_init (PulsSmartData *self)
     self->serial_number    = NULL;
     self->firmware_version = NULL;
     self->interface_type   = NULL;
+    self->standard         = NULL;
+    self->transfer_mode    = NULL;
+    self->form_factor      = NULL;
     self->capacity_bytes   = 0;
     self->rotation_rpm     = -1;
+    self->logical_sector_size = 0;
+    self->physical_sector_size = 0;
     self->drive_type       = PULS_DRIVE_TYPE_UNKNOWN;
     self->health           = PULS_HEALTH_UNKNOWN;
     self->smart_enabled    = FALSE;
@@ -171,6 +187,9 @@ puls_smart_data_init (PulsSmartData *self)
     self->supports_trim = FALSE;
     self->supports_ncq  = FALSE;
     self->supports_apm  = FALSE;
+    self->supports_aam  = FALSE;
+    self->supports_devsleep = FALSE;
+    self->supports_write_cache = FALSE;
     self->ata_attributes = g_array_new (FALSE, TRUE, sizeof (PulsSmartAttribute));
     self->nvme_health    = NULL;
     self->self_test_in_progress = FALSE;
@@ -207,6 +226,40 @@ IMPL_STRING_ACCESSOR (model_name)
 IMPL_STRING_ACCESSOR (serial_number)
 IMPL_STRING_ACCESSOR (firmware_version)
 IMPL_STRING_ACCESSOR (interface_type)
+IMPL_STRING_ACCESSOR (standard)
+IMPL_STRING_ACCESSOR (transfer_mode)
+IMPL_STRING_ACCESSOR (form_factor)
+
+#undef IMPL_STRING_ACCESSOR
+
+guint32
+puls_smart_data_get_logical_sector_size (PulsSmartData *self)
+{
+    g_return_val_if_fail (PULS_IS_SMART_DATA (self), 0);
+    return self->logical_sector_size;
+}
+
+void
+puls_smart_data_set_logical_sector_size (PulsSmartData *self, guint32 val)
+{
+    g_return_if_fail (PULS_IS_SMART_DATA (self));
+    self->logical_sector_size = val;
+}
+
+guint32
+puls_smart_data_get_physical_sector_size (PulsSmartData *self)
+{
+    g_return_val_if_fail (PULS_IS_SMART_DATA (self), 0);
+    return self->physical_sector_size;
+}
+
+void
+puls_smart_data_set_physical_sector_size (PulsSmartData *self, guint32 val)
+{
+    g_return_if_fail (PULS_IS_SMART_DATA (self));
+    self->physical_sector_size = val;
+}
+
 
 #undef IMPL_STRING_ACCESSOR
 
@@ -338,6 +391,9 @@ IMPL_UINT64_ACCESSOR (total_bytes_read)
 IMPL_BOOL_ACCESSOR (supports_trim)
 IMPL_BOOL_ACCESSOR (supports_ncq)
 IMPL_BOOL_ACCESSOR (supports_apm)
+IMPL_BOOL_ACCESSOR (supports_aam)
+IMPL_BOOL_ACCESSOR (supports_devsleep)
+IMPL_BOOL_ACCESSOR (supports_write_cache)
 
 #undef IMPL_BOOL_ACCESSOR
 

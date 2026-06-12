@@ -3,7 +3,7 @@
  *
  * Utility functions for PULS DiskInfo.
  *
- * Copyright (C) 2024 Barın Güzeldemirci
+ * Copyright (C) 2026 Barın Güzeldemirci
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -423,6 +423,73 @@ puls_detect_drive_type (const gchar *device_path)
         return PULS_DRIVE_TYPE_HDD;
     else
         return PULS_DRIVE_TYPE_SATA_SSD;
+}
+
+gchar *
+puls_detect_usb_speed_version (const gchar *device_name)
+{
+    g_autofree gchar *device_link = g_strdup_printf ("/sys/block/%s/device", device_name);
+    gchar real_path_buf[PATH_MAX];
+    if (realpath (device_link, real_path_buf) == NULL) {
+        return NULL;
+    }
+
+    gchar *current_dir = g_strdup (real_path_buf);
+    gchar *speed_str = NULL;
+    gchar *version_str = NULL;
+
+    for (gint i = 0; i < 12; i++) {
+        g_autofree gchar *speed_path = g_build_filename (current_dir, "speed", NULL);
+        g_autofree gchar *version_path = g_build_filename (current_dir, "version", NULL);
+
+        if (g_file_test (speed_path, G_FILE_TEST_EXISTS) && g_file_test (version_path, G_FILE_TEST_EXISTS)) {
+            g_file_get_contents (speed_path, &speed_str, NULL, NULL);
+            g_file_get_contents (version_path, &version_str, NULL, NULL);
+            break;
+        }
+
+        gchar *parent_dir = g_path_get_dirname (current_dir);
+        g_free (current_dir);
+        current_dir = parent_dir;
+
+        if (g_strcmp0 (current_dir, "/") == 0 || g_strcmp0 (current_dir, "/sys") == 0 || g_strcmp0 (current_dir, ".") == 0) {
+            break;
+        }
+    }
+
+    g_free (current_dir);
+
+    if (speed_str && version_str) {
+        g_strstrip (speed_str);
+        g_strstrip (version_str);
+
+        gint speed_val = (gint)g_ascii_strtoll (speed_str, NULL, 10);
+        const gchar *gen = "USB";
+
+        if (speed_val == 480) {
+            gen = "USB 2.0 (High-Speed)";
+        } else if (speed_val == 5000) {
+            gen = "USB 3.0 (SuperSpeed)";
+        } else if (speed_val == 10000) {
+            gen = "USB 3.1 (SuperSpeed+)";
+        } else if (speed_val == 20000) {
+            gen = "USB 3.2 (SuperSpeed++)";
+        } else {
+            gchar *res = g_strdup_printf ("USB %s (%d Mbps)", version_str, speed_val);
+            g_free (speed_str);
+            g_free (version_str);
+            return res;
+        }
+
+        gchar *res = g_strdup_printf ("USB %s | %s", version_str, gen);
+        g_free (speed_str);
+        g_free (version_str);
+        return res;
+    }
+
+    g_free (speed_str);
+    g_free (version_str);
+    return NULL;
 }
 
 void

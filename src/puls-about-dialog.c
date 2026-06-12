@@ -3,7 +3,7 @@
  *
  * About dialog implementation.
  *
- * Copyright (C) 2024 Barın Güzeldemirci
+ * Copyright (C) 2026 Barın Güzeldemirci
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -46,12 +46,12 @@ puls_show_about_dialog (GtkWindow *parent)
     gtk_about_dialog_set_license_type (GTK_ABOUT_DIALOG (dialog),
                                        GTK_LICENSE_GPL_3_0);
     gtk_about_dialog_set_website (GTK_ABOUT_DIALOG (dialog),
-                                  "https://github.com/puls-diskinfo/puls-diskinfo");
+                                  "https://github.com/word-sys/puls-diskinfo");
     gtk_about_dialog_set_website_label (GTK_ABOUT_DIALOG (dialog),
                                         "GitHub Repository");
     gtk_about_dialog_set_authors (GTK_ABOUT_DIALOG (dialog), authors);
     gtk_about_dialog_set_copyright (GTK_ABOUT_DIALOG (dialog),
-                                    "© 2024 Barın Güzeldemirci");
+                                    "© 2026 Barın Güzeldemirci");
     gtk_about_dialog_set_logo_icon_name (GTK_ABOUT_DIALOG (dialog),
                                          "drive-harddisk-solidstate-symbolic");
 

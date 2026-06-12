@@ -4,9 +4,6 @@
  * Designed to complement Libadwaita's system theme (light and dark modes).
  */
 
-@define-color card_bg_color @theme_base_color;
-@define-color card_shade_color mix(@theme_fg_color, @theme_bg_color, 0.08);
-
 /* ── Disk Selector Bar ─────────────────────────────────────── */
 
 disk-selector {
@@ -17,20 +14,23 @@ disk-selector {
 .disk-card {
     border: 1px solid alpha(@borders, 0.7);
     background-color: @card_bg_color;
-    border-radius: 10px;
-    padding: 8px;
-    min-width: 150px;
-    transition: all 200ms ease;
+    color: @card_fg_color;
+    border-radius: 6px;
+    padding: 6px;
+    min-width: 130px;
+    transition: none;
 }
 
 .disk-card:hover {
     border-color: @borders;
-    background-color: @card_shade_color;
+    background-color: mix(@card_fg_color, @card_bg_color, 0.12);
+    color: @card_fg_color;
 }
 
 .disk-card-active {
     border-color: @accent_color;
     background-color: @card_bg_color;
+    color: @card_fg_color;
     box-shadow: 0 0 0 1px @accent_color;
 }
 
@@ -72,8 +72,8 @@ disk-selector {
 
 .info-key {
     font-weight: 600;
-    font-size: 13px;
-    min-width: 160px;
+    font-size: 12px;
+    min-width: 110px;
 }
 
 .info-value {
@@ -84,67 +84,50 @@ disk-selector {
 /* ── Health Indicator ──────────────────────────────────────── */
 
 health-indicator {
-    padding: 8px 16px;
-    border-radius: 12px;
-    border: 1px solid alpha(@borders, 0.7);
-    min-width: 90px;
-    background-color: @card_bg_color;
-}
-
-.health-icon {
-    font-size: 32px;
+    padding: 12px;
+    border-radius: 8px;
+    min-width: 100px;
+    border: none;
+    background-color: mix(@card_fg_color, @card_bg_color, 0.08);
 }
 
 .health-text {
-    font-weight: 800;
-    font-size: 14px;
-    letter-spacing: 1px;
+    font-weight: 900;
+    font-size: 16px;
+    letter-spacing: 0.5px;
+    color: white;
 }
 
 health-indicator.health-good {
-    border-color: #2ea043;
-    background-color: rgba(46, 160, 67, 0.08);
-}
-
-health-indicator.health-good .health-icon {
-    color: #2ea043;
-    text-shadow: 0 0 12px rgba(46, 160, 67, 0.5);
+    background-color: #2ea043;
 }
 
 health-indicator.health-good .health-text {
-    color: #2ea043;
+    color: white;
 }
 
 health-indicator.health-caution {
-    border-color: #d29922;
-    background-color: rgba(210, 153, 34, 0.08);
-}
-
-health-indicator.health-caution .health-icon {
-    color: #d29922;
-    text-shadow: 0 0 12px rgba(210, 153, 34, 0.5);
+    background-color: #d29922;
 }
 
 health-indicator.health-caution .health-text {
-    color: #d29922;
+    color: white;
 }
 
 health-indicator.health-bad {
-    border-color: #f85149;
-    background-color: rgba(248, 81, 73, 0.08);
-}
-
-health-indicator.health-bad .health-icon {
-    color: #f85149;
-    text-shadow: 0 0 12px rgba(248, 81, 73, 0.5);
+    background-color: #f85149;
 }
 
 health-indicator.health-bad .health-text {
-    color: #f85149;
+    color: white;
 }
 
 health-indicator.health-unknown {
-    border-color: @borders;
+    background-color: #7a7a7a;
+}
+
+health-indicator.health-unknown .health-text {
+    color: white;
 }
 
 /* ── Temperature Widget ────────────────────────────────────── */
@@ -253,5 +236,49 @@ button {
 }
 
 label {
-    transition: color 200ms ease;
+    /* Label transitions removed to prevent periodic refresh flashing */
+}
+
+/* ── Performance Benchmark ─────────────────────────────────── */
+
+.bench-test-name {
+    font-weight: 700;
+    font-size: 13px;
+    font-family: "JetBrains Mono", "Fira Code", "Source Code Pro", monospace;
+    min-width: 120px;
+    padding: 8px;
+}
+
+.bench-val {
+    font-weight: 700;
+    font-size: 18px;
+    font-family: "JetBrains Mono", "Fira Code", "Source Code Pro", monospace;
+    padding: 8px 16px;
+    border-radius: 4px;
+    background-color: @window_bg_color;
+    text-align: right;
+    min-width: 100px;
+}
+
+.bench-read-val {
+    color: #06b6d4; /* cyan */
+}
+
+.bench-write-val {
+    color: #d946ef; /* magenta */
+}
+
+.bench-header {
+    font-weight: 700;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    padding: 4px 8px;
+}
+
+.bench-grid {
+    background-color: @card_bg_color;
+    border: 1px solid alpha(@borders, 0.5);
+    border-radius: 6px;
+    padding: 8px;
 }

@@ -1,0 +1,51 @@
+name: Build PULS DiskInfo
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+    
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build & Package
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    - name: Install System Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          meson \
+          ninja-build \
+          pkg-config \
+          libgtk-4-dev \
+          libadwaita-1-dev \
+          libjson-glib-dev \
+          smartmontools
+
+    - name: Setup Build Configuration
+      run: |
+        meson setup build
+
+    - name: Compile Code
+      run: |
+        meson compile -C build
+
+    - name: Build Portable Binary Tarball
+      run: |
+        chmod +x ./packaging/build-binary.sh
+        ./packaging/build-binary.sh
+
+    - name: Upload Release Artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: puls-diskinfo-release-tarball
+        path: dist/*.tar.gz
