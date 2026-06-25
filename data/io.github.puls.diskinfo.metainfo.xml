@@ -36,6 +36,11 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="1.1.0" date="2026-06-26">
+      <description>
+        <p>Telemetry additions and LVM/LUKS mapping fixes, including safer benchmarking checks and GTK CSS hover fixes.</p>
+      </description>
+    </release>
     <release version="1.0.0" date="2026-01-01">
       <description>
         <p>Initial release of PULS DiskInfo.</p>

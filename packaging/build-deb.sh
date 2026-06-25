@@ -16,7 +16,6 @@ echo "════════════════════════�
 echo "  PULS DiskInfo — Debian Package Builder"
 echo "══════════════════════════════════════════════════════════"
 
-# Check for required tools
 for cmd in dpkg-buildpackage meson ninja; do
     if ! command -v "$cmd" &>/dev/null; then
         echo "Error: $cmd is not installed."
@@ -27,7 +26,6 @@ done
 
 mkdir -p "$DIST_DIR"
 
-# ── Build ─────────────────────────────────────────────────────
 echo ""
 echo "▸ Building .deb package..."
 cd "$PROJECT_DIR"
@@ -38,11 +36,9 @@ dpkg-buildpackage -us -uc -b --no-check-builddeps 2>&1 || {
     dpkg-buildpackage -us -uc -b --no-check-builddeps
 }
 
-# ── Collect output ────────────────────────────────────────────
 echo ""
 echo "▸ Collecting .deb files..."
 
-# dpkg-buildpackage places .deb in parent directory
 DEB_FILE=$(find "$PROJECT_DIR/.." -maxdepth 1 -name "puls-diskinfo_*.deb" -type f | head -1)
 
 if [ -n "$DEB_FILE" ]; then

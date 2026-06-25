@@ -1,3 +1,14 @@
+puls-diskinfo (1.1.0-1) bookworm; urgency=medium
+
+  * New release.
+  * Added LVM/LUKS mapping resolution support.
+  * Safer benchmarking directory security bounds check.
+  * Added new drive fields: device path, wear level, unsafe shutdowns, read ahead, scheduler, write cache, trim.
+  * Display decimal values next to hexadecimal in SMART table.
+  * Completely resolved contrast bug and whity hover overlay on cards.
+
+ -- Barın Güzeldemirci <baringuzeldemir@gmail.com>  Fri, 26 Jun 2026 00:10:00 +0300
+
 puls-diskinfo (1.0.0-1) bookworm; urgency=medium
 
   * Initial release.

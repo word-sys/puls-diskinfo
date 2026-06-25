@@ -19,7 +19,6 @@
 
 G_BEGIN_DECLS
 
-/* ── Formatting ────────────────────────────────────────────── */
 
 gchar *puls_format_bytes       (guint64 bytes);
 gchar *puls_format_bytes_exact (guint64 bytes);
@@ -27,7 +26,6 @@ gchar *puls_format_hours       (guint64 hours);
 gchar *puls_format_temperature (gint    celsius);
 gchar *puls_format_number      (guint64 number);
 
-/* ── Partition / Mount Information ────────────────────────── */
 
 typedef struct {
     gchar *device_path;
@@ -40,7 +38,6 @@ typedef struct {
 void   puls_partition_info_free (PulsPartitionInfo *info);
 GList *puls_get_disk_partitions  (const gchar *device_path);
 
-/* ── smartctl Execution ────────────────────────────────────── */
 
 typedef void (*PulsSmartctlCallback) (const gchar *json_output,
                                       GError      *error,
@@ -70,13 +67,10 @@ gchar   *puls_run_smartctl_action_sync   (const gchar          *device_path,
                                           const gchar          *action,
                                           GError              **error);
 
-/* ── System Detection ──────────────────────────────────────── */
 
 gboolean puls_detect_smartmontools     (gchar **version_out);
 gboolean puls_device_path_is_valid     (const gchar *path);
 gchar   *puls_get_helper_path         (void);
-
-/* ── Drive Type Detection ──────────────────────────────────── */
 
 PulsDriveType puls_detect_drive_type (const gchar *device_path);
 gboolean      puls_is_rotational     (const gchar *device_name);

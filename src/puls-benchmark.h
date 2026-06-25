@@ -55,4 +55,4 @@ void puls_benchmark_run_async (const gchar *test_directory,
 
 G_END_DECLS
 
-#endif /* PULS_BENCHMARK_H */
+#endif

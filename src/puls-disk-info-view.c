@@ -33,6 +33,15 @@ struct _PulsDiskInfoView {
     GtkWidget *interface_label;
     GtkWidget *capacity_label;
     GtkWidget *rotation_label;
+    GtkWidget *rotation_rate_label;
+    GtkWidget *device_path_label;
+    GtkWidget *wear_level_label;
+    GtkWidget *unsafe_shutdowns_label;
+    GtkWidget *mount_points_label;
+    GtkWidget *io_scheduler_label;
+    GtkWidget *read_ahead_label;
+    GtkWidget *write_cache_label;
+    GtkWidget *trim_support_label;
     GtkWidget *features_label;
     GtkWidget *standard_label;
     GtkWidget *transfer_mode_label;
@@ -82,6 +91,8 @@ struct _PulsDiskInfoView {
 };
 
 G_DEFINE_TYPE (PulsDiskInfoView, puls_disk_info_view, GTK_TYPE_WIDGET)
+
+static gchar *get_device_benchmark_dir (const gchar *device_path);
 
 static void
 add_info_row_to_grid (GtkWidget   *grid,
@@ -267,19 +278,10 @@ on_bench_start_clicked (GtkButton *btn G_GNUC_UNUSED, PulsDiskInfoView *self)
     if (self->current_device == NULL || self->bench_running)
         return;
 
-    GList *parts = puls_get_disk_partitions (self->current_device);
-    gchar *writeable_dir = NULL;
-    for (GList *l = parts; l != NULL; l = l->next) {
-        PulsPartitionInfo *pinfo = l->data;
-        if (g_access (pinfo->mount_point, W_OK) == 0) {
-            writeable_dir = g_strdup (pinfo->mount_point);
-            break;
-        }
-    }
-    g_list_free_full (parts, (GDestroyNotify)puls_partition_info_free);
-
+    gchar *writeable_dir = get_device_benchmark_dir (self->current_device);
     if (writeable_dir == NULL) {
-        writeable_dir = g_strdup (g_get_home_dir ());
+        gtk_label_set_text (GTK_LABEL (self->bench_status_label), "Error: No writeable partition mounted on this drive.");
+        return;
     }
 
     for (gint i = 0; i < 4; i++) {
@@ -450,6 +452,28 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
     add_info_row_to_grid (id_grid, 2, 6, "Total Writes:", &self->total_written_label);
     add_info_row_to_grid (id_grid, 0, 7, "Sector Size:", &self->sector_size_label);
     add_info_row_to_grid (id_grid, 2, 7, "Form Factor:", &self->form_factor_label);
+    add_info_row_to_grid (id_grid, 0, 8, "Rotation Rate:", &self->rotation_rate_label);
+    add_info_row_to_grid (id_grid, 2, 8, "Device Path:", &self->device_path_label);
+    add_info_row_to_grid (id_grid, 0, 9, "Wear Level:", &self->wear_level_label);
+    add_info_row_to_grid (id_grid, 2, 9, "Unsafe Shutdowns:", &self->unsafe_shutdowns_label);
+
+    GtkWidget *mount_points_key = gtk_label_new ("Mount Points:");
+    gtk_widget_add_css_class (mount_points_key, "info-key");
+    gtk_label_set_xalign (GTK_LABEL (mount_points_key), 0.0);
+    gtk_grid_attach (GTK_GRID (id_grid), mount_points_key, 0, 10, 1, 1);
+
+    self->mount_points_label = gtk_label_new ("—");
+    gtk_widget_add_css_class (self->mount_points_label, "info-value");
+    gtk_label_set_xalign (GTK_LABEL (self->mount_points_label), 0.0);
+    gtk_label_set_selectable (GTK_LABEL (self->mount_points_label), TRUE);
+    gtk_label_set_ellipsize (GTK_LABEL (self->mount_points_label), PANGO_ELLIPSIZE_END);
+    gtk_widget_set_hexpand (self->mount_points_label, TRUE);
+    gtk_grid_attach (GTK_GRID (id_grid), self->mount_points_label, 1, 10, 3, 1);
+
+    add_info_row_to_grid (id_grid, 0, 11, "I/O Scheduler:", &self->io_scheduler_label);
+    add_info_row_to_grid (id_grid, 2, 11, "Read-Ahead:", &self->read_ahead_label);
+    add_info_row_to_grid (id_grid, 0, 12, "Write Cache:", &self->write_cache_label);
+    add_info_row_to_grid (id_grid, 2, 12, "TRIM Support:", &self->trim_support_label);
 
     self->partitions_frame = create_section_frame ("Mount Points & Partitions");
     gtk_box_append (GTK_BOX (self->content_box), self->partitions_frame);
@@ -661,6 +685,214 @@ puls_disk_info_view_new (void)
     return g_object_new (PULS_TYPE_DISK_INFO_VIEW, NULL);
 }
 
+static gchar *
+get_wear_level_string (PulsSmartData *data)
+{
+    if (data == NULL)
+        return g_strdup ("N/A");
+
+    PulsNvmeHealth *nvme = puls_smart_data_get_nvme_health (data);
+    if (nvme) {
+        int remaining = 100 - (int)nvme->percentage_used;
+        if (remaining < 0) remaining = 0;
+        if (remaining > 100) remaining = 100;
+        return g_strdup_printf ("%d%% Remaining Life (%d%% Used)", remaining, (int)nvme->percentage_used);
+    }
+
+    GArray *attrs = puls_smart_data_get_ata_attributes (data);
+    if (attrs && attrs->len > 0) {
+        for (guint i = 0; i < attrs->len; i++) {
+            PulsSmartAttribute *attr = &g_array_index (attrs, PulsSmartAttribute, i);
+            if (attr->id == 231) {
+                int remaining = attr->current;
+                int used = 100 - remaining;
+                if (used < 0) used = 0;
+                return g_strdup_printf ("%d%% Remaining Life (%d%% Used)", remaining, used);
+            }
+            if (attr->id == 202) {
+                int remaining = attr->current;
+                int used = 100 - remaining;
+                if (used < 0) used = 0;
+                return g_strdup_printf ("%d%% Remaining Life (%d%% Used)", remaining, used);
+            }
+            if (attr->id == 233) {
+                int remaining = attr->current;
+                int used = 100 - remaining;
+                if (used < 0) used = 0;
+                return g_strdup_printf ("%d%% Remaining Life (%d%% Used)", remaining, used);
+            }
+        }
+    }
+
+    PulsDriveType dtype = puls_smart_data_get_drive_type (data);
+    if (dtype == PULS_DRIVE_TYPE_SATA_SSD || dtype == PULS_DRIVE_TYPE_NVME_SSD) {
+        return g_strdup ("N/A (SSD)");
+    } else {
+        return g_strdup ("N/A (HDD/Rotational)");
+    }
+}
+
+static gchar *
+get_unsafe_shutdowns_string (PulsSmartData *data)
+{
+    if (data == NULL)
+        return g_strdup ("N/A");
+
+    PulsNvmeHealth *nvme = puls_smart_data_get_nvme_health (data);
+    if (nvme) {
+        return puls_format_number (nvme->unsafe_shutdowns);
+    }
+
+    GArray *attrs = puls_smart_data_get_ata_attributes (data);
+    if (attrs && attrs->len > 0) {
+        for (guint i = 0; i < attrs->len; i++) {
+            PulsSmartAttribute *attr = &g_array_index (attrs, PulsSmartAttribute, i);
+            if (attr->id == 174 || attr->id == 192) {
+                return puls_format_number (attr->raw_value);
+            }
+        }
+    }
+
+    return g_strdup ("N/A");
+}
+
+static gchar *
+get_mount_points_string (const gchar *device_path)
+{
+    if (device_path == NULL)
+        return g_strdup ("Not mounted");
+
+    GList *parts = puls_get_disk_partitions (device_path);
+    if (parts == NULL) {
+        return g_strdup ("Not mounted");
+    }
+
+    g_autoptr(GString) gstr = g_string_new (NULL);
+    for (GList *l = parts; l != NULL; l = l->next) {
+        PulsPartitionInfo *pinfo = l->data;
+        if (pinfo->mount_point) {
+            if (gstr->len > 0) {
+                g_string_append (gstr, ", ");
+            }
+            g_string_append (gstr, pinfo->mount_point);
+        }
+    }
+    g_list_free_full (parts, (GDestroyNotify)puls_partition_info_free);
+
+    if (gstr->len > 0) {
+        return g_string_free (g_steal_pointer (&gstr), FALSE);
+    } else {
+        return g_strdup ("Not mounted");
+    }
+}
+
+static gchar *
+get_device_benchmark_dir (const gchar *device_path)
+{
+    if (device_path == NULL)
+        return NULL;
+
+    GList *parts = puls_get_disk_partitions (device_path);
+    gchar *writeable_dir = NULL;
+    const gchar *home_dir = g_get_home_dir ();
+
+    for (GList *l = parts; l != NULL; l = l->next) {
+        PulsPartitionInfo *pinfo = l->data;
+        if (pinfo->mount_point && g_access (pinfo->mount_point, W_OK) == 0) {
+            writeable_dir = g_strdup (pinfo->mount_point);
+            break;
+        }
+    }
+
+    if (writeable_dir == NULL && home_dir != NULL) {
+        PulsPartitionInfo *best_match = NULL;
+        size_t best_len = 0;
+
+        for (GList *l = parts; l != NULL; l = l->next) {
+            PulsPartitionInfo *pinfo = l->data;
+            if (pinfo->mount_point) {
+                size_t len = strlen (pinfo->mount_point);
+                if (g_str_has_prefix (home_dir, pinfo->mount_point)) {
+                    if (len > best_len) {
+                        best_len = len;
+                        best_match = pinfo;
+                    }
+                }
+            }
+        }
+
+        if (best_match != NULL) {
+            writeable_dir = g_strdup (home_dir);
+        }
+    }
+
+    g_list_free_full (parts, (GDestroyNotify)puls_partition_info_free);
+    return writeable_dir;
+}
+
+static gchar *
+get_sysfs_io_scheduler (const gchar *base)
+{
+    g_autofree gchar *path = g_build_filename ("/sys/block", base, "queue/scheduler", NULL);
+    g_autofree gchar *contents = NULL;
+    if (g_file_get_contents (path, &contents, NULL, NULL)) {
+        g_strstrip (contents);
+        gchar *start = strchr (contents, '[');
+        gchar *end = strchr (contents, ']');
+        if (start && end && end > start) {
+            return g_strndup (start + 1, end - start - 1);
+        }
+        return g_strdup (contents);
+    }
+    return g_strdup ("N/A");
+}
+
+static gchar *
+get_sysfs_read_ahead (const gchar *base)
+{
+    g_autofree gchar *path = g_build_filename ("/sys/block", base, "queue/read_ahead_kb", NULL);
+    g_autofree gchar *contents = NULL;
+    if (g_file_get_contents (path, &contents, NULL, NULL)) {
+        g_strstrip (contents);
+        return g_strdup_printf ("%s KB", contents);
+    }
+    return g_strdup ("N/A");
+}
+
+static gchar *
+get_sysfs_write_cache (const gchar *base)
+{
+    g_autofree gchar *path = g_build_filename ("/sys/block", base, "queue/write_cache", NULL);
+    g_autofree gchar *contents = NULL;
+    if (g_file_get_contents (path, &contents, NULL, NULL)) {
+        g_strstrip (contents);
+        if (g_ascii_strcasecmp (contents, "write back") == 0) {
+            return g_strdup ("Write Back (Enabled)");
+        } else if (g_ascii_strcasecmp (contents, "write through") == 0) {
+            return g_strdup ("Write Through");
+        }
+        return g_strdup (contents);
+    }
+    return g_strdup ("N/A");
+}
+
+static gchar *
+get_sysfs_trim_support (const gchar *base)
+{
+    g_autofree gchar *path = g_build_filename ("/sys/block", base, "queue/discard_max_bytes", NULL);
+    g_autofree gchar *contents = NULL;
+    if (g_file_get_contents (path, &contents, NULL, NULL)) {
+        g_strstrip (contents);
+        guint64 max_bytes = g_ascii_strtoull (contents, NULL, 10);
+        if (max_bytes > 0) {
+            return g_strdup ("Supported");
+        } else {
+            return g_strdup ("Not Supported");
+        }
+    }
+    return g_strdup ("N/A");
+}
+
 void
 puls_disk_info_view_set_data (PulsDiskInfoView *self,
                               PulsSmartData    *data)
@@ -711,6 +943,44 @@ puls_disk_info_view_set_data (PulsDiskInfoView *self,
 
     const gchar *ff = puls_smart_data_get_form_factor (data);
     gtk_label_set_text (GTK_LABEL (self->form_factor_label), ff ? ff : "N/A");
+
+    const gchar *dev_path = puls_smart_data_get_device_path (data);
+    gtk_label_set_text (GTK_LABEL (self->device_path_label), dev_path ? dev_path : "N/A");
+
+    gint r_rpm = puls_smart_data_get_rotation_rpm (data);
+    if (r_rpm == 0) {
+        gtk_label_set_text (GTK_LABEL (self->rotation_rate_label), "Solid State Device (SSD)");
+    } else if (r_rpm > 0) {
+        g_autofree gchar *rpm_str = g_strdup_printf ("%d RPM", r_rpm);
+        gtk_label_set_text (GTK_LABEL (self->rotation_rate_label), rpm_str);
+    } else {
+        gtk_label_set_text (GTK_LABEL (self->rotation_rate_label), "N/A");
+    }
+
+    g_autofree gchar *wear_str = get_wear_level_string (data);
+    gtk_label_set_text (GTK_LABEL (self->wear_level_label), wear_str);
+
+    g_autofree gchar *unsafe_str = get_unsafe_shutdowns_string (data);
+    gtk_label_set_text (GTK_LABEL (self->unsafe_shutdowns_label), unsafe_str);
+
+    g_autofree gchar *mount_str = get_mount_points_string (self->current_device);
+    gtk_label_set_text (GTK_LABEL (self->mount_points_label), mount_str);
+    gtk_widget_set_tooltip_text (self->mount_points_label, mount_str);
+
+    const gchar *dev_base = strrchr (self->current_device, '/');
+    dev_base = dev_base ? dev_base + 1 : self->current_device;
+
+    g_autofree gchar *sched_str = get_sysfs_io_scheduler (dev_base);
+    gtk_label_set_text (GTK_LABEL (self->io_scheduler_label), sched_str);
+
+    g_autofree gchar *read_ahead_str = get_sysfs_read_ahead (dev_base);
+    gtk_label_set_text (GTK_LABEL (self->read_ahead_label), read_ahead_str);
+
+    g_autofree gchar *write_cache_str = get_sysfs_write_cache (dev_base);
+    gtk_label_set_text (GTK_LABEL (self->write_cache_label), write_cache_str);
+
+    g_autofree gchar *trim_support_str = get_sysfs_trim_support (dev_base);
+    gtk_label_set_text (GTK_LABEL (self->trim_support_label), trim_support_str);
 
     guint64 cap = puls_smart_data_get_capacity_bytes (data);
     if (cap > 0) {
@@ -952,8 +1222,15 @@ puls_disk_info_view_set_data (PulsDiskInfoView *self,
         gtk_label_set_text (GTK_LABEL (self->bench_write_labels[i]), "—");
     }
 
-    gtk_widget_set_sensitive (self->bench_start_btn, TRUE);
+    gchar *bench_dir = get_device_benchmark_dir (self->current_device);
+    if (bench_dir != NULL) {
+        gtk_widget_set_sensitive (self->bench_start_btn, TRUE);
+        gtk_label_set_text (GTK_LABEL (self->bench_status_label), "Ready to benchmark.");
+        g_free (bench_dir);
+    } else {
+        gtk_widget_set_sensitive (self->bench_start_btn, FALSE);
+        gtk_label_set_text (GTK_LABEL (self->bench_status_label), "Benchmark disabled: No writeable partition mounted on this drive.");
+    }
     gtk_widget_set_sensitive (self->bench_runs_combo, TRUE);
     gtk_widget_set_sensitive (self->bench_size_combo, TRUE);
-    gtk_label_set_text (GTK_LABEL (self->bench_status_label), "Ready to benchmark.");
 }

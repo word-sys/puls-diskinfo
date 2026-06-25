@@ -325,7 +325,31 @@ static gpointer
 benchmark_background_thread (gpointer data)
 {
     BenchmarkRunner *runner = data;
-    gchar *filepath = g_build_filename (runner->test_directory, ".puls_benchmark.tmp", NULL);
+
+    GFile *file = g_file_new_for_path (runner->test_directory);
+    GFileInfo *info = g_file_query_filesystem_info (file, G_FILE_ATTRIBUTE_FILESYSTEM_FREE, NULL, NULL);
+    if (info) {
+        if (g_file_info_has_attribute (info, G_FILE_ATTRIBUTE_FILESYSTEM_FREE)) {
+            guint64 free_space = g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_FILESYSTEM_FREE);
+            if (free_space < runner->test_size_bytes) {
+                runner->error_msg = g_strdup_printf ("Not enough free space (needs %.1f MB, only %.1f MB available)",
+                                                     (double)runner->test_size_bytes / (1000.0 * 1000.0),
+                                                     (double)free_space / (1000.0 * 1000.0));
+            }
+        }
+        g_object_unref (info);
+    }
+    g_object_unref (file);
+
+    if (runner->error_msg != NULL) {
+        FinishedUpdate *fu = g_new0 (FinishedUpdate, 1);
+        fu->runner = runner;
+        g_idle_add (notify_finished_idle, fu);
+        return NULL;
+    }
+
+    g_autofree gchar *filename = g_strdup_printf (".puls_benchmark_%d.tmp", (int)getpid ());
+    gchar *filepath = g_build_filename (runner->test_directory, filename, NULL);
 
     g_unlink (filepath);
 

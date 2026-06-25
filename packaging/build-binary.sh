@@ -17,7 +17,7 @@ ARCH="${ARCH:-x86_64}"
 
 # Get version from meson.build
 VERSION=$(grep "version:" "$PROJECT_DIR/meson.build" | head -1 | grep -o "'[^']*'" | head -1 | tr -d "'")
-VERSION="${VERSION:-1.0.0}"
+VERSION="${VERSION:-1.1.0}"
 
 PKG_NAME="puls-diskinfo-${VERSION}-linux-${ARCH}"
 PKG_DIR="$BUILD_DIR/$PKG_NAME"

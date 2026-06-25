@@ -168,7 +168,9 @@ bind_raw_cell (GtkListItemFactory *factory G_GNUC_UNUSED,
     GtkWidget *label = gtk_list_item_get_child (list_item);
     PulsAttrRow *row = gtk_list_item_get_item (list_item);
     
-    g_autofree gchar *hex_str = g_strdup_printf ("%012llX", (unsigned long long)row->raw_value);
+    g_autofree gchar *hex_str = g_strdup_printf ("%012llX (%s)",
+                                                 (unsigned long long)row->raw_value,
+                                                 row->raw_string ? row->raw_string : "0");
     gtk_label_set_text (GTK_LABEL (label), hex_str);
     gtk_label_set_xalign (GTK_LABEL (label), 1.0);
     gtk_widget_set_tooltip_text (label, row->raw_string);
@@ -271,7 +273,7 @@ puls_smart_table_init (PulsSmartTable *self)
     gtk_column_view_append_column (GTK_COLUMN_VIEW (self->column_view),
         create_column ("Thresh", 70, G_CALLBACK (bind_threshold_cell)));
     gtk_column_view_append_column (GTK_COLUMN_VIEW (self->column_view),
-        create_column ("Raw Value", 140, G_CALLBACK (bind_raw_cell)));
+        create_column ("Raw Value", 200, G_CALLBACK (bind_raw_cell)));
     gtk_column_view_append_column (GTK_COLUMN_VIEW (self->column_view),
         create_column ("Status", 80, G_CALLBACK (bind_status_cell)));
 

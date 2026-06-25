@@ -21,7 +21,7 @@
 #include "puls-utils.h"
 
 #ifndef PULS_VERSION
-#define PULS_VERSION "1.0.0"
+#define PULS_VERSION "1.1.0"
 #endif
 
 struct _PulsWindow {
@@ -176,8 +176,8 @@ on_refresh_done (GObject      *source G_GNUC_UNUSED,
     g_autofree gchar *time_str = g_date_time_format (now, "%H:%M:%S");
     g_date_time_unref (now);
 
-    g_autofree gchar *status = g_strdup_printf ("Last refreshed: %s │ v%s",
-                                                 time_str, PULS_VERSION);
+    g_autofree gchar *status = g_strdup_printf ("Last refreshed: %s",
+                                                 time_str);
     gtk_label_set_text (GTK_LABEL (self->status_label), status);
 
     gtk_widget_set_sensitive (self->refresh_button, TRUE);
@@ -425,11 +425,6 @@ puls_window_init (PulsWindow *self)
     gtk_label_set_xalign (GTK_LABEL (self->status_label), 0.0);
     gtk_box_append (GTK_BOX (self->status_bar), self->status_label);
 
-    g_autofree gchar *ver_label = g_strdup_printf ("v%s", PULS_VERSION);
-    GtkWidget *version_label = gtk_label_new (ver_label);
-    gtk_widget_add_css_class (version_label, "status-version");
-    gtk_box_append (GTK_BOX (self->status_bar), version_label);
-
     puls_disk_manager_scan (self->manager);
 
     update_timer (self);
@@ -438,7 +433,7 @@ puls_window_init (PulsWindow *self)
 
     guint count = puls_disk_manager_get_device_count (self->manager);
     g_autofree gchar *init_status = g_strdup_printf (
-        "Found %u disk%s │ v%s", count, count == 1 ? "" : "s", PULS_VERSION);
+        "Found %u disk%s", count, count == 1 ? "" : "s");
     gtk_label_set_text (GTK_LABEL (self->status_label), init_status);
 }
 

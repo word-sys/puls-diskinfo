@@ -17,7 +17,6 @@
 
 G_BEGIN_DECLS
 
-/* ── Health Status ─────────────────────────────────────────── */
 
 typedef enum {
     PULS_HEALTH_GOOD,
@@ -25,8 +24,6 @@ typedef enum {
     PULS_HEALTH_BAD,
     PULS_HEALTH_UNKNOWN
 } PulsHealthStatus;
-
-/* ── Drive Type ────────────────────────────────────────────── */
 
 typedef enum {
     PULS_DRIVE_TYPE_HDD,
@@ -36,8 +33,6 @@ typedef enum {
     PULS_DRIVE_TYPE_SSHD,
     PULS_DRIVE_TYPE_UNKNOWN
 } PulsDriveType;
-
-/* ── ATA SMART Attribute ───────────────────────────────────── */
 
 typedef struct {
     guint8   id;
@@ -53,8 +48,6 @@ typedef struct {
 
 PulsSmartAttribute *puls_smart_attribute_copy (const PulsSmartAttribute *attr);
 void                puls_smart_attribute_free (PulsSmartAttribute *attr);
-
-/* ── NVMe Health Info ──────────────────────────────────────── */
 
 typedef struct {
     guint8   critical_warning;
@@ -76,8 +69,6 @@ typedef struct {
 
 PulsNvmeHealth *puls_nvme_health_copy (const PulsNvmeHealth *health);
 void            puls_nvme_health_free (PulsNvmeHealth *health);
-
-/* ── PulsSmartData GObject ─────────────────────────────────── */
 
 #define PULS_TYPE_SMART_DATA (puls_smart_data_get_type ())
 G_DECLARE_FINAL_TYPE (PulsSmartData, puls_smart_data, PULS, SMART_DATA, GObject)
@@ -112,7 +103,6 @@ void puls_smart_data_set_physical_sector_size (PulsSmartData *self, guint32 val)
 void puls_smart_data_set_form_factor (PulsSmartData *self, const gchar *val);
 
 
-/* Health */
 PulsHealthStatus puls_smart_data_get_health          (PulsSmartData *self);
 gboolean         puls_smart_data_get_smart_enabled   (PulsSmartData *self);
 gint             puls_smart_data_get_temperature     (PulsSmartData *self);
@@ -121,7 +111,7 @@ void puls_smart_data_set_health        (PulsSmartData *self, PulsHealthStatus va
 void puls_smart_data_set_smart_enabled (PulsSmartData *self, gboolean val);
 void puls_smart_data_set_temperature   (PulsSmartData *self, gint val);
 
-/* Usage stats */
+
 guint64 puls_smart_data_get_power_on_hours      (PulsSmartData *self);
 guint64 puls_smart_data_get_power_cycle_count   (PulsSmartData *self);
 guint64 puls_smart_data_get_total_bytes_written (PulsSmartData *self);
@@ -132,7 +122,7 @@ void puls_smart_data_set_power_cycle_count   (PulsSmartData *self, guint64 val);
 void puls_smart_data_set_total_bytes_written (PulsSmartData *self, guint64 val);
 void puls_smart_data_set_total_bytes_read    (PulsSmartData *self, guint64 val);
 
-/* Features */
+
 gboolean puls_smart_data_get_supports_trim (PulsSmartData *self);
 gboolean puls_smart_data_get_supports_ncq  (PulsSmartData *self);
 gboolean puls_smart_data_get_supports_apm  (PulsSmartData *self);
@@ -147,13 +137,11 @@ void puls_smart_data_set_supports_aam  (PulsSmartData *self, gboolean val);
 void puls_smart_data_set_supports_devsleep (PulsSmartData *self, gboolean val);
 void puls_smart_data_set_supports_write_cache (PulsSmartData *self, gboolean val);
 
-/* Standard and Transfer Mode */
 const gchar     *puls_smart_data_get_standard     (PulsSmartData *self);
 const gchar     *puls_smart_data_get_transfer_mode (PulsSmartData *self);
 void             puls_smart_data_set_standard     (PulsSmartData *self, const gchar *val);
 void             puls_smart_data_set_transfer_mode (PulsSmartData *self, const gchar *val);
 
-/* Self-test info */
 gboolean         puls_smart_data_get_self_test_in_progress    (PulsSmartData *self);
 gint             puls_smart_data_get_self_test_percent        (PulsSmartData *self);
 const gchar     *puls_smart_data_get_self_test_status_str    (PulsSmartData *self);
@@ -164,18 +152,15 @@ void puls_smart_data_set_self_test_percent     (PulsSmartData *self, gint val);
 void puls_smart_data_set_self_test_status_str  (PulsSmartData *self, const gchar *val);
 void puls_smart_data_set_self_test_type_str    (PulsSmartData *self, const gchar *val);
 
-/* ATA Attributes */
 GArray      *puls_smart_data_get_ata_attributes  (PulsSmartData *self);
 void         puls_smart_data_add_ata_attribute   (PulsSmartData *self,
                                                   const PulsSmartAttribute *attr);
 void         puls_smart_data_clear_ata_attributes (PulsSmartData *self);
 
-/* NVMe Health */
 PulsNvmeHealth *puls_smart_data_get_nvme_health (PulsSmartData *self);
 void            puls_smart_data_set_nvme_health (PulsSmartData *self,
                                                  const PulsNvmeHealth *health);
 
-/* Utility */
 const gchar *puls_health_status_to_string (PulsHealthStatus status);
 const gchar *puls_drive_type_to_string    (PulsDriveType type);
 const gchar *puls_drive_type_to_icon      (PulsDriveType type);

@@ -14,7 +14,6 @@
 #include "puls-smart-data.h"
 #include <string.h>
 
-/* ── PulsSmartAttribute helpers ─────────────────────────────── */
 
 PulsSmartAttribute *
 puls_smart_attribute_copy (const PulsSmartAttribute *attr)
@@ -48,7 +47,6 @@ puls_smart_attribute_free (PulsSmartAttribute *attr)
     g_free (attr);
 }
 
-/* ── PulsNvmeHealth helpers ────────────────────────────────── */
 
 PulsNvmeHealth *
 puls_nvme_health_copy (const PulsNvmeHealth *health)
@@ -69,7 +67,6 @@ puls_nvme_health_free (PulsNvmeHealth *health)
     g_free (health);
 }
 
-/* ── PulsSmartData GObject ─────────────────────────────────── */
 
 struct _PulsSmartData {
     GObject parent_instance;
@@ -89,18 +86,15 @@ struct _PulsSmartData {
     guint32       physical_sector_size;
     PulsDriveType drive_type;
 
-    /* Health */
     PulsHealthStatus health;
     gboolean         smart_enabled;
     gint             temperature;
-
-    /* Usage stats */
     guint64 power_on_hours;
     guint64 power_cycle_count;
     guint64 total_bytes_written;
     guint64 total_bytes_read;
 
-    /* Features */
+
     gboolean supports_trim;
     gboolean supports_ncq;
     gboolean supports_apm;
@@ -108,13 +102,10 @@ struct _PulsSmartData {
     gboolean supports_devsleep;
     gboolean supports_write_cache;
 
-    /* ATA SMART attributes */
     GArray *ata_attributes;
 
-    /* NVMe health */
     PulsNvmeHealth *nvme_health;
 
-    /* Self test state */
     gboolean        self_test_in_progress;
     gint            self_test_percent;
     gchar          *self_test_status_str;
@@ -203,8 +194,6 @@ puls_smart_data_new (void)
 {
     return g_object_new (PULS_TYPE_SMART_DATA, NULL);
 }
-
-/* ── Identity getters/setters ──────────────────────────────── */
 
 #define IMPL_STRING_ACCESSOR(field)                                          \
     const gchar *                                                            \
@@ -305,8 +294,6 @@ puls_smart_data_set_drive_type (PulsSmartData *self, PulsDriveType val)
     self->drive_type = val;
 }
 
-/* ── Health getters/setters ────────────────────────────────── */
-
 PulsHealthStatus
 puls_smart_data_get_health (PulsSmartData *self)
 {
@@ -349,7 +336,6 @@ puls_smart_data_set_temperature (PulsSmartData *self, gint val)
     self->temperature = val;
 }
 
-/* ── Usage stat getters/setters ────────────────────────────── */
 
 #define IMPL_UINT64_ACCESSOR(field)                                          \
     guint64                                                                  \
@@ -372,7 +358,6 @@ IMPL_UINT64_ACCESSOR (total_bytes_read)
 
 #undef IMPL_UINT64_ACCESSOR
 
-/* ── Feature getters/setters ───────────────────────────────── */
 
 #define IMPL_BOOL_ACCESSOR(field)                                            \
     gboolean                                                                 \
@@ -397,7 +382,6 @@ IMPL_BOOL_ACCESSOR (supports_write_cache)
 
 #undef IMPL_BOOL_ACCESSOR
 
-/* ── ATA Attributes ────────────────────────────────────────── */
 
 GArray *
 puls_smart_data_get_ata_attributes (PulsSmartData *self)
@@ -442,8 +426,6 @@ puls_smart_data_clear_ata_attributes (PulsSmartData *self)
     g_array_set_size (self->ata_attributes, 0);
 }
 
-/* ── NVMe Health ───────────────────────────────────────────── */
-
 PulsNvmeHealth *
 puls_smart_data_get_nvme_health (PulsSmartData *self)
 {
@@ -460,8 +442,6 @@ puls_smart_data_set_nvme_health (PulsSmartData      *self,
     puls_nvme_health_free (self->nvme_health);
     self->nvme_health = health ? puls_nvme_health_copy (health) : NULL;
 }
-
-/* ── Self Test getters/setters ─────────────────────────────── */
 
 gboolean
 puls_smart_data_get_self_test_in_progress (PulsSmartData *self)
@@ -520,8 +500,6 @@ puls_smart_data_set_self_test_type_str (PulsSmartData *self, const gchar *val)
     g_free (self->self_test_type_str);
     self->self_test_type_str = g_strdup (val);
 }
-
-/* ── Utility ───────────────────────────────────────────────── */
 
 const gchar *
 puls_health_status_to_string (PulsHealthStatus status)

@@ -38,6 +38,5 @@ PulsSmartData   *puls_disk_manager_refresh_finish (PulsDiskManager *self,
                                                    GAsyncResult    *result,
                                                    GError         **error);
 
-/* Signals: "disk-added", "disk-removed", "disk-updated" */
 
 G_END_DECLS

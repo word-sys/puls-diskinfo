@@ -4,32 +4,43 @@
  * Designed to complement Libadwaita's system theme (light and dark modes).
  */
 
-/* ── Disk Selector Bar ─────────────────────────────────────── */
-
 disk-selector {
     padding: 10px;
     min-height: 100px;
 }
 
-.disk-card {
+button.flat.disk-card {
     border: 1px solid alpha(@borders, 0.7);
     background-color: @card_bg_color;
+    background-image: none;
     color: @card_fg_color;
     border-radius: 6px;
     padding: 6px;
     min-width: 130px;
     transition: none;
+    box-shadow: none;
 }
 
-.disk-card:hover {
+button.flat.disk-card:hover {
     border-color: @borders;
-    background-color: mix(@card_fg_color, @card_bg_color, 0.12);
+    background-color: alpha(@card_fg_color, 0.08);
+    background-image: none;
     color: @card_fg_color;
+    box-shadow: none;
 }
 
-.disk-card-active {
+button.flat.disk-card-active {
     border-color: @accent_color;
-    background-color: @card_bg_color;
+    background-color: alpha(@card_fg_color, 0.08);
+    background-image: none;
+    color: @card_fg_color;
+    box-shadow: 0 0 0 1px @accent_color;
+}
+
+button.flat.disk-card-active:hover {
+    border-color: @accent_color;
+    background-color: alpha(@card_fg_color, 0.15);
+    background-image: none;
     color: @card_fg_color;
     box-shadow: 0 0 0 1px @accent_color;
 }
@@ -68,8 +79,6 @@ disk-selector {
     font-size: 11px;
 }
 
-/* ── Info Key/Value Rows ───────────────────────────────────── */
-
 .info-key {
     font-weight: 600;
     font-size: 12px;
@@ -81,14 +90,12 @@ disk-selector {
     font-family: "JetBrains Mono", "Fira Code", "Source Code Pro", monospace;
 }
 
-/* ── Health Indicator ──────────────────────────────────────── */
-
 health-indicator {
     padding: 12px;
     border-radius: 8px;
     min-width: 100px;
     border: none;
-    background-color: mix(@card_fg_color, @card_bg_color, 0.08);
+    background-color: alpha(@card_fg_color, 0.08);
 }
 
 .health-text {
@@ -130,8 +137,6 @@ health-indicator.health-unknown .health-text {
     color: white;
 }
 
-/* ── Temperature Widget ────────────────────────────────────── */
-
 temperature-widget {
     padding: 8px;
 }
@@ -172,8 +177,6 @@ temperature-widget {
     margin-top: 2px;
 }
 
-/* ── SMART Table ───────────────────────────────────────────── */
-
 smart-table {
     padding: 0;
 }
@@ -184,7 +187,6 @@ smart-table {
     padding: 4px 8px;
 }
 
-/* SMART status colors */
 .status-ok {
     color: #2ea043;
     font-weight: 600;
@@ -200,9 +202,7 @@ smart-table {
     font-weight: 700;
 }
 
-.attr-good {
-    /* default color */
-}
+.attr-good {}
 
 .attr-caution {
     color: #d29922;
@@ -212,8 +212,6 @@ smart-table {
     color: #f85149;
     font-weight: 700;
 }
-
-/* ── Status Bar ────────────────────────────────────────────── */
 
 .status-bar {
     border-top: 1px solid @borders;
@@ -229,17 +227,11 @@ smart-table {
     font-weight: 600;
 }
 
-/* ── General Transitions ───────────────────────────────────── */
-
 button {
     transition: all 200ms ease;
 }
 
-label {
-    /* Label transitions removed to prevent periodic refresh flashing */
-}
-
-/* ── Performance Benchmark ─────────────────────────────────── */
+label {}
 
 .bench-test-name {
     font-weight: 700;
@@ -256,16 +248,15 @@ label {
     padding: 8px 16px;
     border-radius: 4px;
     background-color: @window_bg_color;
-    text-align: right;
     min-width: 100px;
 }
 
 .bench-read-val {
-    color: #06b6d4; /* cyan */
+    color: #06b6d4;
 }
 
 .bench-write-val {
-    color: #d946ef; /* magenta */
+    color: #d946ef;
 }
 
 .bench-header {

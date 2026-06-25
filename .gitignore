@@ -1,15 +1,10 @@
-# Meson build directory
 build/
 build-binary/
-
-# Object files & compiled binaries
 *.o
 *.so
 *.a
 puls-diskinfo
 puls-diskinfo-helper
-
-# Editors & IDEs
 .vscode/
 .idea/
 *~
@@ -17,7 +12,5 @@ puls-diskinfo-helper
 *.patch
 *.diff
 *.log
-
-# Python cache (if any used by meson)
 __pycache__/
 *.pyc

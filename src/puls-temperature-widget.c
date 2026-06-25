@@ -79,7 +79,7 @@ update_display (PulsTemperatureWidget *self)
             else if (self->temperature < 70)
                 status = "⚠ Hot — check cooling";
             else
-                status = "🔥 Critical temperature!";
+                status = "⚠ Critical temperature!";
         } else {
             if (self->temperature < 50)
                 status = "Safe range: < 50 °C";
@@ -88,7 +88,7 @@ update_display (PulsTemperatureWidget *self)
             else if (self->temperature < 70)
                 status = "⚠ Hot — check cooling";
             else
-                status = "🔥 Critical temperature!";
+                status = "⚠ Critical temperature!";
         }
         gtk_label_set_text (GTK_LABEL (self->range_label), status);
     } else {

@@ -29,6 +29,5 @@ void         puls_disk_selector_select       (PulsDiskSelector *self,
                                               const gchar      *device_path);
 void         puls_disk_selector_refresh      (PulsDiskSelector *self);
 
-/* Signal: "disk-selected" (const gchar *device_path) */
 
 G_END_DECLS

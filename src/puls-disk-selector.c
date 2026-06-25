@@ -14,16 +14,12 @@
 #include "puls-disk-selector.h"
 #include "puls-utils.h"
 
-/* ── Signals ───────────────────────────────────────────────── */
-
 enum {
     SIGNAL_DISK_SELECTED,
     N_SIGNALS
 };
 
 static guint signals[N_SIGNALS] = { 0 };
-
-/* ── Card Data ─────────────────────────────────────────────── */
 
 typedef struct {
     GtkWidget   *button;
@@ -42,28 +38,23 @@ disk_card_free (DiskCard *card)
     g_free (card);
 }
 
-/* ── Private Data ──────────────────────────────────────────── */
-
 struct _PulsDiskSelector {
     GtkWidget parent_instance;
 
     GtkWidget       *scrolled;
     GtkWidget       *cards_box;
     PulsDiskManager *manager;
-    GList           *cards;       /* GList of DiskCard* */
+    GList           *cards;
     gchar           *selected;
 };
 
 G_DEFINE_TYPE (PulsDiskSelector, puls_disk_selector, GTK_TYPE_WIDGET)
-
-/* ── Card Click Handler ────────────────────────────────────── */
 
 static void
 on_card_clicked (GtkButton *button, gpointer user_data)
 {
     PulsDiskSelector *self = PULS_DISK_SELECTOR (user_data);
 
-    /* Find which card was clicked */
     for (GList *l = self->cards; l != NULL; l = l->next) {
         DiskCard *card = l->data;
         if (card->button == GTK_WIDGET (button)) {
@@ -73,8 +64,6 @@ on_card_clicked (GtkButton *button, gpointer user_data)
     }
 }
 
-/* ── Update card appearance ────────────────────────────────── */
-
 static void
 update_card (DiskCard      *card,
              PulsSmartData *data,
@@ -83,7 +72,6 @@ update_card (DiskCard      *card,
     if (data == NULL)
         return;
 
-    /* Device name */
     const gchar *dev_path = puls_smart_data_get_device_path (data);
     if (dev_path) {
         const gchar *name = strrchr (dev_path, '/');
@@ -91,10 +79,8 @@ update_card (DiskCard      *card,
         gtk_label_set_text (GTK_LABEL (card->name_label), name);
     }
 
-    /* Model */
     const gchar *model = puls_smart_data_get_model_name (data);
     if (model) {
-        /* Truncate long model names */
         if (strlen (model) > 18) {
             g_autofree gchar *short_model = g_strndup (model, 16);
             g_autofree gchar *display = g_strdup_printf ("%s…", short_model);
@@ -104,7 +90,6 @@ update_card (DiskCard      *card,
         }
     }
 
-    /* Health */
     PulsHealthStatus health = puls_smart_data_get_health (data);
     const gchar *health_text;
     const gchar *health_class;
@@ -136,7 +121,6 @@ update_card (DiskCard      *card,
         gtk_widget_remove_css_class (card->health_label, hclasses[i]);
     gtk_widget_add_css_class (card->health_label, health_class);
 
-    /* Temperature */
     gint temp = puls_smart_data_get_temperature (data);
     if (temp >= 0) {
         g_autofree gchar *temp_str = g_strdup_printf ("%d °C", temp);
@@ -145,24 +129,18 @@ update_card (DiskCard      *card,
         gtk_label_set_text (GTK_LABEL (card->temp_label), "—");
     }
 
-    /* Icon based on drive type */
     PulsDriveType dtype = puls_smart_data_get_drive_type (data);
     gtk_image_set_from_icon_name (GTK_IMAGE (card->icon),
                                  puls_drive_type_to_icon (dtype));
-
-    /* Selected state */
     if (is_selected)
         gtk_widget_add_css_class (card->button, "disk-card-active");
     else
         gtk_widget_remove_css_class (card->button, "disk-card-active");
 }
 
-/* ── Build cards ───────────────────────────────────────────── */
-
 static void
 rebuild_cards (PulsDiskSelector *self)
 {
-    /* Remove old cards */
     for (GList *l = self->cards; l != NULL; l = l->next) {
         DiskCard *card = l->data;
         gtk_box_remove (GTK_BOX (self->cards_box), card->button);
@@ -178,14 +156,13 @@ rebuild_cards (PulsDiskSelector *self)
         DiskCard *card = g_new0 (DiskCard, 1);
         card->device_path = g_strdup (dev_path);
 
-        /* Button container */
         card->button = gtk_button_new ();
         gtk_widget_add_css_class (card->button, "disk-card");
+        gtk_widget_add_css_class (card->button, "flat");
         gtk_widget_set_size_request (card->button, 150, -1);
         g_signal_connect (card->button, "clicked",
                           G_CALLBACK (on_card_clicked), self);
 
-        /* Card content */
         GtkWidget *vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 4);
         gtk_widget_set_margin_start (vbox, 8);
         gtk_widget_set_margin_end (vbox, 8);
@@ -193,35 +170,25 @@ rebuild_cards (PulsDiskSelector *self)
         gtk_widget_set_margin_bottom (vbox, 8);
         gtk_button_set_child (GTK_BUTTON (card->button), vbox);
 
-        /* Icon */
         card->icon = gtk_image_new_from_icon_name ("drive-harddisk-symbolic");
         gtk_image_set_pixel_size (GTK_IMAGE (card->icon), 24);
         gtk_widget_add_css_class (card->icon, "card-icon");
         gtk_box_append (GTK_BOX (vbox), card->icon);
 
-        /* Device name */
         card->name_label = gtk_label_new ("—");
         gtk_widget_add_css_class (card->name_label, "card-device-name");
         gtk_label_set_ellipsize (GTK_LABEL (card->name_label), PANGO_ELLIPSIZE_END);
         gtk_box_append (GTK_BOX (vbox), card->name_label);
-
-        /* Model */
         card->model_label = gtk_label_new ("—");
         gtk_widget_add_css_class (card->model_label, "card-model");
         gtk_label_set_ellipsize (GTK_LABEL (card->model_label), PANGO_ELLIPSIZE_END);
         gtk_box_append (GTK_BOX (vbox), card->model_label);
-
-        /* Health */
         card->health_label = gtk_label_new ("● Unknown");
         gtk_widget_add_css_class (card->health_label, "card-health");
         gtk_box_append (GTK_BOX (vbox), card->health_label);
-
-        /* Temperature */
         card->temp_label = gtk_label_new ("—");
         gtk_widget_add_css_class (card->temp_label, "card-temp");
         gtk_box_append (GTK_BOX (vbox), card->temp_label);
-
-        /* Populate from data */
         PulsSmartData *data = puls_disk_manager_get_smart_data (self->manager,
                                                                 dev_path);
         gboolean selected = g_strcmp0 (self->selected, dev_path) == 0;
@@ -231,8 +198,6 @@ rebuild_cards (PulsDiskSelector *self)
         self->cards = g_list_append (self->cards, card);
     }
 }
-
-/* ── GObject ───────────────────────────────────────────────── */
 
 static void
 puls_disk_selector_dispose (GObject *object)
@@ -294,7 +259,7 @@ GtkWidget *
 puls_disk_selector_new (PulsDiskManager *manager)
 {
     PulsDiskSelector *self = g_object_new (PULS_TYPE_DISK_SELECTOR, NULL);
-    self->manager = manager;  /* weak ref, manager outlives selector */
+    self->manager = manager;
     rebuild_cards (self);
     return GTK_WIDGET (self);
 }
@@ -318,7 +283,6 @@ puls_disk_selector_select (PulsDiskSelector *self,
     g_free (self->selected);
     self->selected = g_strdup (device_path);
 
-    /* Update card visual states */
     for (GList *l = self->cards; l != NULL; l = l->next) {
         DiskCard *card = l->data;
         gboolean is_sel = g_strcmp0 (card->device_path, device_path) == 0;

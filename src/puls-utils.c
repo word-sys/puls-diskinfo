@@ -503,6 +503,42 @@ puls_partition_info_free (PulsPartitionInfo *info)
     g_free (info);
 }
 
+static gboolean
+is_dm_slave_of (const gchar *mnt_fsname, const gchar *parent_device_path)
+{
+    if (mnt_fsname == NULL || parent_device_path == NULL)
+        return FALSE;
+
+    const gchar *parent_name = strrchr (parent_device_path, '/');
+    parent_name = parent_name ? parent_name + 1 : parent_device_path;
+
+    gchar *resolved = realpath (mnt_fsname, NULL);
+    if (resolved == NULL)
+        return FALSE;
+
+    gboolean is_slave = FALSE;
+    const gchar *dm_name = strrchr (resolved, '/');
+    if (dm_name) {
+        dm_name = dm_name + 1;
+        if (g_str_has_prefix (dm_name, "dm-")) {
+            g_autofree gchar *slaves_dir = g_build_filename ("/sys/class/block", dm_name, "slaves", NULL);
+            GDir *dir = g_dir_open (slaves_dir, 0, NULL);
+            if (dir) {
+                const gchar *entry;
+                while ((entry = g_dir_read_name (dir)) != NULL) {
+                    if (g_str_has_prefix (entry, parent_name)) {
+                        is_slave = TRUE;
+                        break;
+                    }
+                }
+                g_dir_close (dir);
+            }
+        }
+    }
+    free (resolved);
+    return is_slave;
+}
+
 GList *
 puls_get_disk_partitions (const gchar *device_path)
 {
@@ -526,6 +562,8 @@ puls_get_disk_partitions (const gchar *device_path)
             } else if (suffix[0] == 'p' && g_ascii_isdigit (suffix[1])) {
                 is_part = TRUE;
             }
+        } else if (is_dm_slave_of (mnt->mnt_fsname, device_path)) {
+            is_part = TRUE;
         }
 
         if (is_part) {

@@ -19,11 +19,8 @@ echo "════════════════════════�
 echo "  PULS DiskInfo — AppImage Builder"
 echo "══════════════════════════════════════════════════════════"
 
-# Clean previous build
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR" "$DIST_DIR"
-
-# ── Step 1: Build with Meson ─────────────────────────────────
 echo ""
 echo "▸ Configuring build..."
 meson setup "$BUILD_DIR/meson" "$PROJECT_DIR" \
@@ -37,7 +34,6 @@ meson compile -C "$BUILD_DIR/meson"
 echo "▸ Installing to AppDir..."
 DESTDIR="$APP_DIR" meson install -C "$BUILD_DIR/meson"
 
-# ── Step 2: Download linuxdeploy tools ───────────────────────
 echo ""
 echo "▸ Downloading linuxdeploy..."
 TOOLS_DIR="$BUILD_DIR/tools"
@@ -55,11 +51,9 @@ if [ ! -f "$TOOLS_DIR/linuxdeploy-plugin-gtk.sh" ]; then
     chmod +x "$TOOLS_DIR/linuxdeploy-plugin-gtk.sh"
 fi
 
-# ── Step 3: Create AppImage ──────────────────────────────────
 echo ""
 echo "▸ Creating AppImage..."
 
-# Copy icon if not present
 ICON_SRC="$PROJECT_DIR/data/io.github.puls.diskinfo.svg"
 ICON_DST="$APP_DIR/usr/share/icons/hicolor/scalable/apps/io.github.puls.diskinfo.svg"
 if [ -f "$ICON_SRC" ]; then
@@ -67,7 +61,6 @@ if [ -f "$ICON_SRC" ]; then
     cp "$ICON_SRC" "$ICON_DST"
 fi
 
-# Use a fallback PNG icon if SVG not available
 if [ ! -f "$ICON_SRC" ]; then
     echo "▸ No SVG icon found, using fallback icon name..."
 fi
@@ -91,14 +84,13 @@ cd "$BUILD_DIR"
             --desktop-file "$APP_DIR/usr/share/applications/io.github.puls.diskinfo.desktop"
     }
 
-# ── Step 4: Move to dist ─────────────────────────────────────
 echo ""
 echo "▸ Collecting output..."
 
 APPIMAGE_FILE=$(find "$BUILD_DIR" -maxdepth 1 -name "*.AppImage" -type f | head -1)
 if [ -n "$APPIMAGE_FILE" ]; then
     VERSION=$(meson introspect "$BUILD_DIR/meson" --projectinfo | grep -o '"version": "[^"]*"' | cut -d'"' -f4)
-    FINAL_NAME="Puls_DiskInfo-${VERSION:-1.0.0}-$ARCH.AppImage"
+    FINAL_NAME="Puls_DiskInfo-${VERSION:-1.1.0}-$ARCH.AppImage"
     mv "$APPIMAGE_FILE" "$DIST_DIR/$FINAL_NAME"
     echo ""
     echo "✓ AppImage created: dist/$FINAL_NAME"
