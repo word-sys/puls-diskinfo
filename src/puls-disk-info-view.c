@@ -18,6 +18,7 @@
 #include "puls-settings.h"
 #include "puls-utils.h"
 #include "puls-benchmark.h"
+#include "puls-io-graph.h"
 #include <glib/gstdio.h>
 
 struct _PulsDiskInfoView {
@@ -86,6 +87,18 @@ struct _PulsDiskInfoView {
     GtkWidget *nvme_frame;
     GtkWidget *nvme_grid;
     GtkWidget *nvme_labels[14];
+
+    /* Live I/O activity graph */
+    GtkWidget *io_graph_frame;
+    GtkWidget *io_graph;
+
+    /* Timer state for live sysfs polling */
+    guint      live_timer_id;
+    guint64    last_read_sectors;
+    guint64    last_write_sectors;
+    guint64    last_io_ticks;
+    gint64     last_stat_time;
+    gboolean   has_last_stats;
 
     gchar     *current_device;
 };
@@ -333,6 +346,94 @@ on_bench_stop_clicked (GtkButton *btn G_GNUC_UNUSED, PulsDiskInfoView *self)
     }
 }
 
+/* Read /sys/block/<dev>/stat and parse the key columns.
+ * Returns FALSE if the file could not be read. */
+static gboolean
+read_sysfs_stat (const gchar *dev_base,
+                 guint64     *out_read_sectors,
+                 guint64     *out_write_sectors,
+                 guint64     *out_io_ticks)
+{
+    g_autofree gchar *path = g_build_filename ("/sys/block", dev_base, "stat", NULL);
+    g_autofree gchar *buf  = NULL;
+    if (!g_file_get_contents (path, &buf, NULL, NULL))
+        return FALSE;
+
+    guint64 rd_ios, rd_merges, rd_sectors, rd_ticks;
+    guint64 wr_ios, wr_merges, wr_sectors, wr_ticks;
+    guint64 in_flight, io_ticks, time_in_queue;
+
+    int n = sscanf (buf,
+        "%" G_GUINT64_FORMAT " %" G_GUINT64_FORMAT
+        " %" G_GUINT64_FORMAT " %" G_GUINT64_FORMAT
+        " %" G_GUINT64_FORMAT " %" G_GUINT64_FORMAT
+        " %" G_GUINT64_FORMAT " %" G_GUINT64_FORMAT
+        " %" G_GUINT64_FORMAT " %" G_GUINT64_FORMAT
+        " %" G_GUINT64_FORMAT,
+        &rd_ios, &rd_merges, &rd_sectors, &rd_ticks,
+        &wr_ios, &wr_merges, &wr_sectors, &wr_ticks,
+        &in_flight, &io_ticks, &time_in_queue);
+
+    if (n < 11)
+        return FALSE;
+
+    *out_read_sectors  = rd_sectors;
+    *out_write_sectors = wr_sectors;
+    *out_io_ticks      = io_ticks;
+    return TRUE;
+}
+
+static gboolean
+live_timer_func (gpointer user_data)
+{
+    PulsDiskInfoView *self = PULS_DISK_INFO_VIEW (user_data);
+
+    if (self->current_device == NULL)
+        return G_SOURCE_REMOVE;
+
+    const gchar *dev_base = strrchr (self->current_device, '/');
+    dev_base = dev_base ? dev_base + 1 : self->current_device;
+
+    guint64 rd_sectors = 0, wr_sectors = 0, io_ticks = 0;
+    if (!read_sysfs_stat (dev_base, &rd_sectors, &wr_sectors, &io_ticks)) {
+        self->live_timer_id = 0;
+        return G_SOURCE_REMOVE;
+    }
+
+    gint64 now = g_get_monotonic_time ();
+
+    if (self->has_last_stats) {
+        double elapsed_sec = (now - self->last_stat_time) / 1e6;
+        if (elapsed_sec > 0.01) {
+            double rd_bps = (double)(rd_sectors - self->last_read_sectors) * 512.0 / elapsed_sec;
+            double wr_bps = (double)(wr_sectors - self->last_write_sectors) * 512.0 / elapsed_sec;
+
+            double elapsed_ms = elapsed_sec * 1000.0;
+            double active_pct = 0.0;
+            if (elapsed_ms > 0.0) {
+                guint64 tick_delta = (io_ticks >= self->last_io_ticks)
+                                     ? io_ticks - self->last_io_ticks
+                                     : 0;
+                active_pct = (double)tick_delta / elapsed_ms * 100.0;
+                active_pct = CLAMP (active_pct, 0.0, 100.0);
+            }
+
+            puls_io_graph_add_data (PULS_IO_GRAPH (self->io_graph),
+                                    MAX (rd_bps, 0.0),
+                                    MAX (wr_bps, 0.0),
+                                    active_pct);
+        }
+    }
+
+    self->last_read_sectors  = rd_sectors;
+    self->last_write_sectors = wr_sectors;
+    self->last_io_ticks      = io_ticks;
+    self->last_stat_time     = now;
+    self->has_last_stats     = TRUE;
+
+    return G_SOURCE_CONTINUE;
+}
+
 static void
 puls_disk_info_view_finalize (GObject *object)
 {
@@ -342,6 +443,10 @@ puls_disk_info_view_finalize (GObject *object)
         g_cancellable_cancel (self->bench_cancellable);
         g_clear_object (&self->bench_cancellable);
     }
+    if (self->live_timer_id != 0) {
+        g_source_remove (self->live_timer_id);
+        self->live_timer_id = 0;
+    }
     G_OBJECT_CLASS (puls_disk_info_view_parent_class)->finalize (object);
 }
 
@@ -349,6 +454,10 @@ static void
 puls_disk_info_view_dispose (GObject *object)
 {
     PulsDiskInfoView *self = PULS_DISK_INFO_VIEW (object);
+    if (self->live_timer_id != 0) {
+        g_source_remove (self->live_timer_id);
+        self->live_timer_id = 0;
+    }
     g_clear_pointer (&self->scrolled, gtk_widget_unparent);
     G_OBJECT_CLASS (puls_disk_info_view_parent_class)->dispose (object);
 }
@@ -369,7 +478,9 @@ puls_disk_info_view_class_init (PulsDiskInfoViewClass *klass)
 static void
 puls_disk_info_view_init (PulsDiskInfoView *self)
 {
-    self->current_device = NULL;
+    self->current_device   = NULL;
+    self->live_timer_id    = 0;
+    self->has_last_stats   = FALSE;
 
     self->scrolled = gtk_scrolled_window_new ();
     gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (self->scrolled),
@@ -520,6 +631,18 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
     self->test_progress_bar = gtk_progress_bar_new ();
     gtk_widget_set_visible (self->test_progress_bar, FALSE);
     gtk_box_append (GTK_BOX (self->diag_box), self->test_progress_bar);
+
+    /* Real-Time Disk Activity */
+    self->io_graph_frame = create_section_frame ("Real-Time Disk Activity");
+    gtk_box_append (GTK_BOX (right_column), self->io_graph_frame);
+
+    self->io_graph = puls_io_graph_new ();
+    gtk_widget_set_size_request (self->io_graph, -1, 180);
+    gtk_widget_set_margin_start  (self->io_graph, 8);
+    gtk_widget_set_margin_end    (self->io_graph, 8);
+    gtk_widget_set_margin_top    (self->io_graph, 8);
+    gtk_widget_set_margin_bottom (self->io_graph, 8);
+    gtk_frame_set_child (GTK_FRAME (self->io_graph_frame), self->io_graph);
 
     self->bench_frame = create_section_frame ("Performance Benchmark (CrystalDiskMark style)");
     gtk_box_append (GTK_BOX (right_column), self->bench_frame);
@@ -904,6 +1027,16 @@ puls_disk_info_view_set_data (PulsDiskInfoView *self,
 
     g_free (self->current_device);
     self->current_device = g_strdup (puls_smart_data_get_device_path (data));
+
+    if (self->live_timer_id != 0) {
+        g_source_remove (self->live_timer_id);
+        self->live_timer_id = 0;
+    }
+
+    puls_io_graph_clear (PULS_IO_GRAPH (self->io_graph));
+    self->has_last_stats = FALSE;
+
+    self->live_timer_id = g_timeout_add (1000, live_timer_func, self);
 
     const gchar *model = puls_smart_data_get_model_name (data);
     gtk_label_set_text (GTK_LABEL (self->model_label),

@@ -1,23 +1,31 @@
-puls-diskinfo (1.1.0-1) bookworm; urgency=medium
+puls-diskinfo (1.1.1) bookworm; urgency=medium
 
-  * New release.
-  * Added LVM/LUKS mapping resolution support.
-  * Safer benchmarking directory security bounds check.
-  * Added new drive fields: device path, wear level, unsafe shutdowns, read ahead, scheduler, write cache, trim.
-  * Display decimal values next to hexadecimal in SMART table.
-  * Completely resolved contrast bug and whity hover overlay on cards.
+  * New release
+  * Added realtime graphs
+  * Fixed theme bugs
+
+ -- Barın Güzeldemirci <baringuzeldemir@gmail.com>  Sat, 27 Jun 2026 11:00:00 +0300
+
+puls-diskinfo (1.1.0) bookworm; urgency=medium
+
+  * New release
+  * Added LVM/LUKS mapping resolution support
+  * Safer benchmarking directory security bounds check
+  * Added new drive fields: device path, wear level, unsafe shutdowns, read ahead, scheduler, write cache, trim
+  * Display decimal values next to hexadecimal in SMART table
+  * Completely resolved contrast bug and whity hover overlay on cards
 
  -- Barın Güzeldemirci <baringuzeldemir@gmail.com>  Fri, 26 Jun 2026 00:10:00 +0300
 
-puls-diskinfo (1.0.0-1) bookworm; urgency=medium
+puls-diskinfo (1.0.0) bookworm; urgency=medium
 
-  * Initial release.
-  * GTK4-based disk health monitoring application.
-  * S.M.A.R.T. attribute display for ATA/SATA drives.
-  * NVMe health information support.
-  * Temperature monitoring with visual gauges.
-  * Health status indicators (Good/Caution/Bad).
-  * Support for HDD, SATA SSD, NVMe SSD, USB drives.
-  * Polkit-based privilege escalation for SMART data reading.
+  * Initial release
+  * GTK4-based disk health monitoring application
+  * S.M.A.R.T. attribute display for ATA/SATA drives
+  * NVMe health information support
+  * Temperature monitoring with visual gauges
+  * Health status indicators (Good/Caution/Bad)
+  * Support for HDD, SATA SSD, NVMe SSD, USB drives
+  * Polkit-based privilege escalation for SMART data reading
 
  -- Barın Güzeldemirci <baringuzeldemir@gmail.com>  Fri, 12 Jun 2026 15:20:00 +0300

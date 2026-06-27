@@ -15,6 +15,7 @@ puls_sources = files(
   'puls-preferences-window.c',
   'puls-settings.c',
   'puls-benchmark.c',
+  'puls-io-graph.c',
 )
 
 executable('puls-diskinfo',
@@ -26,6 +27,7 @@ executable('puls-diskinfo',
     json_glib_dep,
     gio_dep,
     gio_unix_dep,
+    meson.get_compiler('c').find_library('m', required: false),
   ],
   install: true,
 )
