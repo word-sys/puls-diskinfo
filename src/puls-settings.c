@@ -24,7 +24,6 @@ struct _PulsSettings {
     gint     caution_temp;
     gint     theme_preference;
 
-    /* Alert settings (Group F) */
     gboolean alerts_enabled;
     gint     alert_temp_threshold;
     gint     alert_health_threshold;
@@ -248,8 +247,6 @@ puls_settings_save (PulsSettings *self)
         g_clear_error (&error);
     }
 }
-
-/* ── Alert Settings Accessors (Group F) ─────────────────────── */
 
 gboolean
 puls_settings_get_alerts_enabled (PulsSettings *self)

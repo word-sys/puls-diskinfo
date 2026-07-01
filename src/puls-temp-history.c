@@ -18,8 +18,8 @@ struct _PulsTempHistory {
     GObject parent_instance;
 
     PulsTempSample samples[PULS_TEMP_HISTORY_MAX_SAMPLES];
-    guint          count;   /* number of valid samples (0..MAX_SAMPLES) */
-    guint          head;    /* index of next write position */
+    guint          count;   
+    guint          head;   
 };
 
 G_DEFINE_TYPE (PulsTempHistory, puls_temp_history, G_TYPE_OBJECT)

@@ -21,7 +21,7 @@ G_BEGIN_DECLS
 #define PULS_TEMP_HISTORY_MAX_SAMPLES 480   /* 8 hours at 1 sample/minute */
 
 typedef struct {
-    gint64 timestamp_us;  /* g_get_monotonic_time() */
+    gint64 timestamp_us;  
     gint   temp_celsius;
 } PulsTempSample;
 

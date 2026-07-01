@@ -13,9 +13,8 @@
 
 #include "puls-smart-history.h"
 
-/* A snapshot is a hash table of attr_id (guint8) -> current value (gint) */
 typedef struct {
-    GHashTable *attr_values;  /* guint -> gint (boxed) */
+    GHashTable *attr_values;
 } Snapshot;
 
 static void
@@ -27,7 +26,6 @@ snapshot_free (Snapshot *s)
     }
 }
 
-/* Per-device we keep the previous and current snapshot */
 typedef struct {
     Snapshot *prev;
     Snapshot *curr;
@@ -45,7 +43,7 @@ device_history_free (DeviceHistory *h)
 
 struct _PulsSmartHistory {
     GObject     parent_instance;
-    GHashTable *devices;  /* device_path -> DeviceHistory* */
+    GHashTable *devices;
 };
 
 G_DEFINE_TYPE (PulsSmartHistory, puls_smart_history, G_TYPE_OBJECT)

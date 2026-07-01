@@ -53,7 +53,6 @@ void puls_benchmark_run_async (const gchar *test_directory,
                               GCancellable *cancellable,
                               gpointer user_data);
 
-/* Seek latency test (non-destructive random reads on the raw block device) */
 typedef struct {
     gdouble avg_ms;
     gdouble min_ms;

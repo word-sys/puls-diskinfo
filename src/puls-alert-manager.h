@@ -28,7 +28,6 @@ G_BEGIN_DECLS
 #define PULS_TYPE_ALERT_MANAGER (puls_alert_manager_get_type ())
 G_DECLARE_FINAL_TYPE (PulsAlertManager, puls_alert_manager, PULS, ALERT_MANAGER, GObject)
 
-/* Per-alert entry stored in the session log */
 typedef struct {
     gchar    *message;
     gchar    *device_path;
@@ -52,7 +51,6 @@ GPtrArray *puls_alert_manager_check (PulsAlertManager *self,
  */
 GPtrArray *puls_alert_manager_get_log (PulsAlertManager *self);
 
-/* Thresholds — read from PulsSettings but can be overridden */
 void puls_alert_manager_set_temp_threshold   (PulsAlertManager *self, gint celsius);
 void puls_alert_manager_set_health_threshold (PulsAlertManager *self, gint percent);
 

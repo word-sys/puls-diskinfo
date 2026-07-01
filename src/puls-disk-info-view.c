@@ -93,11 +93,9 @@ struct _PulsDiskInfoView {
     GtkWidget *nvme_grid;
     GtkWidget *nvme_labels[14];
 
-    /* Live I/O activity graph */
     GtkWidget *io_graph_frame;
     GtkWidget *io_graph;
 
-    /* Timer state for live sysfs polling */
     guint      live_timer_id;
     guint64    last_read_sectors;
     guint64    last_write_sectors;
@@ -107,18 +105,15 @@ struct _PulsDiskInfoView {
 
     gchar     *current_device;
 
-    /* v1.1.1: Temperature history */
     PulsTempHistory *temp_history;
     GtkWidget       *temp_stats_label;
 
-    /* v1.1.1: Extended info labels (Group J) */
     GtkWidget *buffer_size_label;
     GtkWidget *apm_label;
     GtkWidget *aam_label;
     GtkWidget *spin_up_label;
     GtkWidget *error_count_label;
 
-    /* v1.1.1: Surface scan (Group E) */
     GtkWidget    *surface_frame;
     GtkWidget    *surface_status_label;
     GtkWidget    *surface_progress_bar;
@@ -130,7 +125,6 @@ struct _PulsDiskInfoView {
     GCancellable *surface_cancellable;
     gboolean      surface_running;
 
-    /* v1.1.1: Seek latency (Group I) */
     GtkWidget    *seek_frame;
     GtkWidget    *seek_avg_label;
     GtkWidget    *seek_min_label;
@@ -485,8 +479,6 @@ live_timer_func (gpointer user_data)
     return G_SOURCE_CONTINUE;
 }
 
-/* ── Surface Scan callbacks (Group E) ───────────────────────── */
-
 static void
 on_surface_progress (guint64 scanned, guint64 total,
                      guint64 lba G_GNUC_UNUSED,
@@ -598,8 +590,6 @@ on_surface_stop_clicked (GtkButton *btn G_GNUC_UNUSED, PulsDiskInfoView *self)
     if (self->surface_running && self->surface_cancellable)
         g_cancellable_cancel (self->surface_cancellable);
 }
-
-/* ── Seek Latency callbacks (Group I) ───────────────────────── */
 
 static void
 on_seek_finished (const PulsSeekLatencyResult *result,
@@ -1034,14 +1024,12 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
         self->nvme_labels[i] = create_info_row (self->nvme_grid, i, nvme_fields[i]);
     }
 
-    /* Extended Drive Details rows (Group J) — appended to id_grid rows 13-17 */
     add_info_row_to_grid (id_grid, 0, 13, "Buffer Size:",     &self->buffer_size_label);
     add_info_row_to_grid (id_grid, 2, 13, "Error Count:",     &self->error_count_label);
     add_info_row_to_grid (id_grid, 0, 14, "APM Level:",       &self->apm_label);
     add_info_row_to_grid (id_grid, 2, 14, "AAM Level:",       &self->aam_label);
     add_info_row_to_grid (id_grid, 0, 15, "Spin-Up Time:",    &self->spin_up_label);
 
-    /* Surface Scan frame (Group E) */
     self->surface_frame = create_section_frame ("Surface Scan (Read-Only)");
     gtk_box_append (GTK_BOX (self->content_box), self->surface_frame);
 
@@ -1519,7 +1507,6 @@ puls_disk_info_view_set_data (PulsDiskInfoView *self,
     puls_health_indicator_set_status (
         PULS_HEALTH_INDICATOR (self->health_indicator), health);
 
-    /* Group B: Health % and estimated lifetime */
     gint health_pct = puls_smart_data_get_health_percent (data);
     puls_health_indicator_set_health_percent (
         PULS_HEALTH_INDICATOR (self->health_indicator), health_pct);
@@ -1528,7 +1515,6 @@ puls_disk_info_view_set_data (PulsDiskInfoView *self,
     puls_health_indicator_set_lifetime_days (
         PULS_HEALTH_INDICATOR (self->health_indicator), lifetime_days);
 
-    /* Group C: Record temperature sample */
     if (temp >= 0) {
         puls_temp_history_add_sample (self->temp_history, temp);
         gint min_t = puls_temp_history_get_min (self->temp_history);
@@ -1550,7 +1536,6 @@ puls_disk_info_view_set_data (PulsDiskInfoView *self,
         gtk_label_set_text (GTK_LABEL (self->temp_stats_label), "Min: —  |  Max: —  |  Avg: —");
     }
 
-    /* Group H: Record SMART history snapshot for trend arrows */
     puls_smart_history_record (puls_smart_history_get_default (), data);
 
     puls_temperature_widget_set_temperature (

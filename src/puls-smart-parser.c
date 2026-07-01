@@ -468,7 +468,6 @@ puls_smart_parser_parse_json (const gchar *json_str,
         }
     }
 
-    /* ── Group B: Compute health % from ATA attributes ── */
     {
         GArray *attrs = puls_smart_data_get_ata_attributes (data);
         if (attrs && attrs->len > 0) {
@@ -490,7 +489,6 @@ puls_smart_parser_parse_json (const gchar *json_str,
                 puls_smart_data_set_health_percent (data, min_headroom);
         }
 
-        /* NVMe: use available_spare and percentage_used */
         PulsNvmeHealth *nvme = puls_smart_data_get_nvme_health (data);
         if (nvme) {
             gint pct = 100 - (gint)nvme->percentage_used;
@@ -499,7 +497,6 @@ puls_smart_parser_parse_json (const gchar *json_str,
         }
     }
 
-    /* ── Unified Lifetime Estimation ── */
     gint health_pct = puls_smart_data_get_health_percent (data);
     guint64 hours_used = puls_smart_data_get_power_on_hours (data);
     if (health_pct > 0 && health_pct < 100) {
@@ -507,29 +504,22 @@ puls_smart_parser_parse_json (const gchar *json_str,
         gint days_left = -1;
 
         if (hours_used > 2000 && percentage_used > 0) {
-            /* If we have at least ~3 months of data, use linear extrapolation of wear */
             guint64 total_hours_est = hours_used * 100 / percentage_used;
             guint64 hours_left = (total_hours_est > hours_used) ? (total_hours_est - hours_used) : 0;
             days_left = (gint)(hours_left / 24);
-            /* Cap estimated days to at least health_percent * 30 (e.g. 87% -> 2610 days = 7.1 yr)
-             * to prevent unrealistically short estimates during transient high wear. */
             gint min_expected_days = health_pct * 30;
             if (days_left < min_expected_days) {
                 days_left = min_expected_days;
             }
         } else {
-            /* For low power-on hours (new drives) or initial usage, estimate using standard expected SSD lifetime:
-             * 100% health = 10 years (3650 days). Scale linearly with remaining health. */
             days_left = (gint)(health_pct * 36.5);
         }
         puls_smart_data_set_estimated_lifetime_days (data, days_left);
     } else if (health_pct == 100) {
-        /* 100% health: more than 10 years remaining */
         puls_smart_data_set_estimated_lifetime_days (data, 3650);
     }
 
 
-    /* ── Group J: Parse extended drive details ── */
     {
         /* buffer_size_kb from "cache" key */
         if (json_object_has_member (root, "ata_cache")) {
@@ -546,7 +536,6 @@ puls_smart_parser_parse_json (const gchar *json_str,
                 puls_smart_data_set_buffer_size_kb (data, (guint32)cache_kb);
         }
 
-        /* APM level */
         if (json_object_has_member (root, "apm")) {
             JsonObject *apm_obj = json_object_get_object_member (root, "apm");
             gint64 apm_val = json_object_get_int_safe (apm_obj, "level", -1);
@@ -554,7 +543,6 @@ puls_smart_parser_parse_json (const gchar *json_str,
                 puls_smart_data_set_apm_level (data, (gint)apm_val);
         }
 
-        /* AAM level */
         if (json_object_has_member (root, "aam")) {
             JsonObject *aam_obj = json_object_get_object_member (root, "aam");
             gint64 aam_val = json_object_get_int_safe (aam_obj, "level", -1);
@@ -562,7 +550,6 @@ puls_smart_parser_parse_json (const gchar *json_str,
                 puls_smart_data_set_aam_level (data, (gint)aam_val);
         }
 
-        /* Spin-up time from attribute 3 */
         GArray *attrs = puls_smart_data_get_ata_attributes (data);
         if (attrs) {
             for (guint i = 0; i < attrs->len; i++) {
@@ -574,7 +561,6 @@ puls_smart_parser_parse_json (const gchar *json_str,
             }
         }
 
-        /* Total errors from ATA error log */
         if (json_object_has_member (root, "ata_smart_error_log")) {
             JsonObject *elog = json_object_get_object_member (root, "ata_smart_error_log");
             if (json_object_has_member (elog, "summary")) {

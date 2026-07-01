@@ -170,7 +170,6 @@ gint             puls_smart_data_get_estimated_lifetime_days (PulsSmartData *sel
 void             puls_smart_data_set_health_percent          (PulsSmartData *self, gint val);
 void             puls_smart_data_set_estimated_lifetime_days (PulsSmartData *self, gint val);
 
-/* Group J — Extended drive details */
 guint32          puls_smart_data_get_buffer_size_kb   (PulsSmartData *self);
 gint             puls_smart_data_get_apm_level        (PulsSmartData *self);
 gint             puls_smart_data_get_aam_level        (PulsSmartData *self);

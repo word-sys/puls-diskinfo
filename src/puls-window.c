@@ -174,7 +174,6 @@ generate_report_html (PulsWindow *self)
             "<tr><td>Power Cycles</td><td>%" G_GUINT64_FORMAT "</td></tr>\n",
             puls_smart_data_get_power_cycle_count (data));
 
-        /* Extended drive details (APM, AAM, Buffer Size, Spin-up, Wear level, Unsafe shutdowns) */
         g_autofree gchar *wear_str = NULL;
         PulsNvmeHealth *nvme = puls_smart_data_get_nvme_health (data);
         if (nvme) {
@@ -240,7 +239,6 @@ generate_report_html (PulsWindow *self)
         guint64 errs = puls_smart_data_get_error_count_total (data);
         g_string_append_printf (html, "<tr><td>Error Count</td><td>%" G_GUINT64_FORMAT "</td></tr>\n", errs);
 
-        /* Partitions breakdown */
         GList *parts = puls_get_disk_partitions (path);
         if (parts) {
             g_string_append (html, "<tr><td>Partition Usage</td><td>");
@@ -264,7 +262,6 @@ generate_report_html (PulsWindow *self)
 
         g_string_append (html, "</table>\n");
 
-        /* SMART attribute table */
         GArray *attrs = puls_smart_data_get_ata_attributes (data);
         if (attrs && attrs->len > 0) {
             g_string_append (html,
@@ -445,7 +442,6 @@ on_refresh_done (GObject      *source G_GNUC_UNUSED,
             if (view)
                 puls_disk_info_view_set_data (PULS_DISK_INFO_VIEW (view), data);
 
-            /* Group F: Check for alerts and post AdwToast if any fire */
             PulsAlertManager *alert_mgr = puls_alert_manager_get_default ();
             GPtrArray *new_alerts = puls_alert_manager_check (alert_mgr, data);
             if (new_alerts && new_alerts->len > 0) {

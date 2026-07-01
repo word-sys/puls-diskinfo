@@ -10,13 +10,11 @@ project('puls-diskinfo', 'c',
 
 gnome = import('gnome')
 
-# Version define
 add_project_arguments(
   '-DPULS_VERSION="' + meson.project_version() + '"',
   language: 'c',
 )
 
-# Dependencies
 gtk4_dep      = dependency('gtk4', version: '>= 4.0')
 libadwaita_dep = dependency('libadwaita-1', version: '>= 1.1.0')
 json_glib_dep = dependency('json-glib-1.0')

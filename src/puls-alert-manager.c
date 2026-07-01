@@ -17,13 +17,12 @@
 struct _PulsAlertManager {
     GObject parent_instance;
 
-    GPtrArray *log;          /* All PulsAlertEntry* ever fired this session */
+    GPtrArray *log;          
     gint       temp_threshold;
     gint       health_threshold;
 
-    /* Per-device de-dup: track last-seen temp/health to avoid toast spam */
-    GHashTable *last_temp;    /* device_path → gint* */
-    GHashTable *last_health;  /* device_path → gint* */
+    GHashTable *last_temp;    
+    GHashTable *last_health;  
 };
 
 G_DEFINE_TYPE (PulsAlertManager, puls_alert_manager, G_TYPE_OBJECT)
@@ -112,7 +111,6 @@ append_alert (PulsAlertManager *self,
     e->device_path = g_strdup (device_path);
     e->timestamp   = g_date_time_new_now_local ();
     g_ptr_array_add (self->log, e);
-    /* new_alerts holds a borrowed pointer into self->log's last element */
     g_ptr_array_add (new_alerts, e);
 }
 
@@ -123,18 +121,16 @@ puls_alert_manager_check (PulsAlertManager *self,
     g_return_val_if_fail (PULS_IS_ALERT_MANAGER (self), NULL);
     g_return_val_if_fail (data != NULL, NULL);
 
-    /* Re-read thresholds each time in case settings changed */
     PulsSettings *settings = puls_settings_get_default ();
     if (!puls_settings_get_alerts_enabled (settings))
         return NULL;
     self->temp_threshold   = puls_settings_get_alert_temp_threshold   (settings);
     self->health_threshold = puls_settings_get_alert_health_threshold (settings);
 
-    GPtrArray *new_alerts = g_ptr_array_new (); /* borrowed ptrs, do NOT free entries */
+    GPtrArray *new_alerts = g_ptr_array_new (); 
     const gchar *dev = puls_smart_data_get_device_path (data);
     if (dev == NULL) dev = "unknown";
 
-    /* ── Temperature alert ──────────────────────────────────── */
     gint temp = puls_smart_data_get_temperature (data);
     if (temp >= 0 && self->temp_threshold > 0) {
         gint *last_t = g_hash_table_lookup (self->last_temp, dev);
@@ -150,7 +146,6 @@ puls_alert_manager_check (PulsAlertManager *self,
         g_hash_table_insert (self->last_temp, g_strdup (dev), copy);
     }
 
-    /* ── Health % alert ─────────────────────────────────────── */
     gint health_pct = puls_smart_data_get_health_percent (data);
     if (health_pct >= 0 && self->health_threshold > 0) {
         gint *last_h = g_hash_table_lookup (self->last_health, dev);
@@ -166,7 +161,6 @@ puls_alert_manager_check (PulsAlertManager *self,
         g_hash_table_insert (self->last_health, g_strdup (dev), copy);
     }
 
-    /* ── Failing SMART attributes ───────────────────────────── */
     GArray *attrs = puls_smart_data_get_ata_attributes (data);
     if (attrs) {
         for (guint i = 0; i < attrs->len; i++) {
@@ -176,7 +170,7 @@ puls_alert_manager_check (PulsAlertManager *self,
                     "[FAIL] %s: SMART attribute \"%s\" (ID 0x%02x) is failing!",
                     dev, a->name ? a->name : "Unknown", a->id);
                 append_alert (self, new_alerts, dev, msg);
-                break; /* one toast per refresh is enough */
+                break; 
             }
         }
     }
@@ -185,5 +179,5 @@ puls_alert_manager_check (PulsAlertManager *self,
         g_ptr_array_free (new_alerts, TRUE);
         return NULL;
     }
-    return new_alerts; /* caller must g_ptr_array_free(arr, FALSE) — entries owned by log */
+    return new_alerts; 
 }

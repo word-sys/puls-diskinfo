@@ -20,7 +20,6 @@
 
 G_BEGIN_DECLS
 
-/* Sector state codes written into the scan map */
 typedef enum {
     PULS_SECTOR_UNKNOWN   = 0,
     PULS_SECTOR_OK        = 1,
@@ -39,7 +38,6 @@ typedef struct {
     guint64 sectors_scanned;
 } PulsSurfaceScanResult;
 
-/* Callback types */
 typedef void (*PulsSurfaceProgressFunc) (guint64 scanned,
                                          guint64 total,
                                          guint64 lba,

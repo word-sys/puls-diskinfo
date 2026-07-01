@@ -528,7 +528,6 @@ puls_benchmark_run_async (const gchar *test_directory,
     g_thread_new ("bench-runner", benchmark_background_thread, runner);
 }
 
-/* ── Seek Latency Test ───────────────────────────────────────── */
 
 typedef struct {
     gchar                    *device_path;
@@ -581,7 +580,6 @@ seek_task_thread (GTask *task G_GNUC_UNUSED,
         goto done;
     }
 
-    /* Get size */
     off_t dev_size = lseek (fd, 0, SEEK_END);
     if (dev_size <= 0) {
         error_msg = g_strdup ("Cannot determine device size");
@@ -589,7 +587,7 @@ seek_task_thread (GTask *task G_GNUC_UNUSED,
         goto done;
     }
 
-    /* Allocate 512-byte sector buffer */
+    /* 512-byte sector buffer */
     void *buf = NULL;
     if (posix_memalign (&buf, 512, 512) != 0) {
         error_msg = g_strdup ("Memory allocation failed");
@@ -602,7 +600,6 @@ seek_task_thread (GTask *task G_GNUC_UNUSED,
     gdouble min_ms = G_MAXDOUBLE;
     gdouble max_ms = 0.0;
 
-    /* Use a simple LCG to generate pseudo-random offsets without glib RNG overhead */
     guint64 seed = (guint64)g_get_monotonic_time ();
     guint64 max_block = (guint64)(dev_size / 512);
 
@@ -612,7 +609,6 @@ seek_task_thread (GTask *task G_GNUC_UNUSED,
             break;
         }
 
-        /* LCG step */
         seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
         guint64 block = seed % max_block;
         off_t offset = (off_t)(block * 512);

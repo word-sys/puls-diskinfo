@@ -672,8 +672,6 @@ puls_run_smartctl_action_sync (const gchar *device_path, const gchar *action, GE
     return stdout_buf ? stdout_buf : g_strdup ("");
 }
 
-/* ── Partition Usage (Group K) ──────────────────────────────── */
-
 gboolean
 puls_get_partition_usage (const gchar *mount_point,
                           guint64     *out_used_bytes,

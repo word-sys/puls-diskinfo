@@ -23,7 +23,6 @@
 #include <string.h>
 #include <time.h>
 
-/* ── Internal task data ──────────────────────────────────────── */
 
 typedef struct {
     gchar                  *device_path;
@@ -41,7 +40,6 @@ scan_task_data_free (ScanTaskData *d)
     g_free (d);
 }
 
-/* Progress emission on main thread */
 typedef struct {
     PulsSurfaceProgressFunc cb;
     guint64                 scanned;
@@ -76,7 +74,6 @@ emit_progress (PulsSurfaceProgressFunc cb,
     g_idle_add (emit_progress_idle, p);
 }
 
-/* Finished emission on main thread */
 typedef struct {
     PulsSurfaceFinishedFunc  cb;
     PulsSurfaceScanResult    result;
@@ -110,8 +107,6 @@ emit_finished (PulsSurfaceFinishedFunc cb,
     g_idle_add (emit_finished_idle, f);
 }
 
-/* ── Worker thread ───────────────────────────────────────────── */
-
 static void
 surface_scan_thread (GTask        *task,
                      gpointer      source_object G_GNUC_UNUSED,
@@ -124,10 +119,8 @@ surface_scan_thread (GTask        *task,
     gboolean scan_cancelled = FALSE;
     gchar   *error_msg      = NULL;
 
-    /* Open device read-only; use O_DIRECT if possible to bypass cache */
     int fd = open (d->device_path, O_RDONLY | O_DIRECT | O_CLOEXEC);
     if (fd < 0) {
-        /* Try without O_DIRECT */
         fd = open (d->device_path, O_RDONLY | O_CLOEXEC);
     }
     if (fd < 0) {
@@ -138,7 +131,6 @@ surface_scan_thread (GTask        *task,
         return;
     }
 
-    /* Get device size in bytes */
     guint64 dev_size = 0;
     if (ioctl (fd, BLKGETSIZE64, &dev_size) < 0) {
         error_msg = g_strdup_printf ("Cannot determine device size for %s: %s",
@@ -157,7 +149,6 @@ surface_scan_thread (GTask        *task,
         return;
     }
 
-    /* We read in blocks of PULS_SURFACE_BLOCK_SIZE, aligned for O_DIRECT */
     const gsize block_size = PULS_SURFACE_BLOCK_SIZE;
     void *buf = NULL;
     if (posix_memalign (&buf, 4096, block_size) != 0) {
@@ -173,7 +164,6 @@ surface_scan_thread (GTask        *task,
 
     guint64 offset = 0;
     guint64 blocks_done = 0;
-    /* Emit progress every N blocks to avoid flooding the main loop */
     const guint64 PROGRESS_EVERY = MAX (1, total_blocks / 2000);
 
     while (offset < dev_size) {
@@ -224,7 +214,6 @@ surface_scan_thread (GTask        *task,
     emit_finished (d->finished_cb, &result, scan_cancelled, error_msg, d->user_data);
 }
 
-/* ── Public API ──────────────────────────────────────────────── */
 
 void
 puls_surface_scan_run_async (const gchar            *device_path,

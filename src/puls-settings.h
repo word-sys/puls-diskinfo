@@ -36,7 +36,6 @@ void          puls_settings_set_theme_preference (PulsSettings *self, gint val);
 
 void          puls_settings_save                 (PulsSettings *self);
 
-/* Alert settings (Group F) */
 gboolean      puls_settings_get_alerts_enabled    (PulsSettings *self);
 void          puls_settings_set_alerts_enabled    (PulsSettings *self, gboolean val);
 

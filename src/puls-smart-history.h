@@ -30,12 +30,8 @@ G_DECLARE_FINAL_TYPE (PulsSmartHistory, puls_smart_history, PULS, SMART_HISTORY,
 
 PulsSmartHistory *puls_smart_history_get_default (void);
 
-/* Record a new snapshot for a device */
 void puls_smart_history_record (PulsSmartHistory *self,
                                  PulsSmartData    *data);
-
-/* Query trend for a specific attribute ID on a device.
- * Returns PULS_ATTR_TREND_STABLE if no previous snapshot exists. */
 PulsAttrTrend puls_smart_history_get_trend (PulsSmartHistory *self,
                                              const gchar      *device_path,
                                              guint8            attr_id);

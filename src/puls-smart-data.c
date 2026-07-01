@@ -71,7 +71,6 @@ puls_nvme_health_free (PulsNvmeHealth *health)
 struct _PulsSmartData {
     GObject parent_instance;
 
-    /* Identity */
     gchar        *device_path;
     gchar        *model_name;
     gchar        *serial_number;
@@ -111,11 +110,9 @@ struct _PulsSmartData {
     gchar          *self_test_status_str;
     gchar          *self_test_type_str;
 
-    /* Group B — Health score & lifetime */
     gint            health_percent;
     gint            estimated_lifetime_days;
 
-    /* Group J — Extended drive details */
     guint32         buffer_size_kb;
     gint            apm_level;        /* -1 = not set */
     gint            aam_level;        /* -1 = not set */
@@ -560,7 +557,6 @@ puls_drive_type_to_icon (PulsDriveType type)
     }
 }
 
-/* ── Group B: Health % & Estimated Lifetime ───────────────── */
 
 gint
 puls_smart_data_get_health_percent (PulsSmartData *self)
@@ -589,8 +585,6 @@ puls_smart_data_set_estimated_lifetime_days (PulsSmartData *self, gint val)
     g_return_if_fail (PULS_IS_SMART_DATA (self));
     self->estimated_lifetime_days = val;
 }
-
-/* ── Group J: Extended Drive Details ─────────────────────── */
 
 guint32
 puls_smart_data_get_buffer_size_kb (PulsSmartData *self)
