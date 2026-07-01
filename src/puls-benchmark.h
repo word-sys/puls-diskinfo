@@ -53,6 +53,26 @@ void puls_benchmark_run_async (const gchar *test_directory,
                               GCancellable *cancellable,
                               gpointer user_data);
 
+/* Seek latency test (non-destructive random reads on the raw block device) */
+typedef struct {
+    gdouble avg_ms;
+    gdouble min_ms;
+    gdouble max_ms;
+    guint   samples;
+    gboolean done;
+} PulsSeekLatencyResult;
+
+typedef void (*PulsSeekLatencyFinishedCb) (const PulsSeekLatencyResult *result,
+                                           gboolean                     cancelled,
+                                           const gchar                 *error_msg,
+                                           gpointer                     user_data);
+
+void puls_benchmark_seek_async (const gchar             *device_path,
+                                 guint                    num_samples,
+                                 GCancellable            *cancellable,
+                                 PulsSeekLatencyFinishedCb finished_cb,
+                                 gpointer                  user_data);
+
 G_END_DECLS
 
 #endif

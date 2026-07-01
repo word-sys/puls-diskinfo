@@ -12,6 +12,7 @@
  */
 
 #include "puls-smart-table.h"
+#include "puls-smart-history.h"
 
 #define PULS_TYPE_ATTR_ROW (puls_attr_row_get_type ())
 G_DECLARE_FINAL_TYPE (PulsAttrRow, puls_attr_row, PULS, ATTR_ROW, GObject)
@@ -27,6 +28,7 @@ struct _PulsAttrRow {
     gchar   *raw_string;
     gboolean failed_past;
     gboolean failing_now;
+    PulsAttrTrend trend;
 };
 
 G_DEFINE_TYPE (PulsAttrRow, puls_attr_row, G_TYPE_OBJECT)
@@ -52,7 +54,7 @@ puls_attr_row_init (PulsAttrRow *self G_GNUC_UNUSED)
 }
 
 static PulsAttrRow *
-puls_attr_row_new (const PulsSmartAttribute *attr)
+puls_attr_row_new (const PulsSmartAttribute *attr, PulsAttrTrend trend)
 {
     PulsAttrRow *row = g_object_new (PULS_TYPE_ATTR_ROW, NULL);
     row->id         = attr->id;
@@ -64,6 +66,7 @@ puls_attr_row_new (const PulsSmartAttribute *attr)
     row->raw_string = g_strdup (attr->raw_string ? attr->raw_string : "0");
     row->failed_past  = attr->failed_past;
     row->failing_now  = attr->failing_now;
+    row->trend        = trend;
     return row;
 }
 
@@ -204,6 +207,38 @@ bind_status_cell (GtkListItemFactory *factory G_GNUC_UNUSED,
     }
 }
 
+static void
+bind_trend_cell (GtkListItemFactory *factory G_GNUC_UNUSED,
+                 GtkListItem        *list_item,
+                 gpointer            user_data G_GNUC_UNUSED)
+{
+    GtkWidget *label = gtk_list_item_get_child (list_item);
+    PulsAttrRow *row = gtk_list_item_get_item (list_item);
+
+    gtk_widget_remove_css_class (label, "trend-improving");
+    gtk_widget_remove_css_class (label, "trend-degrading");
+    gtk_widget_remove_css_class (label, "trend-stable");
+
+    switch (row->trend) {
+    case PULS_ATTR_TREND_IMPROVING:
+        gtk_label_set_text (GTK_LABEL (label), "↑");
+        gtk_widget_add_css_class (label, "trend-improving");
+        gtk_widget_set_tooltip_text (label, "Improving since last snapshot");
+        break;
+    case PULS_ATTR_TREND_DEGRADING:
+        gtk_label_set_text (GTK_LABEL (label), "↓");
+        gtk_widget_add_css_class (label, "trend-degrading");
+        gtk_widget_set_tooltip_text (label, "Degrading since last snapshot");
+        break;
+    case PULS_ATTR_TREND_STABLE:
+    default:
+        gtk_label_set_text (GTK_LABEL (label), "—");
+        gtk_widget_add_css_class (label, "trend-stable");
+        gtk_widget_set_tooltip_text (label, "Stable");
+        break;
+    }
+}
+
 static GtkColumnViewColumn *
 create_column (const gchar                 *title,
                gint                         fixed_width,
@@ -276,6 +311,8 @@ puls_smart_table_init (PulsSmartTable *self)
         create_column ("Raw Value", 200, G_CALLBACK (bind_raw_cell)));
     gtk_column_view_append_column (GTK_COLUMN_VIEW (self->column_view),
         create_column ("Status", 80, G_CALLBACK (bind_status_cell)));
+    gtk_column_view_append_column (GTK_COLUMN_VIEW (self->column_view),
+        create_column ("Trend", 55, G_CALLBACK (bind_trend_cell)));
 
     self->scrolled_window = gtk_scrolled_window_new ();
     gtk_scrolled_window_set_min_content_height (
@@ -316,9 +353,13 @@ puls_smart_table_set_data (PulsSmartTable *self,
         return;
     }
 
+    const gchar *dev_path = puls_smart_data_get_device_path (data);
+    PulsSmartHistory *history = puls_smart_history_get_default ();
+
     for (guint i = 0; i < attrs->len; i++) {
         PulsSmartAttribute *attr = &g_array_index (attrs, PulsSmartAttribute, i);
-        PulsAttrRow *row = puls_attr_row_new (attr);
+        PulsAttrTrend trend = puls_smart_history_get_trend (history, dev_path ? dev_path : "", attr->id);
+        PulsAttrRow *row = puls_attr_row_new (attr, trend);
         g_list_store_append (self->store, row);
         g_object_unref (row);
     }

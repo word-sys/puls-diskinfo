@@ -110,6 +110,17 @@ struct _PulsSmartData {
     gint            self_test_percent;
     gchar          *self_test_status_str;
     gchar          *self_test_type_str;
+
+    /* Group B — Health score & lifetime */
+    gint            health_percent;
+    gint            estimated_lifetime_days;
+
+    /* Group J — Extended drive details */
+    guint32         buffer_size_kb;
+    gint            apm_level;        /* -1 = not set */
+    gint            aam_level;        /* -1 = not set */
+    gint            spin_up_time_ms;  /* -1 = not set */
+    guint64         error_count_total;
 };
 
 G_DEFINE_TYPE (PulsSmartData, puls_smart_data, G_TYPE_OBJECT)
@@ -187,7 +198,15 @@ puls_smart_data_init (PulsSmartData *self)
     self->self_test_percent     = 0;
     self->self_test_status_str  = NULL;
     self->self_test_type_str    = NULL;
+    self->health_percent           = -1;
+    self->estimated_lifetime_days  = -1;
+    self->buffer_size_kb           = 0;
+    self->apm_level                = -1;
+    self->aam_level                = -1;
+    self->spin_up_time_ms          = -1;
+    self->error_count_total        = 0;
 }
+
 
 PulsSmartData *
 puls_smart_data_new (void)
@@ -539,4 +558,106 @@ puls_drive_type_to_icon (PulsDriveType type)
     case PULS_DRIVE_TYPE_UNKNOWN:
     default:                       return "drive-harddisk-symbolic";
     }
+}
+
+/* ── Group B: Health % & Estimated Lifetime ───────────────── */
+
+gint
+puls_smart_data_get_health_percent (PulsSmartData *self)
+{
+    g_return_val_if_fail (PULS_IS_SMART_DATA (self), -1);
+    return self->health_percent;
+}
+
+void
+puls_smart_data_set_health_percent (PulsSmartData *self, gint val)
+{
+    g_return_if_fail (PULS_IS_SMART_DATA (self));
+    self->health_percent = val;
+}
+
+gint
+puls_smart_data_get_estimated_lifetime_days (PulsSmartData *self)
+{
+    g_return_val_if_fail (PULS_IS_SMART_DATA (self), -1);
+    return self->estimated_lifetime_days;
+}
+
+void
+puls_smart_data_set_estimated_lifetime_days (PulsSmartData *self, gint val)
+{
+    g_return_if_fail (PULS_IS_SMART_DATA (self));
+    self->estimated_lifetime_days = val;
+}
+
+/* ── Group J: Extended Drive Details ─────────────────────── */
+
+guint32
+puls_smart_data_get_buffer_size_kb (PulsSmartData *self)
+{
+    g_return_val_if_fail (PULS_IS_SMART_DATA (self), 0);
+    return self->buffer_size_kb;
+}
+
+void
+puls_smart_data_set_buffer_size_kb (PulsSmartData *self, guint32 val)
+{
+    g_return_if_fail (PULS_IS_SMART_DATA (self));
+    self->buffer_size_kb = val;
+}
+
+gint
+puls_smart_data_get_apm_level (PulsSmartData *self)
+{
+    g_return_val_if_fail (PULS_IS_SMART_DATA (self), -1);
+    return self->apm_level;
+}
+
+void
+puls_smart_data_set_apm_level (PulsSmartData *self, gint val)
+{
+    g_return_if_fail (PULS_IS_SMART_DATA (self));
+    self->apm_level = val;
+}
+
+gint
+puls_smart_data_get_aam_level (PulsSmartData *self)
+{
+    g_return_val_if_fail (PULS_IS_SMART_DATA (self), -1);
+    return self->aam_level;
+}
+
+void
+puls_smart_data_set_aam_level (PulsSmartData *self, gint val)
+{
+    g_return_if_fail (PULS_IS_SMART_DATA (self));
+    self->aam_level = val;
+}
+
+gint
+puls_smart_data_get_spin_up_time_ms (PulsSmartData *self)
+{
+    g_return_val_if_fail (PULS_IS_SMART_DATA (self), -1);
+    return self->spin_up_time_ms;
+}
+
+void
+puls_smart_data_set_spin_up_time_ms (PulsSmartData *self, gint val)
+{
+    g_return_if_fail (PULS_IS_SMART_DATA (self));
+    self->spin_up_time_ms = val;
+}
+
+guint64
+puls_smart_data_get_error_count_total (PulsSmartData *self)
+{
+    g_return_val_if_fail (PULS_IS_SMART_DATA (self), 0);
+    return self->error_count_total;
+}
+
+void
+puls_smart_data_set_error_count_total (PulsSmartData *self, guint64 val)
+{
+    g_return_if_fail (PULS_IS_SMART_DATA (self));
+    self->error_count_total = val;
 }

@@ -1,10 +1,12 @@
 puls-diskinfo (1.1.1) bookworm; urgency=medium
 
-  * New release
-  * Added realtime graphs
-  * Fixed theme bugs
+  * Added health score percentage and remaining lifetime indicators
+  * Added circular temperature history buffer and in-app alerts
+  * Added non-destructive read-only surface scan and seek latency test
+  * Added SMART attribute trend tracking and dynamic UI layout adjustments
+  * Added comprehensive HTML diagnostic report generation and file export
 
- -- Barın Güzeldemirci <baringuzeldemir@gmail.com>  Sat, 27 Jun 2026 11:00:00 +0300
+ -- Barın Güzeldemirci <baringuzeldemir@gmail.com>  Tue, 01 Jul 2026 12:00:00 +0300
 
 puls-diskinfo (1.1.0) bookworm; urgency=medium
 

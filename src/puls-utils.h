@@ -77,4 +77,9 @@ gboolean      puls_is_rotational     (const gchar *device_name);
 gchar        *puls_get_transport     (const gchar *device_name);
 gchar        *puls_detect_usb_speed_version (const gchar *device_name);
 
+/* Partition disk-usage via statvfs (Group K) */
+gboolean puls_get_partition_usage (const gchar *mount_point,
+                                   guint64     *out_used_bytes,
+                                   guint64     *out_total_bytes);
+
 G_END_DECLS

@@ -165,4 +165,22 @@ const gchar *puls_health_status_to_string (PulsHealthStatus status);
 const gchar *puls_drive_type_to_string    (PulsDriveType type);
 const gchar *puls_drive_type_to_icon      (PulsDriveType type);
 
+gint             puls_smart_data_get_health_percent          (PulsSmartData *self);
+gint             puls_smart_data_get_estimated_lifetime_days (PulsSmartData *self);
+void             puls_smart_data_set_health_percent          (PulsSmartData *self, gint val);
+void             puls_smart_data_set_estimated_lifetime_days (PulsSmartData *self, gint val);
+
+/* Group J — Extended drive details */
+guint32          puls_smart_data_get_buffer_size_kb   (PulsSmartData *self);
+gint             puls_smart_data_get_apm_level        (PulsSmartData *self);
+gint             puls_smart_data_get_aam_level        (PulsSmartData *self);
+gint             puls_smart_data_get_spin_up_time_ms  (PulsSmartData *self);
+guint64          puls_smart_data_get_error_count_total (PulsSmartData *self);
+
+void puls_smart_data_set_buffer_size_kb    (PulsSmartData *self, guint32 val);
+void puls_smart_data_set_apm_level        (PulsSmartData *self, gint val);
+void puls_smart_data_set_aam_level        (PulsSmartData *self, gint val);
+void puls_smart_data_set_spin_up_time_ms  (PulsSmartData *self, gint val);
+void puls_smart_data_set_error_count_total (PulsSmartData *self, guint64 val);
+
 G_END_DECLS

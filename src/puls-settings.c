@@ -23,6 +23,11 @@ struct _PulsSettings {
     gboolean use_fahrenheit;
     gint     caution_temp;
     gint     theme_preference;
+
+    /* Alert settings (Group F) */
+    gboolean alerts_enabled;
+    gint     alert_temp_threshold;
+    gint     alert_health_threshold;
 };
 
 G_DEFINE_TYPE (PulsSettings, puls_settings, G_TYPE_OBJECT)
@@ -88,6 +93,15 @@ puls_settings_load (PulsSettings *self)
 
         if (json_object_has_member (root, "theme_preference"))
             self->theme_preference = json_object_get_int_member (root, "theme_preference");
+
+        if (json_object_has_member (root, "alerts_enabled"))
+            self->alerts_enabled = json_object_get_boolean_member (root, "alerts_enabled");
+
+        if (json_object_has_member (root, "alert_temp_threshold"))
+            self->alert_temp_threshold = json_object_get_int_member (root, "alert_temp_threshold");
+
+        if (json_object_has_member (root, "alert_health_threshold"))
+            self->alert_health_threshold = json_object_get_int_member (root, "alert_health_threshold");
     }
 }
 
@@ -98,6 +112,9 @@ puls_settings_init (PulsSettings *self)
     self->use_fahrenheit = FALSE;
     self->caution_temp = 60;
     self->theme_preference = 0;
+    self->alerts_enabled        = TRUE;
+    self->alert_temp_threshold   = 55;
+    self->alert_health_threshold = 80;
 
     puls_settings_load (self);
 }
@@ -209,6 +226,15 @@ puls_settings_save (PulsSettings *self)
     json_builder_set_member_name (builder, "theme_preference");
     json_builder_add_int_value (builder, self->theme_preference);
 
+    json_builder_set_member_name (builder, "alerts_enabled");
+    json_builder_add_boolean_value (builder, self->alerts_enabled);
+
+    json_builder_set_member_name (builder, "alert_temp_threshold");
+    json_builder_add_int_value (builder, self->alert_temp_threshold);
+
+    json_builder_set_member_name (builder, "alert_health_threshold");
+    json_builder_add_int_value (builder, self->alert_health_threshold);
+
     json_builder_end_object (builder);
 
     g_autoptr(JsonGenerator) gen = json_generator_new ();
@@ -220,5 +246,61 @@ puls_settings_save (PulsSettings *self)
     if (!json_generator_to_file (gen, path, &error)) {
         g_warning ("Failed to save settings: %s", error->message);
         g_clear_error (&error);
+    }
+}
+
+/* ── Alert Settings Accessors (Group F) ─────────────────────── */
+
+gboolean
+puls_settings_get_alerts_enabled (PulsSettings *self)
+{
+    g_return_val_if_fail (PULS_IS_SETTINGS (self), TRUE);
+    return self->alerts_enabled;
+}
+
+void
+puls_settings_set_alerts_enabled (PulsSettings *self, gboolean val)
+{
+    g_return_if_fail (PULS_IS_SETTINGS (self));
+    if (self->alerts_enabled != val) {
+        self->alerts_enabled = val;
+        puls_settings_save (self);
+        g_signal_emit (self, settings_changed_signal, 0);
+    }
+}
+
+gint
+puls_settings_get_alert_temp_threshold (PulsSettings *self)
+{
+    g_return_val_if_fail (PULS_IS_SETTINGS (self), 55);
+    return self->alert_temp_threshold;
+}
+
+void
+puls_settings_set_alert_temp_threshold (PulsSettings *self, gint val)
+{
+    g_return_if_fail (PULS_IS_SETTINGS (self));
+    if (self->alert_temp_threshold != val) {
+        self->alert_temp_threshold = val;
+        puls_settings_save (self);
+        g_signal_emit (self, settings_changed_signal, 0);
+    }
+}
+
+gint
+puls_settings_get_alert_health_threshold (PulsSettings *self)
+{
+    g_return_val_if_fail (PULS_IS_SETTINGS (self), 80);
+    return self->alert_health_threshold;
+}
+
+void
+puls_settings_set_alert_health_threshold (PulsSettings *self, gint val)
+{
+    g_return_if_fail (PULS_IS_SETTINGS (self));
+    if (self->alert_health_threshold != val) {
+        self->alert_health_threshold = val;
+        puls_settings_save (self);
+        g_signal_emit (self, settings_changed_signal, 0);
     }
 }

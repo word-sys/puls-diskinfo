@@ -527,3 +527,151 @@ puls_benchmark_run_async (const gchar *test_directory,
 
     g_thread_new ("bench-runner", benchmark_background_thread, runner);
 }
+
+/* ── Seek Latency Test ───────────────────────────────────────── */
+
+typedef struct {
+    gchar                    *device_path;
+    guint                     num_samples;
+    GCancellable             *cancellable;
+    PulsSeekLatencyFinishedCb finished_cb;
+    gpointer                  user_data;
+} SeekTaskData;
+
+static void
+seek_task_data_free (SeekTaskData *d)
+{
+    g_free (d->device_path);
+    g_clear_object (&d->cancellable);
+    g_free (d);
+}
+
+typedef struct {
+    PulsSeekLatencyFinishedCb cb;
+    PulsSeekLatencyResult     result;
+    gboolean                  cancelled;
+    gchar                    *error_msg;
+    gpointer                  user_data;
+} SeekFinishedIdle;
+
+static gboolean
+seek_finished_idle (gpointer data)
+{
+    SeekFinishedIdle *f = data;
+    f->cb (&f->result, f->cancelled, f->error_msg, f->user_data);
+    g_free (f->error_msg);
+    g_free (f);
+    return G_SOURCE_REMOVE;
+}
+
+static void
+seek_task_thread (GTask *task G_GNUC_UNUSED,
+                  gpointer source G_GNUC_UNUSED,
+                  gpointer task_data,
+                  GCancellable *cancellable)
+{
+    SeekTaskData *d = task_data;
+    PulsSeekLatencyResult result = { 0 };
+    gboolean seek_cancelled = FALSE;
+    gchar *error_msg = NULL;
+
+    int fd = open (d->device_path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        error_msg = g_strdup_printf ("Cannot open %s: %s", d->device_path, g_strerror (errno));
+        goto done;
+    }
+
+    /* Get size */
+    off_t dev_size = lseek (fd, 0, SEEK_END);
+    if (dev_size <= 0) {
+        error_msg = g_strdup ("Cannot determine device size");
+        close (fd);
+        goto done;
+    }
+
+    /* Allocate 512-byte sector buffer */
+    void *buf = NULL;
+    if (posix_memalign (&buf, 512, 512) != 0) {
+        error_msg = g_strdup ("Memory allocation failed");
+        close (fd);
+        goto done;
+    }
+
+    guint samples = 0;
+    gdouble sum_ms = 0.0;
+    gdouble min_ms = G_MAXDOUBLE;
+    gdouble max_ms = 0.0;
+
+    /* Use a simple LCG to generate pseudo-random offsets without glib RNG overhead */
+    guint64 seed = (guint64)g_get_monotonic_time ();
+    guint64 max_block = (guint64)(dev_size / 512);
+
+    for (guint i = 0; i < d->num_samples; i++) {
+        if (g_cancellable_is_cancelled (cancellable)) {
+            seek_cancelled = TRUE;
+            break;
+        }
+
+        /* LCG step */
+        seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+        guint64 block = seed % max_block;
+        off_t offset = (off_t)(block * 512);
+
+        struct timespec t0, t1;
+        clock_gettime (CLOCK_MONOTONIC, &t0);
+        pread (fd, buf, 512, offset);
+        clock_gettime (CLOCK_MONOTONIC, &t1);
+
+        gdouble ms = (double)(t1.tv_sec - t0.tv_sec) * 1000.0
+                   + (double)(t1.tv_nsec - t0.tv_nsec) / 1e6;
+
+        sum_ms += ms;
+        if (ms < min_ms) min_ms = ms;
+        if (ms > max_ms) max_ms = ms;
+        samples++;
+    }
+
+    free (buf);
+    close (fd);
+
+    if (samples > 0) {
+        result.avg_ms  = sum_ms / (double)samples;
+        result.min_ms  = min_ms;
+        result.max_ms  = max_ms;
+        result.samples = samples;
+        result.done    = TRUE;
+    }
+
+done:;
+    SeekFinishedIdle *f = g_new0 (SeekFinishedIdle, 1);
+    f->cb        = d->finished_cb;
+    f->result    = result;
+    f->cancelled = seek_cancelled;
+    f->error_msg = error_msg;
+    f->user_data = d->user_data;
+    g_idle_add (seek_finished_idle, f);
+}
+
+void
+puls_benchmark_seek_async (const gchar              *device_path,
+                            guint                     num_samples,
+                            GCancellable             *cancellable,
+                            PulsSeekLatencyFinishedCb finished_cb,
+                            gpointer                  user_data)
+{
+    g_return_if_fail (device_path != NULL);
+    g_return_if_fail (finished_cb != NULL);
+
+    SeekTaskData *d = g_new0 (SeekTaskData, 1);
+    d->device_path  = g_strdup (device_path);
+    d->num_samples  = num_samples > 0 ? num_samples : 200;
+    d->cancellable  = cancellable ? g_object_ref (cancellable) : g_cancellable_new ();
+    d->finished_cb  = finished_cb;
+    d->user_data    = user_data;
+
+    GTask *task = g_task_new (NULL, d->cancellable, NULL, NULL);
+    g_task_set_task_data (task, d, (GDestroyNotify)seek_task_data_free);
+    g_task_run_in_thread (task, seek_task_thread);
+    g_object_unref (task);
+}
+

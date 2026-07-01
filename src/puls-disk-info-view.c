@@ -19,6 +19,11 @@
 #include "puls-utils.h"
 #include "puls-benchmark.h"
 #include "puls-io-graph.h"
+#include "puls-temp-history.h"
+#include "puls-surface-scan.h"
+#include "puls-alert-manager.h"
+#include "puls-smart-history.h"
+#include <adwaita.h>
 #include <glib/gstdio.h>
 
 struct _PulsDiskInfoView {
@@ -101,6 +106,38 @@ struct _PulsDiskInfoView {
     gboolean   has_last_stats;
 
     gchar     *current_device;
+
+    /* v1.1.1: Temperature history */
+    PulsTempHistory *temp_history;
+    GtkWidget       *temp_stats_label;
+
+    /* v1.1.1: Extended info labels (Group J) */
+    GtkWidget *buffer_size_label;
+    GtkWidget *apm_label;
+    GtkWidget *aam_label;
+    GtkWidget *spin_up_label;
+    GtkWidget *error_count_label;
+
+    /* v1.1.1: Surface scan (Group E) */
+    GtkWidget    *surface_frame;
+    GtkWidget    *surface_status_label;
+    GtkWidget    *surface_progress_bar;
+    GtkWidget    *surface_start_btn;
+    GtkWidget    *surface_stop_btn;
+    GtkWidget    *surface_ok_label;
+    GtkWidget    *surface_slow_label;
+    GtkWidget    *surface_error_label;
+    GCancellable *surface_cancellable;
+    gboolean      surface_running;
+
+    /* v1.1.1: Seek latency (Group I) */
+    GtkWidget    *seek_frame;
+    GtkWidget    *seek_avg_label;
+    GtkWidget    *seek_min_label;
+    GtkWidget    *seek_max_label;
+    GtkWidget    *seek_start_btn;
+    GtkWidget    *seek_status_label;
+    GCancellable *seek_cancellable;
 };
 
 G_DEFINE_TYPE (PulsDiskInfoView, puls_disk_info_view, GTK_TYPE_WIDGET)
@@ -127,8 +164,22 @@ add_info_row_to_grid (GtkWidget   *grid,
     gtk_widget_set_hexpand (value, TRUE);
     gtk_grid_attach (GTK_GRID (grid), value, col_left + 1, row, 1, 1);
 
+    g_object_set_data (G_OBJECT (value), "key-label", label);
+
     if (val_label_out)
         *val_label_out = value;
+}
+
+static void
+set_row_visible (GtkWidget *val_label, gboolean visible)
+{
+    if (val_label) {
+        gtk_widget_set_visible (val_label, visible);
+        GtkWidget *key = g_object_get_data (G_OBJECT (val_label), "key-label");
+        if (key) {
+            gtk_widget_set_visible (key, visible);
+        }
+    }
 }
 
 static GtkWidget *
@@ -434,6 +485,170 @@ live_timer_func (gpointer user_data)
     return G_SOURCE_CONTINUE;
 }
 
+/* ── Surface Scan callbacks (Group E) ───────────────────────── */
+
+static void
+on_surface_progress (guint64 scanned, guint64 total,
+                     guint64 lba G_GNUC_UNUSED,
+                     PulsSectorState state G_GNUC_UNUSED,
+                     gpointer user_data)
+{
+    PulsDiskInfoView *self = PULS_DISK_INFO_VIEW (user_data);
+    if (!self->surface_running) return;
+    gdouble frac = (total > 0) ? (gdouble)scanned / (gdouble)total : 0.0;
+    gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (self->surface_progress_bar), frac);
+    g_autofree gchar *status = g_strdup_printf (
+        "Scanning… %" G_GUINT64_FORMAT " / %" G_GUINT64_FORMAT " sectors (%.1f%%)",
+        scanned, total, frac * 100.0);
+    gtk_label_set_text (GTK_LABEL (self->surface_status_label), status);
+}
+
+static void
+on_surface_finished (const PulsSurfaceScanResult *result,
+                     gboolean                     cancelled,
+                     const gchar                 *error_msg,
+                     gpointer                     user_data)
+{
+    PulsDiskInfoView *self = PULS_DISK_INFO_VIEW (user_data);
+    self->surface_running = FALSE;
+    gtk_widget_set_sensitive (self->surface_start_btn, TRUE);
+    gtk_widget_set_sensitive (self->surface_stop_btn, FALSE);
+    gtk_widget_set_visible   (self->surface_progress_bar, FALSE);
+    g_clear_object (&self->surface_cancellable);
+
+    if (cancelled) {
+        gtk_label_set_text (GTK_LABEL (self->surface_status_label), "Surface scan cancelled.");
+        return;
+    }
+    if (error_msg) {
+        g_autofree gchar *msg = g_strdup_printf ("Error: %s", error_msg);
+        gtk_label_set_text (GTK_LABEL (self->surface_status_label), msg);
+        return;
+    }
+
+    g_autofree gchar *summary = g_strdup_printf (
+        "Scan complete. %" G_GUINT64_FORMAT " sectors scanned.",
+        result->sectors_scanned);
+    gtk_label_set_text (GTK_LABEL (self->surface_status_label), summary);
+
+    g_autofree gchar *ok_str   = g_strdup_printf ("OK: %" G_GUINT64_FORMAT, result->sectors_ok);
+    g_autofree gchar *slow_str = g_strdup_printf ("Slow: %" G_GUINT64_FORMAT, result->sectors_slow);
+    g_autofree gchar *err_str  = g_strdup_printf ("Errors: %" G_GUINT64_FORMAT, result->sectors_error);
+    gtk_label_set_text (GTK_LABEL (self->surface_ok_label),    ok_str);
+    gtk_label_set_text (GTK_LABEL (self->surface_slow_label),  slow_str);
+    gtk_label_set_text (GTK_LABEL (self->surface_error_label), err_str);
+}
+
+static void
+on_surface_confirm_response (GtkDialog *dialog, gint response_id, gpointer user_data)
+{
+    PulsDiskInfoView *self = PULS_DISK_INFO_VIEW (user_data);
+    gtk_window_destroy (GTK_WINDOW (dialog));
+
+    if (response_id != GTK_RESPONSE_OK)
+        return;
+    if (self->current_device == NULL)
+        return;
+
+    self->surface_running = TRUE;
+    gtk_widget_set_sensitive (self->surface_start_btn, FALSE);
+    gtk_widget_set_sensitive (self->surface_stop_btn,  TRUE);
+    gtk_widget_set_visible   (self->surface_progress_bar, TRUE);
+    gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (self->surface_progress_bar), 0.0);
+    gtk_label_set_text (GTK_LABEL (self->surface_status_label), "Starting surface scan…");
+
+    g_clear_object (&self->surface_cancellable);
+    self->surface_cancellable = g_cancellable_new ();
+    puls_surface_scan_run_async (self->current_device,
+                                 self->surface_cancellable,
+                                 on_surface_progress,
+                                 on_surface_finished,
+                                 self);
+}
+
+static void
+on_surface_start_clicked (GtkButton *btn G_GNUC_UNUSED, PulsDiskInfoView *self)
+{
+    if (self->surface_running || self->current_device == NULL) return;
+
+    GtkWidget *dialog = gtk_message_dialog_new (
+        GTK_WINDOW (gtk_widget_get_root (GTK_WIDGET (self))),
+        GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+        GTK_MESSAGE_QUESTION,
+        GTK_BUTTONS_NONE,
+        "Start Surface Scan?"
+    );
+    gtk_message_dialog_format_secondary_text (
+        GTK_MESSAGE_DIALOG (dialog),
+        "This will read every sector of the disk. The scan is non-destructive "
+        "(read-only) and will not modify any data. However, it may take a long "
+        "time on large drives. You can cancel at any time."
+    );
+    gtk_dialog_add_button (GTK_DIALOG (dialog), "Cancel",     GTK_RESPONSE_CANCEL);
+    gtk_dialog_add_button (GTK_DIALOG (dialog), "Start Scan", GTK_RESPONSE_OK);
+    gtk_dialog_set_default_response (GTK_DIALOG (dialog), GTK_RESPONSE_CANCEL);
+    g_signal_connect (dialog, "response",
+                      G_CALLBACK (on_surface_confirm_response), self);
+    gtk_window_present (GTK_WINDOW (dialog));
+}
+
+static void
+on_surface_stop_clicked (GtkButton *btn G_GNUC_UNUSED, PulsDiskInfoView *self)
+{
+    if (self->surface_running && self->surface_cancellable)
+        g_cancellable_cancel (self->surface_cancellable);
+}
+
+/* ── Seek Latency callbacks (Group I) ───────────────────────── */
+
+static void
+on_seek_finished (const PulsSeekLatencyResult *result,
+                  gboolean                     cancelled,
+                  const gchar                 *error_msg,
+                  gpointer                     user_data)
+{
+    PulsDiskInfoView *self = PULS_DISK_INFO_VIEW (user_data);
+    gtk_widget_set_sensitive (self->seek_start_btn, TRUE);
+    g_clear_object (&self->seek_cancellable);
+
+    if (cancelled) {
+        gtk_label_set_text (GTK_LABEL (self->seek_status_label), "Cancelled.");
+        return;
+    }
+    if (error_msg) {
+        gtk_label_set_text (GTK_LABEL (self->seek_status_label), error_msg);
+        return;
+    }
+    if (!result->done || result->samples == 0) {
+        gtk_label_set_text (GTK_LABEL (self->seek_status_label), "No data collected.");
+        return;
+    }
+
+    g_autofree gchar *avg = g_strdup_printf ("%.2f ms", result->avg_ms);
+    g_autofree gchar *mn  = g_strdup_printf ("%.2f ms", result->min_ms);
+    g_autofree gchar *mx  = g_strdup_printf ("%.2f ms", result->max_ms);
+    gtk_label_set_text (GTK_LABEL (self->seek_avg_label), avg);
+    gtk_label_set_text (GTK_LABEL (self->seek_min_label), mn);
+    gtk_label_set_text (GTK_LABEL (self->seek_max_label), mx);
+
+    g_autofree gchar *status = g_strdup_printf (
+        "Seek latency measured (%u samples).", result->samples);
+    gtk_label_set_text (GTK_LABEL (self->seek_status_label), status);
+}
+
+static void
+on_seek_start_clicked (GtkButton *btn G_GNUC_UNUSED, PulsDiskInfoView *self)
+{
+    if (self->current_device == NULL) return;
+    gtk_widget_set_sensitive (self->seek_start_btn, FALSE);
+    gtk_label_set_text (GTK_LABEL (self->seek_status_label), "Measuring seek latency…");
+    g_clear_object (&self->seek_cancellable);
+    self->seek_cancellable = g_cancellable_new ();
+    puls_benchmark_seek_async (self->current_device, 200,
+                               self->seek_cancellable,
+                               on_seek_finished, self);
+}
+
 static void
 puls_disk_info_view_finalize (GObject *object)
 {
@@ -443,6 +658,15 @@ puls_disk_info_view_finalize (GObject *object)
         g_cancellable_cancel (self->bench_cancellable);
         g_clear_object (&self->bench_cancellable);
     }
+    if (self->surface_cancellable) {
+        g_cancellable_cancel (self->surface_cancellable);
+        g_clear_object (&self->surface_cancellable);
+    }
+    if (self->seek_cancellable) {
+        g_cancellable_cancel (self->seek_cancellable);
+        g_clear_object (&self->seek_cancellable);
+    }
+    g_clear_object (&self->temp_history);
     if (self->live_timer_id != 0) {
         g_source_remove (self->live_timer_id);
         self->live_timer_id = 0;
@@ -478,9 +702,13 @@ puls_disk_info_view_class_init (PulsDiskInfoViewClass *klass)
 static void
 puls_disk_info_view_init (PulsDiskInfoView *self)
 {
-    self->current_device   = NULL;
-    self->live_timer_id    = 0;
-    self->has_last_stats   = FALSE;
+    self->current_device      = NULL;
+    self->live_timer_id       = 0;
+    self->has_last_stats      = FALSE;
+    self->surface_running     = FALSE;
+    self->surface_cancellable = NULL;
+    self->seek_cancellable    = NULL;
+    self->temp_history        = puls_temp_history_new ();
 
     self->scrolled = gtk_scrolled_window_new ();
     gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (self->scrolled),
@@ -523,6 +751,11 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
 
     self->temperature_widget = puls_temperature_widget_new ();
     gtk_box_append (GTK_BOX (health_box), self->temperature_widget);
+
+    self->temp_stats_label = gtk_label_new ("Min: —  |  Max: —  |  Avg: —");
+    gtk_widget_add_css_class (self->temp_stats_label, "temp-range");
+    gtk_widget_set_halign (self->temp_stats_label, GTK_ALIGN_START);
+    gtk_box_append (GTK_BOX (health_box), self->temp_stats_label);
 
     self->identity_frame = create_section_frame ("Drive Information");
     gtk_box_append (GTK_BOX (right_column), self->identity_frame);
@@ -800,7 +1033,120 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
     for (gint i = 0; i < 14; i++) {
         self->nvme_labels[i] = create_info_row (self->nvme_grid, i, nvme_fields[i]);
     }
+
+    /* Extended Drive Details rows (Group J) — appended to id_grid rows 13-17 */
+    add_info_row_to_grid (id_grid, 0, 13, "Buffer Size:",     &self->buffer_size_label);
+    add_info_row_to_grid (id_grid, 2, 13, "Error Count:",     &self->error_count_label);
+    add_info_row_to_grid (id_grid, 0, 14, "APM Level:",       &self->apm_label);
+    add_info_row_to_grid (id_grid, 2, 14, "AAM Level:",       &self->aam_label);
+    add_info_row_to_grid (id_grid, 0, 15, "Spin-Up Time:",    &self->spin_up_label);
+
+    /* Surface Scan frame (Group E) */
+    self->surface_frame = create_section_frame ("Surface Scan (Read-Only)");
+    gtk_box_append (GTK_BOX (self->content_box), self->surface_frame);
+
+    GtkWidget *ss_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 8);
+    gtk_widget_set_margin_start   (ss_box, 16);
+    gtk_widget_set_margin_end     (ss_box, 16);
+    gtk_widget_set_margin_top     (ss_box, 12);
+    gtk_widget_set_margin_bottom  (ss_box, 12);
+    gtk_frame_set_child (GTK_FRAME (self->surface_frame), ss_box);
+
+    GtkWidget *ss_ctrl = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_box_append (GTK_BOX (ss_box), ss_ctrl);
+
+    self->surface_start_btn = gtk_button_new_with_label ("Start Surface Scan");
+    gtk_widget_add_css_class (self->surface_start_btn, "suggested-action");
+    g_signal_connect (self->surface_start_btn, "clicked",
+                      G_CALLBACK (on_surface_start_clicked), self);
+    gtk_box_append (GTK_BOX (ss_ctrl), self->surface_start_btn);
+
+    self->surface_stop_btn = gtk_button_new_with_label ("Stop");
+    gtk_widget_add_css_class (self->surface_stop_btn, "destructive-action");
+    gtk_widget_set_sensitive (self->surface_stop_btn, FALSE);
+    g_signal_connect (self->surface_stop_btn, "clicked",
+                      G_CALLBACK (on_surface_stop_clicked), self);
+    gtk_box_append (GTK_BOX (ss_ctrl), self->surface_stop_btn);
+
+    self->surface_status_label = gtk_label_new ("Click \"Start Surface Scan\" to scan all sectors (read-only).");
+    gtk_widget_add_css_class (self->surface_status_label, "dim-label");
+    gtk_label_set_xalign (GTK_LABEL (self->surface_status_label), 0.0);
+    gtk_label_set_wrap   (GTK_LABEL (self->surface_status_label), TRUE);
+    gtk_box_append (GTK_BOX (ss_box), self->surface_status_label);
+
+    self->surface_progress_bar = gtk_progress_bar_new ();
+    gtk_widget_set_visible (self->surface_progress_bar, FALSE);
+    gtk_box_append (GTK_BOX (ss_box), self->surface_progress_bar);
+
+    GtkWidget *ss_results = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 24);
+    gtk_box_append (GTK_BOX (ss_box), ss_results);
+
+    self->surface_ok_label = gtk_label_new ("OK: —");
+    gtk_widget_add_css_class (self->surface_ok_label, "status-ok");
+    gtk_box_append (GTK_BOX (ss_results), self->surface_ok_label);
+
+    self->surface_slow_label = gtk_label_new ("Slow: —");
+    gtk_widget_add_css_class (self->surface_slow_label, "status-warn");
+    gtk_box_append (GTK_BOX (ss_results), self->surface_slow_label);
+
+    self->surface_error_label = gtk_label_new ("Errors: —");
+    gtk_widget_add_css_class (self->surface_error_label, "status-fail");
+    gtk_box_append (GTK_BOX (ss_results), self->surface_error_label);
+
+    /* Seek Latency frame (Group I) — appended after surface scan */
+    self->seek_frame = create_section_frame ("Seek Latency Test (Read-Only)");
+    gtk_box_append (GTK_BOX (self->content_box), self->seek_frame);
+
+    GtkWidget *sk_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 8);
+    gtk_widget_set_margin_start   (sk_box, 16);
+    gtk_widget_set_margin_end     (sk_box, 16);
+    gtk_widget_set_margin_top     (sk_box, 12);
+    gtk_widget_set_margin_bottom  (sk_box, 12);
+    gtk_frame_set_child (GTK_FRAME (self->seek_frame), sk_box);
+
+    GtkWidget *sk_ctrl = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_box_append (GTK_BOX (sk_box), sk_ctrl);
+
+    self->seek_start_btn = gtk_button_new_with_label ("Measure Seek Latency");
+    g_signal_connect (self->seek_start_btn, "clicked",
+                      G_CALLBACK (on_seek_start_clicked), self);
+    gtk_box_append (GTK_BOX (sk_ctrl), self->seek_start_btn);
+
+    self->seek_status_label = gtk_label_new ("200 random reads will be performed (non-destructive).");
+    gtk_widget_add_css_class (self->seek_status_label, "dim-label");
+    gtk_label_set_xalign (GTK_LABEL (self->seek_status_label), 0.0);
+    gtk_box_append (GTK_BOX (sk_box), self->seek_status_label);
+
+    GtkWidget *sk_results = gtk_grid_new ();
+    gtk_grid_set_column_spacing (GTK_GRID (sk_results), 24);
+    gtk_grid_set_row_spacing    (GTK_GRID (sk_results), 4);
+    gtk_box_append (GTK_BOX (sk_box), sk_results);
+
+    GtkWidget *sk_avg_key = gtk_label_new ("Average:");
+    gtk_widget_add_css_class (sk_avg_key, "info-key");
+    gtk_label_set_xalign (GTK_LABEL (sk_avg_key), 0.0);
+    gtk_grid_attach (GTK_GRID (sk_results), sk_avg_key, 0, 0, 1, 1);
+    self->seek_avg_label = gtk_label_new ("—");
+    gtk_widget_add_css_class (self->seek_avg_label, "info-value");
+    gtk_grid_attach (GTK_GRID (sk_results), self->seek_avg_label, 1, 0, 1, 1);
+
+    GtkWidget *sk_min_key = gtk_label_new ("Min:");
+    gtk_widget_add_css_class (sk_min_key, "info-key");
+    gtk_label_set_xalign (GTK_LABEL (sk_min_key), 0.0);
+    gtk_grid_attach (GTK_GRID (sk_results), sk_min_key, 2, 0, 1, 1);
+    self->seek_min_label = gtk_label_new ("—");
+    gtk_widget_add_css_class (self->seek_min_label, "info-value");
+    gtk_grid_attach (GTK_GRID (sk_results), self->seek_min_label, 3, 0, 1, 1);
+
+    GtkWidget *sk_max_key = gtk_label_new ("Max:");
+    gtk_widget_add_css_class (sk_max_key, "info-key");
+    gtk_label_set_xalign (GTK_LABEL (sk_max_key), 0.0);
+    gtk_grid_attach (GTK_GRID (sk_results), sk_max_key, 4, 0, 1, 1);
+    self->seek_max_label = gtk_label_new ("—");
+    gtk_widget_add_css_class (self->seek_max_label, "info-value");
+    gtk_grid_attach (GTK_GRID (sk_results), self->seek_max_label, 5, 0, 1, 1);
 }
+
 
 GtkWidget *
 puls_disk_info_view_new (void)
@@ -1083,11 +1429,14 @@ puls_disk_info_view_set_data (PulsDiskInfoView *self,
     gint r_rpm = puls_smart_data_get_rotation_rpm (data);
     if (r_rpm == 0) {
         gtk_label_set_text (GTK_LABEL (self->rotation_rate_label), "Solid State Device (SSD)");
+        set_row_visible (self->rotation_rate_label, FALSE);
     } else if (r_rpm > 0) {
         g_autofree gchar *rpm_str = g_strdup_printf ("%d RPM", r_rpm);
         gtk_label_set_text (GTK_LABEL (self->rotation_rate_label), rpm_str);
+        set_row_visible (self->rotation_rate_label, TRUE);
     } else {
         gtk_label_set_text (GTK_LABEL (self->rotation_rate_label), "N/A");
+        set_row_visible (self->rotation_rate_label, FALSE);
     }
 
     g_autofree gchar *wear_str = get_wear_level_string (data);
@@ -1170,6 +1519,40 @@ puls_disk_info_view_set_data (PulsDiskInfoView *self,
     puls_health_indicator_set_status (
         PULS_HEALTH_INDICATOR (self->health_indicator), health);
 
+    /* Group B: Health % and estimated lifetime */
+    gint health_pct = puls_smart_data_get_health_percent (data);
+    puls_health_indicator_set_health_percent (
+        PULS_HEALTH_INDICATOR (self->health_indicator), health_pct);
+
+    gint lifetime_days = puls_smart_data_get_estimated_lifetime_days (data);
+    puls_health_indicator_set_lifetime_days (
+        PULS_HEALTH_INDICATOR (self->health_indicator), lifetime_days);
+
+    /* Group C: Record temperature sample */
+    if (temp >= 0) {
+        puls_temp_history_add_sample (self->temp_history, temp);
+        gint min_t = puls_temp_history_get_min (self->temp_history);
+        gint max_t = puls_temp_history_get_max (self->temp_history);
+        gint avg_t = puls_temp_history_get_avg (self->temp_history);
+        gboolean use_f = puls_settings_get_use_fahrenheit (settings);
+
+        if (use_f) {
+            gint min_f = (min_t * 9 / 5) + 32;
+            gint max_f = (max_t * 9 / 5) + 32;
+            gint avg_f = (avg_t * 9 / 5) + 32;
+            g_autofree gchar *stats_str = g_strdup_printf ("Min: %d °F  |  Max: %d °F  |  Avg: %d °F", min_f, max_f, avg_f);
+            gtk_label_set_text (GTK_LABEL (self->temp_stats_label), stats_str);
+        } else {
+            g_autofree gchar *stats_str = g_strdup_printf ("Min: %d °C  |  Max: %d °C  |  Avg: %d °C", min_t, max_t, avg_t);
+            gtk_label_set_text (GTK_LABEL (self->temp_stats_label), stats_str);
+        }
+    } else {
+        gtk_label_set_text (GTK_LABEL (self->temp_stats_label), "Min: —  |  Max: —  |  Avg: —");
+    }
+
+    /* Group H: Record SMART history snapshot for trend arrows */
+    puls_smart_history_record (puls_smart_history_get_default (), data);
+
     puls_temperature_widget_set_temperature (
         PULS_TEMPERATURE_WIDGET (self->temperature_widget), temp);
 
@@ -1195,16 +1578,20 @@ puls_disk_info_view_set_data (PulsDiskInfoView *self,
     if (written > 0) {
         g_autofree gchar *w_str = puls_format_bytes (written);
         gtk_label_set_text (GTK_LABEL (self->total_written_label), w_str);
+        set_row_visible (self->total_written_label, TRUE);
     } else {
         gtk_label_set_text (GTK_LABEL (self->total_written_label), "N/A");
+        set_row_visible (self->total_written_label, FALSE);
     }
 
     guint64 read_bytes = puls_smart_data_get_total_bytes_read (data);
     if (read_bytes > 0) {
         g_autofree gchar *r_str = puls_format_bytes (read_bytes);
         gtk_label_set_text (GTK_LABEL (self->total_read_label), r_str);
+        set_row_visible (self->total_read_label, TRUE);
     } else {
         gtk_label_set_text (GTK_LABEL (self->total_read_label), "N/A");
+        set_row_visible (self->total_read_label, FALSE);
     }
 
     GtkWidget *child;
@@ -1349,6 +1736,59 @@ puls_disk_info_view_set_data (PulsDiskInfoView *self,
     if (self->bench_running && self->bench_cancellable) {
         g_cancellable_cancel (self->bench_cancellable);
     }
+
+    /* Group J: Extended drive details */
+    {
+        guint32 bufsz = puls_smart_data_get_buffer_size_kb (data);
+        if (bufsz > 0) {
+            g_autofree gchar *s = g_strdup_printf ("%u KB", bufsz);
+            gtk_label_set_text (GTK_LABEL (self->buffer_size_label), s);
+            set_row_visible (self->buffer_size_label, TRUE);
+        } else {
+            gtk_label_set_text (GTK_LABEL (self->buffer_size_label), "N/A");
+            set_row_visible (self->buffer_size_label, FALSE);
+        }
+
+        gint apm = puls_smart_data_get_apm_level (data);
+        if (apm >= 0) {
+            g_autofree gchar *s = g_strdup_printf ("%d", apm);
+            gtk_label_set_text (GTK_LABEL (self->apm_label), s);
+            set_row_visible (self->apm_label, TRUE);
+        } else {
+            gtk_label_set_text (GTK_LABEL (self->apm_label), "N/A");
+            set_row_visible (self->apm_label, FALSE);
+        }
+
+        gint aam = puls_smart_data_get_aam_level (data);
+        if (aam >= 0) {
+            g_autofree gchar *s = g_strdup_printf ("%d", aam);
+            gtk_label_set_text (GTK_LABEL (self->aam_label), s);
+            set_row_visible (self->aam_label, TRUE);
+        } else {
+            gtk_label_set_text (GTK_LABEL (self->aam_label), "N/A");
+            set_row_visible (self->aam_label, FALSE);
+        }
+
+        gint spin = puls_smart_data_get_spin_up_time_ms (data);
+        if (spin >= 0) {
+            g_autofree gchar *s = g_strdup_printf ("%d ms", spin);
+            gtk_label_set_text (GTK_LABEL (self->spin_up_label), s);
+            set_row_visible (self->spin_up_label, TRUE);
+        } else {
+            gtk_label_set_text (GTK_LABEL (self->spin_up_label), "N/A");
+            set_row_visible (self->spin_up_label, FALSE);
+        }
+
+        guint64 errs = puls_smart_data_get_error_count_total (data);
+        if (errs > 0) {
+            g_autofree gchar *s = puls_format_number (errs);
+            gtk_label_set_text (GTK_LABEL (self->error_count_label), s);
+        } else {
+            gtk_label_set_text (GTK_LABEL (self->error_count_label), "0");
+        }
+        set_row_visible (self->error_count_label, TRUE);
+    }
+
 
     for (gint i = 0; i < 4; i++) {
         gtk_label_set_text (GTK_LABEL (self->bench_read_labels[i]), "—");

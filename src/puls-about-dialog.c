@@ -15,7 +15,7 @@
 #include "puls-utils.h"
 
 #ifndef PULS_VERSION
-#define PULS_VERSION "1.1.0"
+#define PULS_VERSION "1.1.1"
 #endif
 
 void

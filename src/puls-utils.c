@@ -671,3 +671,26 @@ puls_run_smartctl_action_sync (const gchar *device_path, const gchar *action, GE
 
     return stdout_buf ? stdout_buf : g_strdup ("");
 }
+
+/* ── Partition Usage (Group K) ──────────────────────────────── */
+
+gboolean
+puls_get_partition_usage (const gchar *mount_point,
+                          guint64     *out_used_bytes,
+                          guint64     *out_total_bytes)
+{
+    g_return_val_if_fail (mount_point != NULL, FALSE);
+
+    struct statvfs vfs;
+    if (statvfs (mount_point, &vfs) != 0)
+        return FALSE;
+
+    guint64 total = (guint64)vfs.f_blocks * vfs.f_frsize;
+    guint64 avail = (guint64)vfs.f_bavail * vfs.f_frsize;
+    guint64 used  = (total > avail) ? (total - avail) : 0;
+
+    if (out_total_bytes) *out_total_bytes = total;
+    if (out_used_bytes)  *out_used_bytes  = used;
+    return TRUE;
+}
+

@@ -16,6 +16,11 @@ puls_sources = files(
   'puls-settings.c',
   'puls-benchmark.c',
   'puls-io-graph.c',
+  # v1.1.1 additions
+  'puls-temp-history.c',      # Group C: temperature history
+  'puls-surface-scan.c',      # Group E: non-destructive surface scan
+  'puls-alert-manager.c',     # Group F: alert manager
+  'puls-smart-history.c',     # Group H: SMART attribute trend tracking
 )
 
 executable('puls-diskinfo',

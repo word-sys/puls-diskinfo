@@ -22,9 +22,11 @@ G_BEGIN_DECLS
 G_DECLARE_FINAL_TYPE (PulsHealthIndicator, puls_health_indicator,
                       PULS, HEALTH_INDICATOR, GtkWidget)
 
-GtkWidget       *puls_health_indicator_new        (void);
-void             puls_health_indicator_set_status  (PulsHealthIndicator *self,
-                                                    PulsHealthStatus     status);
-PulsHealthStatus puls_health_indicator_get_status  (PulsHealthIndicator *self);
+GtkWidget       *puls_health_indicator_new              (void);
+void             puls_health_indicator_set_status        (PulsHealthIndicator *self,
+                                                          PulsHealthStatus     status);
+PulsHealthStatus puls_health_indicator_get_status        (PulsHealthIndicator *self);
+void             puls_health_indicator_set_health_percent (PulsHealthIndicator *self, gint pct);
+void             puls_health_indicator_set_lifetime_days  (PulsHealthIndicator *self, gint days);
 
 G_END_DECLS

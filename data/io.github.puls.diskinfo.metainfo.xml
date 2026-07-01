@@ -36,6 +36,11 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="1.1.1" date="2026-07-01">
+      <description>
+        <p>Feature expansion release inspired by Hard Disk Sentinel. Adds health score %, temperature history graph, live I/O rate labels, non-destructive surface scan with heatmap, alert system, enhanced export (HTML/JSON/file), S.M.A.R.T. trend indicators, seek latency benchmark, expanded drive details, and partition usage progress bars.</p>
+      </description>
+    </release>
     <release version="1.1.0" date="2026-06-26">
       <description>
         <p>Telemetry additions and LVM/LUKS mapping fixes, including safer benchmarking checks and GTK CSS hover fixes.</p>
