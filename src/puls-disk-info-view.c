@@ -23,6 +23,7 @@
 #include "puls-surface-scan.h"
 #include "puls-alert-manager.h"
 #include "puls-smart-history.h"
+#include "puls-i18n.h"
 #include <adwaita.h>
 #include <glib/gstdio.h>
 
@@ -33,6 +34,8 @@ struct _PulsDiskInfoView {
     GtkWidget *content_box;
 
     GtkWidget *identity_frame;
+    GtkWidget *model_key_label;
+    GtkWidget *mount_points_key_label;
     GtkWidget *model_label;
     GtkWidget *serial_label;
     GtkWidget *firmware_label;
@@ -218,7 +221,7 @@ on_action_done (GObject *source G_GNUC_UNUSED, GAsyncResult *result, gpointer us
         gtk_label_set_text (GTK_LABEL (self->test_status_label), error->message);
         g_clear_error (&error);
     } else {
-        gtk_label_set_text (GTK_LABEL (self->test_status_label), "Test command accepted. Refresh to view updates.");
+        gtk_label_set_text (GTK_LABEL (self->test_status_label), _(PULS_STR_TEST_ACCEPTED));
     }
 }
 
@@ -227,7 +230,7 @@ on_short_test_clicked (GtkButton *btn G_GNUC_UNUSED, PulsDiskInfoView *self)
 {
     if (self->current_device == NULL)
         return;
-    gtk_label_set_text (GTK_LABEL (self->test_status_label), "Starting Short Self-Test...");
+    gtk_label_set_text (GTK_LABEL (self->test_status_label), _(PULS_STR_TEST_STARTING_SHORT));
     puls_run_smartctl_action_async (self->current_device, "short", NULL, on_action_done, self);
 }
 
@@ -236,7 +239,7 @@ on_long_test_clicked (GtkButton *btn G_GNUC_UNUSED, PulsDiskInfoView *self)
 {
     if (self->current_device == NULL)
         return;
-    gtk_label_set_text (GTK_LABEL (self->test_status_label), "Starting Long Self-Test...");
+    gtk_label_set_text (GTK_LABEL (self->test_status_label), _(PULS_STR_TEST_STARTING_LONG));
     puls_run_smartctl_action_async (self->current_device, "long", NULL, on_action_done, self);
 }
 
@@ -245,7 +248,7 @@ on_abort_test_clicked (GtkButton *btn G_GNUC_UNUSED, PulsDiskInfoView *self)
 {
     if (self->current_device == NULL)
         return;
-    gtk_label_set_text (GTK_LABEL (self->test_status_label), "Aborting active test...");
+    gtk_label_set_text (GTK_LABEL (self->test_status_label), _(PULS_STR_TEST_ABORTING));
     puls_run_smartctl_action_async (self->current_device, "abort", NULL, on_action_done, self);
 }
 
@@ -302,12 +305,12 @@ on_bench_finished (const PulsBenchmarkResult results[PULS_BENCHMARK_TEST_COUNT],
     gtk_widget_set_sensitive (self->bench_stop_btn, FALSE);
 
     if (cancelled) {
-        gtk_label_set_text (GTK_LABEL (self->bench_status_label), "Benchmark stopped.");
+        gtk_label_set_text (GTK_LABEL (self->bench_status_label), _(PULS_STR_BENCH_STOPPED));
     } else if (error_msg) {
-        g_autofree gchar *status = g_strdup_printf ("Benchmark failed: %s", error_msg);
+        g_autofree gchar *status = g_strdup_printf (_(PULS_STR_BENCH_FAILED), error_msg);
         gtk_label_set_text (GTK_LABEL (self->bench_status_label), status);
     } else {
-        gtk_label_set_text (GTK_LABEL (self->bench_status_label), "Benchmark completed successfully.");
+        gtk_label_set_text (GTK_LABEL (self->bench_status_label), _(PULS_STR_BENCH_COMPLETED));
         for (gint i = 0; i < PULS_BENCHMARK_TEST_COUNT; i++) {
             if (results[i].read_done) {
                 g_autofree gchar *r_str = g_strdup_printf ("%.2f", results[i].read_mbs);
@@ -338,7 +341,7 @@ on_bench_start_clicked (GtkButton *btn G_GNUC_UNUSED, PulsDiskInfoView *self)
 
     gchar *writeable_dir = get_device_benchmark_dir (self->current_device);
     if (writeable_dir == NULL) {
-        gtk_label_set_text (GTK_LABEL (self->bench_status_label), "Error: No writeable partition mounted on this drive.");
+        gtk_label_set_text (GTK_LABEL (self->bench_status_label), _(PULS_STR_BENCH_NO_PARTITION));
         return;
     }
 
@@ -356,7 +359,7 @@ on_bench_start_clicked (GtkButton *btn G_GNUC_UNUSED, PulsDiskInfoView *self)
     gtk_widget_set_sensitive (self->bench_size_combo, FALSE);
     gtk_widget_set_sensitive (self->bench_stop_btn, TRUE);
 
-    gtk_label_set_text (GTK_LABEL (self->bench_status_label), "Starting benchmark...");
+    gtk_label_set_text (GTK_LABEL (self->bench_status_label), _(PULS_STR_BENCH_STARTING));
 
     const gchar *runs_str = gtk_combo_box_text_get_active_text (GTK_COMBO_BOX_TEXT (self->bench_runs_combo));
     guint runs = runs_str ? atoi (runs_str) : 2;
@@ -386,7 +389,7 @@ on_bench_stop_clicked (GtkButton *btn G_GNUC_UNUSED, PulsDiskInfoView *self)
 {
     if (self->bench_running && self->bench_cancellable) {
         g_cancellable_cancel (self->bench_cancellable);
-        gtk_label_set_text (GTK_LABEL (self->bench_status_label), "Stopping benchmark...");
+        gtk_label_set_text (GTK_LABEL (self->bench_status_label), _(PULS_STR_BENCH_STOPPED));
         gtk_widget_set_sensitive (self->bench_stop_btn, FALSE);
     }
 }
@@ -725,7 +728,7 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
     gtk_widget_set_hexpand (right_column, TRUE);
     gtk_box_append (GTK_BOX (top_row), right_column);
 
-    self->health_frame = create_section_frame ("Health & Temp");
+    self->health_frame = create_section_frame (_(PULS_STR_SECTION_HEALTH));
     gtk_box_append (GTK_BOX (left_column), self->health_frame);
 
     GtkWidget *health_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 8);
@@ -742,12 +745,12 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
     self->temperature_widget = puls_temperature_widget_new ();
     gtk_box_append (GTK_BOX (health_box), self->temperature_widget);
 
-    self->temp_stats_label = gtk_label_new ("Min: —  |  Max: —  |  Avg: —");
+    self->temp_stats_label = gtk_label_new (_(PULS_STR_TEMP_MIN_MAX_AVG));
     gtk_widget_add_css_class (self->temp_stats_label, "temp-range");
     gtk_widget_set_halign (self->temp_stats_label, GTK_ALIGN_START);
     gtk_box_append (GTK_BOX (health_box), self->temp_stats_label);
 
-    self->identity_frame = create_section_frame ("Drive Information");
+    self->identity_frame = create_section_frame (_(PULS_STR_SECTION_DRIVE_INFO));
     gtk_box_append (GTK_BOX (right_column), self->identity_frame);
 
     GtkWidget *id_grid = gtk_grid_new ();
@@ -759,10 +762,10 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
     gtk_widget_set_margin_bottom (id_grid, 8);
     gtk_frame_set_child (GTK_FRAME (self->identity_frame), id_grid);
 
-    GtkWidget *model_key = gtk_label_new ("Model:");
-    gtk_widget_add_css_class (model_key, "info-key");
-    gtk_label_set_xalign (GTK_LABEL (model_key), 0.0);
-    gtk_grid_attach (GTK_GRID (id_grid), model_key, 0, 0, 1, 1);
+    self->model_key_label = gtk_label_new (_(PULS_STR_FIELD_MODEL));
+    gtk_widget_add_css_class (self->model_key_label, "info-key");
+    gtk_label_set_xalign (GTK_LABEL (self->model_key_label), 0.0);
+    gtk_grid_attach (GTK_GRID (id_grid), self->model_key_label, 0, 0, 1, 1);
 
     self->model_label = gtk_label_new ("—");
     gtk_widget_add_css_class (self->model_label, "info-value");
@@ -772,29 +775,29 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
     gtk_widget_set_hexpand (self->model_label, TRUE);
     gtk_grid_attach (GTK_GRID (id_grid), self->model_label, 1, 0, 3, 1);
 
-    add_info_row_to_grid (id_grid, 0, 1, "Firmware:", &self->firmware_label);
-    add_info_row_to_grid (id_grid, 2, 1, "Serial Number:", &self->serial_label);
-    add_info_row_to_grid (id_grid, 0, 2, "Interface:", &self->interface_label);
-    add_info_row_to_grid (id_grid, 2, 2, "Transfer Mode:", &self->transfer_mode_label);
-    add_info_row_to_grid (id_grid, 0, 3, "Standard:", &self->standard_label);
-    add_info_row_to_grid (id_grid, 2, 3, "Capacity:", &self->capacity_label);
-    add_info_row_to_grid (id_grid, 0, 4, "Type:", &self->rotation_label);
-    add_info_row_to_grid (id_grid, 2, 4, "Features:", &self->features_label);
-    add_info_row_to_grid (id_grid, 0, 5, "Power On Hours:", &self->power_hours_label);
-    add_info_row_to_grid (id_grid, 2, 5, "Power Cycles:", &self->power_cycles_label);
-    add_info_row_to_grid (id_grid, 0, 6, "Total Reads:", &self->total_read_label);
-    add_info_row_to_grid (id_grid, 2, 6, "Total Writes:", &self->total_written_label);
-    add_info_row_to_grid (id_grid, 0, 7, "Sector Size:", &self->sector_size_label);
-    add_info_row_to_grid (id_grid, 2, 7, "Form Factor:", &self->form_factor_label);
-    add_info_row_to_grid (id_grid, 0, 8, "Rotation Rate:", &self->rotation_rate_label);
-    add_info_row_to_grid (id_grid, 2, 8, "Device Path:", &self->device_path_label);
-    add_info_row_to_grid (id_grid, 0, 9, "Wear Level:", &self->wear_level_label);
-    add_info_row_to_grid (id_grid, 2, 9, "Unsafe Shutdowns:", &self->unsafe_shutdowns_label);
+    add_info_row_to_grid (id_grid, 0, 1, _(PULS_STR_FIELD_FIRMWARE), &self->firmware_label);
+    add_info_row_to_grid (id_grid, 2, 1, _(PULS_STR_FIELD_SERIAL), &self->serial_label);
+    add_info_row_to_grid (id_grid, 0, 2, _(PULS_STR_FIELD_INTERFACE), &self->interface_label);
+    add_info_row_to_grid (id_grid, 2, 2, _(PULS_STR_FIELD_TRANSFER_MODE), &self->transfer_mode_label);
+    add_info_row_to_grid (id_grid, 0, 3, _(PULS_STR_FIELD_STANDARD), &self->standard_label);
+    add_info_row_to_grid (id_grid, 2, 3, _(PULS_STR_FIELD_CAPACITY), &self->capacity_label);
+    add_info_row_to_grid (id_grid, 0, 4, _(PULS_STR_FIELD_TYPE), &self->rotation_label);
+    add_info_row_to_grid (id_grid, 2, 4, _(PULS_STR_FIELD_FEATURES), &self->features_label);
+    add_info_row_to_grid (id_grid, 0, 5, _(PULS_STR_FIELD_POWER_HOURS), &self->power_hours_label);
+    add_info_row_to_grid (id_grid, 2, 5, _(PULS_STR_FIELD_POWER_CYCLES), &self->power_cycles_label);
+    add_info_row_to_grid (id_grid, 0, 6, _(PULS_STR_FIELD_TOTAL_READS), &self->total_read_label);
+    add_info_row_to_grid (id_grid, 2, 6, _(PULS_STR_FIELD_TOTAL_WRITES), &self->total_written_label);
+    add_info_row_to_grid (id_grid, 0, 7, _(PULS_STR_FIELD_SECTOR_SIZE), &self->sector_size_label);
+    add_info_row_to_grid (id_grid, 2, 7, _(PULS_STR_FIELD_FORM_FACTOR), &self->form_factor_label);
+    add_info_row_to_grid (id_grid, 0, 8, _(PULS_STR_FIELD_ROTATION_RATE), &self->rotation_rate_label);
+    add_info_row_to_grid (id_grid, 2, 8, _(PULS_STR_FIELD_DEVICE_PATH), &self->device_path_label);
+    add_info_row_to_grid (id_grid, 0, 9, _(PULS_STR_FIELD_WEAR_LEVEL), &self->wear_level_label);
+    add_info_row_to_grid (id_grid, 2, 9, _(PULS_STR_FIELD_UNSAFE_SHUTDOWNS), &self->unsafe_shutdowns_label);
 
-    GtkWidget *mount_points_key = gtk_label_new ("Mount Points:");
-    gtk_widget_add_css_class (mount_points_key, "info-key");
-    gtk_label_set_xalign (GTK_LABEL (mount_points_key), 0.0);
-    gtk_grid_attach (GTK_GRID (id_grid), mount_points_key, 0, 10, 1, 1);
+    self->mount_points_key_label = gtk_label_new (_(PULS_STR_FIELD_MOUNT_POINTS));
+    gtk_widget_add_css_class (self->mount_points_key_label, "info-key");
+    gtk_label_set_xalign (GTK_LABEL (self->mount_points_key_label), 0.0);
+    gtk_grid_attach (GTK_GRID (id_grid), self->mount_points_key_label, 0, 10, 1, 1);
 
     self->mount_points_label = gtk_label_new ("—");
     gtk_widget_add_css_class (self->mount_points_label, "info-value");
@@ -804,12 +807,12 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
     gtk_widget_set_hexpand (self->mount_points_label, TRUE);
     gtk_grid_attach (GTK_GRID (id_grid), self->mount_points_label, 1, 10, 3, 1);
 
-    add_info_row_to_grid (id_grid, 0, 11, "I/O Scheduler:", &self->io_scheduler_label);
-    add_info_row_to_grid (id_grid, 2, 11, "Read-Ahead:", &self->read_ahead_label);
-    add_info_row_to_grid (id_grid, 0, 12, "Write Cache:", &self->write_cache_label);
-    add_info_row_to_grid (id_grid, 2, 12, "TRIM Support:", &self->trim_support_label);
+    add_info_row_to_grid (id_grid, 0, 11, _(PULS_STR_FIELD_IO_SCHEDULER), &self->io_scheduler_label);
+    add_info_row_to_grid (id_grid, 2, 11, _(PULS_STR_FIELD_READ_AHEAD), &self->read_ahead_label);
+    add_info_row_to_grid (id_grid, 0, 12, _(PULS_STR_FIELD_WRITE_CACHE), &self->write_cache_label);
+    add_info_row_to_grid (id_grid, 2, 12, _(PULS_STR_FIELD_TRIM_SUPPORT), &self->trim_support_label);
 
-    self->partitions_frame = create_section_frame ("Mount Points & Partitions");
+    self->partitions_frame = create_section_frame (_(PULS_STR_SECTION_PARTITIONS));
     gtk_box_append (GTK_BOX (self->content_box), self->partitions_frame);
 
     self->partitions_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 8);
@@ -819,7 +822,7 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
     gtk_widget_set_margin_bottom (self->partitions_box, 12);
     gtk_frame_set_child (GTK_FRAME (self->partitions_frame), self->partitions_box);
 
-    self->diag_frame = create_section_frame ("Diagnostics & Self-Tests");
+    self->diag_frame = create_section_frame (_(PULS_STR_SECTION_DIAGNOSTICS));
     gtk_box_append (GTK_BOX (left_column), self->diag_frame);
 
     self->diag_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 12);
@@ -832,21 +835,21 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
     GtkWidget *btn_row = gtk_box_new (GTK_ORIENTATION_VERTICAL, 8);
     gtk_box_append (GTK_BOX (self->diag_box), btn_row);
 
-    self->short_test_btn = gtk_button_new_with_label ("Run Short Test");
+    self->short_test_btn = gtk_button_new_with_label (_(PULS_STR_BTN_SHORT_TEST));
     gtk_widget_add_css_class (self->short_test_btn, "suggested-action");
     g_signal_connect (self->short_test_btn, "clicked", G_CALLBACK (on_short_test_clicked), self);
     gtk_box_append (GTK_BOX (btn_row), self->short_test_btn);
 
-    self->long_test_btn = gtk_button_new_with_label ("Run Long Test");
+    self->long_test_btn = gtk_button_new_with_label (_(PULS_STR_BTN_LONG_TEST));
     g_signal_connect (self->long_test_btn, "clicked", G_CALLBACK (on_long_test_clicked), self);
     gtk_box_append (GTK_BOX (btn_row), self->long_test_btn);
 
-    self->abort_test_btn = gtk_button_new_with_label ("Abort Active Test");
+    self->abort_test_btn = gtk_button_new_with_label (_(PULS_STR_BTN_ABORT_TEST));
     gtk_widget_add_css_class (self->abort_test_btn, "destructive-action");
     g_signal_connect (self->abort_test_btn, "clicked", G_CALLBACK (on_abort_test_clicked), self);
     gtk_box_append (GTK_BOX (btn_row), self->abort_test_btn);
 
-    self->test_status_label = gtk_label_new ("No diagnostic test currently running.");
+    self->test_status_label = gtk_label_new (_(PULS_STR_TEST_NO_RUNNING));
     gtk_widget_add_css_class (self->test_status_label, "dim-label");
     gtk_label_set_xalign (GTK_LABEL (self->test_status_label), 0.0);
     gtk_box_append (GTK_BOX (self->diag_box), self->test_status_label);
@@ -856,7 +859,7 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
     gtk_box_append (GTK_BOX (self->diag_box), self->test_progress_bar);
 
     /* Real-Time Disk Activity */
-    self->io_graph_frame = create_section_frame ("Real-Time Disk Activity");
+    self->io_graph_frame = create_section_frame (_(PULS_STR_SECTION_IO_ACTIVITY));
     gtk_box_append (GTK_BOX (right_column), self->io_graph_frame);
 
     self->io_graph = puls_io_graph_new ();
@@ -867,7 +870,7 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
     gtk_widget_set_margin_bottom (self->io_graph, 8);
     gtk_frame_set_child (GTK_FRAME (self->io_graph_frame), self->io_graph);
 
-    self->bench_frame = create_section_frame ("Performance Benchmark (CrystalDiskMark style)");
+    self->bench_frame = create_section_frame (_(PULS_STR_SECTION_BENCHMARK));
     gtk_box_append (GTK_BOX (right_column), self->bench_frame);
 
     self->bench_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 8);
@@ -880,7 +883,7 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
     GtkWidget *ctrl_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 12);
     gtk_box_append (GTK_BOX (self->bench_box), ctrl_row);
 
-    GtkWidget *runs_lbl = gtk_label_new ("Runs:");
+    GtkWidget *runs_lbl = gtk_label_new (_(PULS_STR_BENCH_RUNS));
     gtk_widget_add_css_class (runs_lbl, "bold");
     gtk_box_append (GTK_BOX (ctrl_row), runs_lbl);
 
@@ -892,7 +895,7 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
     gtk_combo_box_set_active (GTK_COMBO_BOX (self->bench_runs_combo), 1);
     gtk_box_append (GTK_BOX (ctrl_row), self->bench_runs_combo);
 
-    GtkWidget *size_lbl = gtk_label_new ("Test Size:");
+    GtkWidget *size_lbl = gtk_label_new (_(PULS_STR_BENCH_TEST_SIZE));
     gtk_widget_add_css_class (size_lbl, "bold");
     gtk_box_append (GTK_BOX (ctrl_row), size_lbl);
 
@@ -905,11 +908,11 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
     gtk_combo_box_set_active (GTK_COMBO_BOX (self->bench_size_combo), 1);
     gtk_box_append (GTK_BOX (ctrl_row), self->bench_size_combo);
 
-    self->bench_start_btn = gtk_button_new_with_label ("Start Benchmark");
+    self->bench_start_btn = gtk_button_new_with_label (_(PULS_STR_BTN_START_BENCH));
     gtk_widget_add_css_class (self->bench_start_btn, "suggested-action");
     gtk_box_append (GTK_BOX (ctrl_row), self->bench_start_btn);
 
-    self->bench_stop_btn = gtk_button_new_with_label ("Stop");
+    self->bench_stop_btn = gtk_button_new_with_label (_(PULS_STR_BTN_STOP_BENCH));
     gtk_widget_add_css_class (self->bench_stop_btn, "destructive-action");
     gtk_widget_set_sensitive (self->bench_stop_btn, FALSE);
     gtk_box_append (GTK_BOX (ctrl_row), self->bench_stop_btn);
@@ -920,17 +923,17 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
     gtk_grid_set_column_spacing (GTK_GRID (b_grid), 24);
     gtk_box_append (GTK_BOX (self->bench_box), b_grid);
 
-    GtkWidget *hdr_test = gtk_label_new ("Test");
+    GtkWidget *hdr_test = gtk_label_new (_(PULS_STR_BENCH_HDR_TEST));
     gtk_widget_add_css_class (hdr_test, "bench-header");
     gtk_label_set_xalign (GTK_LABEL (hdr_test), 0.0);
     gtk_grid_attach (GTK_GRID (b_grid), hdr_test, 0, 0, 1, 1);
 
-    GtkWidget *hdr_read = gtk_label_new ("Read (MB/s)");
+    GtkWidget *hdr_read = gtk_label_new (_(PULS_STR_BENCH_HDR_READ));
     gtk_widget_add_css_class (hdr_read, "bench-header");
     gtk_label_set_xalign (GTK_LABEL (hdr_read), 1.0);
     gtk_grid_attach (GTK_GRID (b_grid), hdr_read, 1, 0, 1, 1);
 
-    GtkWidget *hdr_write = gtk_label_new ("Write (MB/s)");
+    GtkWidget *hdr_write = gtk_label_new (_(PULS_STR_BENCH_HDR_WRITE));
     gtk_widget_add_css_class (hdr_write, "bench-header");
     gtk_label_set_xalign (GTK_LABEL (hdr_write), 1.0);
     gtk_grid_attach (GTK_GRID (b_grid), hdr_write, 2, 0, 1, 1);
@@ -961,7 +964,7 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
         gtk_grid_attach (GTK_GRID (b_grid), self->bench_write_labels[i], 2, i + 1, 1, 1);
     }
 
-    self->bench_status_label = gtk_label_new ("Ready to benchmark.");
+    self->bench_status_label = gtk_label_new (_(PULS_STR_BENCH_READY));
     gtk_widget_add_css_class (self->bench_status_label, "dim-label");
     gtk_label_set_xalign (GTK_LABEL (self->bench_status_label), 0.0);
     gtk_box_append (GTK_BOX (self->bench_box), self->bench_status_label);
@@ -976,7 +979,7 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
     g_signal_connect (self->bench_start_btn, "clicked", G_CALLBACK (on_bench_start_clicked), self);
     g_signal_connect (self->bench_stop_btn, "clicked", G_CALLBACK (on_bench_stop_clicked), self);
 
-    self->smart_frame = create_section_frame ("S.M.A.R.T. Attributes");
+    self->smart_frame = create_section_frame (_(PULS_STR_SECTION_SMART));
     gtk_box_append (GTK_BOX (self->content_box), self->smart_frame);
 
     GtkWidget *smart_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
@@ -990,7 +993,7 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
     gtk_widget_set_vexpand (self->smart_table, FALSE);
     gtk_box_append (GTK_BOX (smart_box), self->smart_table);
 
-    self->nvme_frame = create_section_frame ("NVMe Health Information");
+    self->nvme_frame = create_section_frame (_(PULS_STR_SECTION_NVME));
     gtk_box_append (GTK_BOX (self->content_box), self->nvme_frame);
     gtk_widget_set_visible (self->nvme_frame, FALSE);
 
@@ -1004,33 +1007,33 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
     gtk_frame_set_child (GTK_FRAME (self->nvme_frame), self->nvme_grid);
 
     const gchar *nvme_fields[] = {
-        "Critical Warning:",
-        "Available Spare:",
-        "Available Spare Threshold:",
-        "Percentage Used:",
-        "Data Units Read:",
-        "Data Units Written:",
-        "Host Read Commands:",
-        "Host Write Commands:",
-        "Controller Busy Time:",
-        "Power Cycles:",
-        "Power On Hours:",
-        "Unsafe Shutdowns:",
-        "Media Errors:",
-        "Error Log Entries:"
+        _(PULS_STR_NVME_CRITICAL_WARNING),
+        _(PULS_STR_NVME_AVAIL_SPARE),
+        _(PULS_STR_NVME_AVAIL_SPARE_THRESH),
+        _(PULS_STR_NVME_PCT_USED),
+        _(PULS_STR_NVME_DATA_UNITS_READ),
+        _(PULS_STR_NVME_DATA_UNITS_WRITTEN),
+        _(PULS_STR_NVME_HOST_READ_CMDS),
+        _(PULS_STR_NVME_HOST_WRITE_CMDS),
+        _(PULS_STR_NVME_CTRL_BUSY_TIME),
+        _(PULS_STR_NVME_POWER_CYCLES),
+        _(PULS_STR_NVME_POWER_ON_HOURS),
+        _(PULS_STR_NVME_UNSAFE_SHUTDOWNS),
+        _(PULS_STR_NVME_MEDIA_ERRORS),
+        _(PULS_STR_NVME_ERROR_LOG_ENTRIES),
     };
 
     for (gint i = 0; i < 14; i++) {
         self->nvme_labels[i] = create_info_row (self->nvme_grid, i, nvme_fields[i]);
     }
 
-    add_info_row_to_grid (id_grid, 0, 13, "Buffer Size:",     &self->buffer_size_label);
-    add_info_row_to_grid (id_grid, 2, 13, "Error Count:",     &self->error_count_label);
-    add_info_row_to_grid (id_grid, 0, 14, "APM Level:",       &self->apm_label);
-    add_info_row_to_grid (id_grid, 2, 14, "AAM Level:",       &self->aam_label);
-    add_info_row_to_grid (id_grid, 0, 15, "Spin-Up Time:",    &self->spin_up_label);
+    add_info_row_to_grid (id_grid, 0, 13, _(PULS_STR_FIELD_BUFFER_SIZE), &self->buffer_size_label);
+    add_info_row_to_grid (id_grid, 2, 13, _(PULS_STR_FIELD_ERROR_COUNT), &self->error_count_label);
+    add_info_row_to_grid (id_grid, 0, 14, _(PULS_STR_FIELD_APM_LEVEL), &self->apm_label);
+    add_info_row_to_grid (id_grid, 2, 14, _(PULS_STR_FIELD_AAM_LEVEL), &self->aam_label);
+    add_info_row_to_grid (id_grid, 0, 15, _(PULS_STR_FIELD_SPIN_UP_TIME), &self->spin_up_label);
 
-    self->surface_frame = create_section_frame ("Surface Scan (Read-Only)");
+    self->surface_frame = create_section_frame (_(PULS_STR_SECTION_SURFACE_SCAN));
     gtk_box_append (GTK_BOX (self->content_box), self->surface_frame);
 
     GtkWidget *ss_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 8);
@@ -1043,20 +1046,20 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
     GtkWidget *ss_ctrl = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_box_append (GTK_BOX (ss_box), ss_ctrl);
 
-    self->surface_start_btn = gtk_button_new_with_label ("Start Surface Scan");
+    self->surface_start_btn = gtk_button_new_with_label (_(PULS_STR_BTN_START_SURFACE));
     gtk_widget_add_css_class (self->surface_start_btn, "suggested-action");
     g_signal_connect (self->surface_start_btn, "clicked",
                       G_CALLBACK (on_surface_start_clicked), self);
     gtk_box_append (GTK_BOX (ss_ctrl), self->surface_start_btn);
 
-    self->surface_stop_btn = gtk_button_new_with_label ("Stop");
+    self->surface_stop_btn = gtk_button_new_with_label (_(PULS_STR_BTN_STOP_SURFACE));
     gtk_widget_add_css_class (self->surface_stop_btn, "destructive-action");
     gtk_widget_set_sensitive (self->surface_stop_btn, FALSE);
     g_signal_connect (self->surface_stop_btn, "clicked",
                       G_CALLBACK (on_surface_stop_clicked), self);
     gtk_box_append (GTK_BOX (ss_ctrl), self->surface_stop_btn);
 
-    self->surface_status_label = gtk_label_new ("Click \"Start Surface Scan\" to scan all sectors (read-only).");
+    self->surface_status_label = gtk_label_new (_(PULS_STR_SURFACE_HINT));
     gtk_widget_add_css_class (self->surface_status_label, "dim-label");
     gtk_label_set_xalign (GTK_LABEL (self->surface_status_label), 0.0);
     gtk_label_set_wrap   (GTK_LABEL (self->surface_status_label), TRUE);
@@ -1069,20 +1072,20 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
     GtkWidget *ss_results = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 24);
     gtk_box_append (GTK_BOX (ss_box), ss_results);
 
-    self->surface_ok_label = gtk_label_new ("OK: —");
+    self->surface_ok_label = gtk_label_new (_(PULS_STR_SURFACE_OK));
     gtk_widget_add_css_class (self->surface_ok_label, "status-ok");
     gtk_box_append (GTK_BOX (ss_results), self->surface_ok_label);
 
-    self->surface_slow_label = gtk_label_new ("Slow: —");
+    self->surface_slow_label = gtk_label_new (_(PULS_STR_SURFACE_SLOW));
     gtk_widget_add_css_class (self->surface_slow_label, "status-warn");
     gtk_box_append (GTK_BOX (ss_results), self->surface_slow_label);
 
-    self->surface_error_label = gtk_label_new ("Errors: —");
+    self->surface_error_label = gtk_label_new (_(PULS_STR_SURFACE_ERRORS));
     gtk_widget_add_css_class (self->surface_error_label, "status-fail");
     gtk_box_append (GTK_BOX (ss_results), self->surface_error_label);
 
     /* Seek Latency frame (Group I) — appended after surface scan */
-    self->seek_frame = create_section_frame ("Seek Latency Test (Read-Only)");
+    self->seek_frame = create_section_frame (_(PULS_STR_SECTION_SEEK_LATENCY));
     gtk_box_append (GTK_BOX (self->content_box), self->seek_frame);
 
     GtkWidget *sk_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 8);
@@ -1095,12 +1098,12 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
     GtkWidget *sk_ctrl = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_box_append (GTK_BOX (sk_box), sk_ctrl);
 
-    self->seek_start_btn = gtk_button_new_with_label ("Measure Seek Latency");
+    self->seek_start_btn = gtk_button_new_with_label (_(PULS_STR_BTN_SEEK_LATENCY));
     g_signal_connect (self->seek_start_btn, "clicked",
                       G_CALLBACK (on_seek_start_clicked), self);
     gtk_box_append (GTK_BOX (sk_ctrl), self->seek_start_btn);
 
-    self->seek_status_label = gtk_label_new ("200 random reads will be performed (non-destructive).");
+    self->seek_status_label = gtk_label_new (_(PULS_STR_SEEK_HINT));
     gtk_widget_add_css_class (self->seek_status_label, "dim-label");
     gtk_label_set_xalign (GTK_LABEL (self->seek_status_label), 0.0);
     gtk_box_append (GTK_BOX (sk_box), self->seek_status_label);
@@ -1110,7 +1113,7 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
     gtk_grid_set_row_spacing    (GTK_GRID (sk_results), 4);
     gtk_box_append (GTK_BOX (sk_box), sk_results);
 
-    GtkWidget *sk_avg_key = gtk_label_new ("Average:");
+    GtkWidget *sk_avg_key = gtk_label_new (_(PULS_STR_SEEK_AVERAGE));
     gtk_widget_add_css_class (sk_avg_key, "info-key");
     gtk_label_set_xalign (GTK_LABEL (sk_avg_key), 0.0);
     gtk_grid_attach (GTK_GRID (sk_results), sk_avg_key, 0, 0, 1, 1);
@@ -1118,7 +1121,7 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
     gtk_widget_add_css_class (self->seek_avg_label, "info-value");
     gtk_grid_attach (GTK_GRID (sk_results), self->seek_avg_label, 1, 0, 1, 1);
 
-    GtkWidget *sk_min_key = gtk_label_new ("Min:");
+    GtkWidget *sk_min_key = gtk_label_new (_(PULS_STR_SEEK_MIN));
     gtk_widget_add_css_class (sk_min_key, "info-key");
     gtk_label_set_xalign (GTK_LABEL (sk_min_key), 0.0);
     gtk_grid_attach (GTK_GRID (sk_results), sk_min_key, 2, 0, 1, 1);
@@ -1126,7 +1129,7 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
     gtk_widget_add_css_class (self->seek_min_label, "info-value");
     gtk_grid_attach (GTK_GRID (sk_results), self->seek_min_label, 3, 0, 1, 1);
 
-    GtkWidget *sk_max_key = gtk_label_new ("Max:");
+    GtkWidget *sk_max_key = gtk_label_new (_(PULS_STR_SEEK_MAX));
     gtk_widget_add_css_class (sk_max_key, "info-key");
     gtk_label_set_xalign (GTK_LABEL (sk_max_key), 0.0);
     gtk_grid_attach (GTK_GRID (sk_results), sk_max_key, 4, 0, 1, 1);
@@ -1791,4 +1794,44 @@ puls_disk_info_view_set_data (PulsDiskInfoView *self,
     }
     gtk_widget_set_sensitive (self->bench_runs_combo, TRUE);
     gtk_widget_set_sensitive (self->bench_size_combo, TRUE);
+}
+
+static void
+update_frame_title (GtkFrame *frame, const gchar *title)
+{
+    GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+    GtkWidget *lbl = gtk_label_new (title);
+    gtk_widget_add_css_class (lbl, "section-title");
+    gtk_widget_set_margin_start (lbl, 16);
+    gtk_widget_set_margin_top (lbl, 12);
+    gtk_label_set_xalign (GTK_LABEL (lbl), 0.0);
+    gtk_box_append (GTK_BOX (box), lbl);
+    gtk_frame_set_label_widget (frame, box);
+}
+
+void
+puls_disk_info_view_apply_lang (PulsDiskInfoView *self)
+{
+    if (!PULS_IS_DISK_INFO_VIEW (self))
+        return;
+
+    update_frame_title (GTK_FRAME (self->health_frame),     _(PULS_STR_SECTION_HEALTH));
+    update_frame_title (GTK_FRAME (self->identity_frame),   _(PULS_STR_SECTION_DRIVE_INFO));
+    update_frame_title (GTK_FRAME (self->partitions_frame), _(PULS_STR_SECTION_PARTITIONS));
+    update_frame_title (GTK_FRAME (self->diag_frame),       _(PULS_STR_SECTION_DIAGNOSTICS));
+    update_frame_title (GTK_FRAME (self->io_graph_frame),   _(PULS_STR_SECTION_IO_ACTIVITY));
+    update_frame_title (GTK_FRAME (self->bench_frame),      _(PULS_STR_SECTION_BENCHMARK));
+    update_frame_title (GTK_FRAME (self->smart_frame),      _(PULS_STR_SECTION_SMART));
+    update_frame_title (GTK_FRAME (self->nvme_frame),       _(PULS_STR_SECTION_NVME));
+    update_frame_title (GTK_FRAME (self->surface_frame),    _(PULS_STR_SECTION_SURFACE_SCAN));
+    update_frame_title (GTK_FRAME (self->seek_frame),       _(PULS_STR_SECTION_SEEK_LATENCY));
+
+    gtk_button_set_label (GTK_BUTTON (self->short_test_btn),    _(PULS_STR_BTN_SHORT_TEST));
+    gtk_button_set_label (GTK_BUTTON (self->long_test_btn),     _(PULS_STR_BTN_LONG_TEST));
+    gtk_button_set_label (GTK_BUTTON (self->abort_test_btn),    _(PULS_STR_BTN_ABORT_TEST));
+    gtk_button_set_label (GTK_BUTTON (self->bench_start_btn),   _(PULS_STR_BTN_START_BENCH));
+    gtk_button_set_label (GTK_BUTTON (self->bench_stop_btn),    _(PULS_STR_BTN_STOP_BENCH));
+    gtk_button_set_label (GTK_BUTTON (self->surface_start_btn), _(PULS_STR_BTN_START_SURFACE));
+    gtk_button_set_label (GTK_BUTTON (self->surface_stop_btn),  _(PULS_STR_BTN_STOP_SURFACE));
+    gtk_button_set_label (GTK_BUTTON (self->seek_start_btn),    _(PULS_STR_BTN_SEEK_LATENCY));
 }

@@ -22,9 +22,10 @@ G_BEGIN_DECLS
 G_DECLARE_FINAL_TYPE (PulsSmartTable, puls_smart_table,
                       PULS, SMART_TABLE, GtkWidget)
 
-GtkWidget *puls_smart_table_new       (void);
-void       puls_smart_table_set_data  (PulsSmartTable *self,
-                                       PulsSmartData  *data);
-void       puls_smart_table_clear     (PulsSmartTable *self);
+GtkWidget *puls_smart_table_new        (void);
+void       puls_smart_table_set_data   (PulsSmartTable *self,
+                                        PulsSmartData  *data);
+void       puls_smart_table_clear      (PulsSmartTable *self);
+void       puls_smart_table_apply_lang (PulsSmartTable *self);
 
 G_END_DECLS

@@ -13,6 +13,7 @@
 
 #include "puls-preferences-window.h"
 #include "puls-settings.h"
+#include "puls-i18n.h"
 
 struct _PulsPreferencesWindow {
     AdwPreferencesWindow parent_instance;
@@ -155,44 +156,44 @@ puls_preferences_window_init (PulsPreferencesWindow *self)
     adw_preferences_window_add (ADW_PREFERENCES_WINDOW (self), page);
 
     AdwPreferencesGroup *general_group = ADW_PREFERENCES_GROUP (adw_preferences_group_new ());
-    adw_preferences_group_set_title (general_group, "General Settings");
+    adw_preferences_group_set_title (general_group, _(PULS_STR_PREF_GROUP_GENERAL));
     adw_preferences_page_add (page, general_group);
 
     self->theme_row = ADW_COMBO_ROW (adw_combo_row_new ());
-    adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->theme_row), "Interface Theme");
+    adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->theme_row), _(PULS_STR_PREF_THEME));
     adw_preferences_group_add (general_group, GTK_WIDGET (self->theme_row));
 
     g_auto(GStrv) themes = g_new0 (gchar*, 4);
-    themes[0] = g_strdup ("System Default");
-    themes[1] = g_strdup ("Always Light");
-    themes[2] = g_strdup ("Always Dark");
+    themes[0] = g_strdup (_(PULS_STR_PREF_THEME_SYS));
+    themes[1] = g_strdup (_(PULS_STR_PREF_THEME_LIGHT));
+    themes[2] = g_strdup (_(PULS_STR_PREF_THEME_DARK));
     themes[3] = NULL;
     g_autoptr(GtkStringList) theme_list = gtk_string_list_new ((const gchar * const *)themes);
     adw_combo_row_set_model (self->theme_row, G_LIST_MODEL (theme_list));
     g_signal_connect (self->theme_row, "notify::selected", G_CALLBACK (on_theme_changed), self);
 
     self->polling_row = ADW_COMBO_ROW (adw_combo_row_new ());
-    adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->polling_row), "Auto Refresh Rate");
+    adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->polling_row), _(PULS_STR_PREF_POLL_RATE));
     adw_preferences_group_add (general_group, GTK_WIDGET (self->polling_row));
 
     g_auto(GStrv) intervals = g_new0 (gchar*, 6);
-    intervals[0] = g_strdup ("Disabled (Manual)");
-    intervals[1] = g_strdup ("10 seconds");
-    intervals[2] = g_strdup ("30 seconds");
-    intervals[3] = g_strdup ("1 minute");
-    intervals[4] = g_strdup ("5 minutes");
+    intervals[0] = g_strdup (_(PULS_STR_PREF_POLL_DISABLED));
+    intervals[1] = g_strdup (_(PULS_STR_PREF_POLL_10S));
+    intervals[2] = g_strdup (_(PULS_STR_PREF_POLL_30S));
+    intervals[3] = g_strdup (_(PULS_STR_PREF_POLL_1M));
+    intervals[4] = g_strdup (_(PULS_STR_PREF_POLL_5M));
     intervals[5] = NULL;
     g_autoptr(GtkStringList) interval_list = gtk_string_list_new ((const gchar * const *)intervals);
     adw_combo_row_set_model (self->polling_row, G_LIST_MODEL (interval_list));
     g_signal_connect (self->polling_row, "notify::selected", G_CALLBACK (on_polling_changed), self);
 
     AdwPreferencesGroup *temp_group = ADW_PREFERENCES_GROUP (adw_preferences_group_new ());
-    adw_preferences_group_set_title (temp_group, "Temperature &amp; Thresholds");
+    adw_preferences_group_set_title (temp_group, _(PULS_STR_PREF_GROUP_TEMP));
     adw_preferences_page_add (page, temp_group);
 
     AdwActionRow *temp_row = ADW_ACTION_ROW (adw_action_row_new ());
-    adw_preferences_row_set_title (ADW_PREFERENCES_ROW (temp_row), "Use Fahrenheit");
-    adw_action_row_set_subtitle (temp_row, "Display drive temperature in Fahrenheit (°F)");
+    adw_preferences_row_set_title (ADW_PREFERENCES_ROW (temp_row), _(PULS_STR_PREF_FAHRENHEIT));
+    adw_action_row_set_subtitle (temp_row, _(PULS_STR_PREF_FAHRENHEIT_SUB));
     adw_preferences_group_add (temp_group, GTK_WIDGET (temp_row));
 
     self->fahrenheit_switch = gtk_switch_new ();
@@ -201,8 +202,8 @@ puls_preferences_window_init (PulsPreferencesWindow *self)
     g_signal_connect (self->fahrenheit_switch, "notify::active", G_CALLBACK (on_fahrenheit_changed), self);
 
     AdwActionRow *caution_row = ADW_ACTION_ROW (adw_action_row_new ());
-    adw_preferences_row_set_title (ADW_PREFERENCES_ROW (caution_row), "Caution Threshold (°C)");
-    adw_action_row_set_subtitle (caution_row, "Trigger caution warning above this temperature");
+    adw_preferences_row_set_title (ADW_PREFERENCES_ROW (caution_row), _(PULS_STR_PREF_CAUTION_THRESH));
+    adw_action_row_set_subtitle (caution_row, _(PULS_STR_PREF_CAUTION_THRESH_SUB));
     adw_preferences_group_add (temp_group, GTK_WIDGET (caution_row));
 
     GtkAdjustment *adj = gtk_adjustment_new (60.0, 30.0, 90.0, 1.0, 5.0, 0.0);
@@ -222,7 +223,7 @@ puls_preferences_window_new (GtkWindow *parent)
     return g_object_new (PULS_TYPE_PREFERENCES_WINDOW,
                          "transient-for", parent,
                          "modal", TRUE,
-                         "title", "Preferences",
+                         "title", _(PULS_STR_PREF_TITLE),
                          "default-width", 450,
                          "default-height", 400,
                          NULL);

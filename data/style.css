@@ -273,3 +273,18 @@ label {}
     border-radius: 6px;
     padding: 8px;
 }
+button.flat.lang-toggle {
+    font-weight: 700;
+    font-size: 0.82rem;
+    letter-spacing: 0.05em;
+    min-width: 36px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    border: 1px solid alpha(@borders, 0.6);
+    color: @accent_color;
+}
+
+button.flat.lang-toggle:hover {
+    background-color: alpha(@accent_color, 0.12);
+    border-color: @accent_color;
+}

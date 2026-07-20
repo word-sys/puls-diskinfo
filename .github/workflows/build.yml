@@ -1,15 +1,17 @@
-name: Build PULS DiskInfo
+name: Build and Release PULS DiskInfo
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
+    tags: ['v*']
   pull_request:
-    branches: [ main ]
-    
+    branches: [main]
+
 jobs:
   build:
-    name: Build & Package
+    name: Build
     runs-on: ubuntu-22.04
+    if: github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/')
 
     steps:
     - name: Checkout Code
@@ -29,20 +31,80 @@ jobs:
           smartmontools
 
     - name: Setup Build Configuration
-      run: |
-        meson setup build
+      run: meson setup build
 
     - name: Compile Code
+      run: meson compile -C build
+
+  release:
+    name: Release
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Install System Dependencies
       run: |
-        meson compile -C build
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          meson \
+          ninja-build \
+          pkg-config \
+          libgtk-4-dev \
+          libadwaita-1-dev \
+          libjson-glib-dev \
+          smartmontools \
+          debhelper \
+          dpkg-dev \
+          fakeroot
 
     - name: Build Portable Binary Tarball
       run: |
         chmod +x ./packaging/build-binary.sh
         ./packaging/build-binary.sh
 
-    - name: Upload Release Artifacts
-      uses: actions/upload-artifact@v4
+    - name: Create ZIP Archive
+      run: |
+        VERSION=$(grep "version:" meson.build | head -1 | grep -o "'[^']*'" | head -1 | tr -d "'")
+        ARCH="${ARCH:-x86_64}"
+        PKG_NAME="puls-diskinfo-${VERSION}-linux-${ARCH}"
+        cd build-binary
+        zip -r "../dist/${PKG_NAME}.zip" "${PKG_NAME}"
+
+    - name: Copy Standalone Binary
+      run: |
+        VERSION=$(grep "version:" meson.build | head -1 | grep -o "'[^']*'" | head -1 | tr -d "'")
+        ARCH="${ARCH:-x86_64}"
+        cp "build-binary/puls-diskinfo-${VERSION}-linux-${ARCH}/puls-diskinfo" \
+           "dist/puls-diskinfo-${VERSION}-linux-${ARCH}"
+
+    - name: Build Debian Package
+      run: |
+        chmod +x ./packaging/build-deb.sh
+        ./packaging/build-deb.sh
+
+    - name: Extract Changelog Notes
+      id: changelog
+      run: |
+        VERSION=$(grep "version:" meson.build | head -1 | grep -o "'[^']*'" | head -1 | tr -d "'")
+        NOTES=$(awk "/^puls-diskinfo \(${VERSION}\)/,/^ -- /" debian/changelog | head -n -1 | tail -n +2 | sed 's/^  \* /- /')
+        echo "notes<<EOF" >> "$GITHUB_OUTPUT"
+        echo "$NOTES" >> "$GITHUB_OUTPUT"
+        echo "EOF" >> "$GITHUB_OUTPUT"
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
       with:
-        name: puls-diskinfo-release-tarball
-        path: dist/*.tar.gz
+        name: "PULS DiskInfo ${{ github.ref_name }}"
+        body: ${{ steps.changelog.outputs.notes }}
+        files: |
+          dist/*.tar.gz
+          dist/*.zip
+          dist/*.deb
+          dist/puls-diskinfo-*-linux-*
+        fail_on_unmatched_files: false

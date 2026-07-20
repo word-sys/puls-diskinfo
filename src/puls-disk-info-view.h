@@ -25,5 +25,6 @@ G_DECLARE_FINAL_TYPE (PulsDiskInfoView, puls_disk_info_view,
 GtkWidget *puls_disk_info_view_new       (void);
 void       puls_disk_info_view_set_data  (PulsDiskInfoView *self,
                                           PulsSmartData    *data);
+void       puls_disk_info_view_apply_lang (PulsDiskInfoView *self);
 
 G_END_DECLS

@@ -20,9 +20,11 @@
 #include "puls-settings.h"
 #include "puls-utils.h"
 #include "puls-alert-manager.h"
+#include "puls-i18n.h"
+#include "puls-disk-info-view.h"
 
 #ifndef PULS_VERSION
-#define PULS_VERSION "1.1.1"
+#define PULS_VERSION "1.1.2"
 #endif
 
 struct _PulsWindow {
@@ -30,6 +32,7 @@ struct _PulsWindow {
 
     GtkWidget *header_bar;
     GtkWidget *refresh_button;
+    GtkWidget *lang_button;
     GtkWidget *menu_button;
 
     GtkWidget *toast_overlay;
@@ -40,6 +43,8 @@ struct _PulsWindow {
     GtkWidget *status_label;
 
     GtkWidget *no_disks_page;
+    GtkWidget *empty_label;
+    GtkWidget *empty_detail;
 
     PulsDiskManager *manager;
     PulsSettings    *settings;
@@ -61,6 +66,7 @@ static void on_disk_added     (PulsDiskManager *manager,
 static void on_refresh_clicked (GtkButton *button G_GNUC_UNUSED, PulsWindow *self);
 static void refresh_current_disk (PulsWindow *self);
 static void update_timer (PulsWindow *self);
+static void puls_window_apply_lang (PulsWindow *self);
 
 static void
 action_about (GSimpleAction *action G_GNUC_UNUSED,
@@ -305,9 +311,9 @@ on_save_report_response (GtkNativeDialog *dialog,
                 if (g_file_set_contents (path, report_html, -1, &error)) {
                     adw_toast_overlay_add_toast (
                         ADW_TOAST_OVERLAY (self->toast_overlay),
-                        adw_toast_new ("Report saved successfully."));
+                        adw_toast_new (_(PULS_STR_REPORT_SAVED_OK)));
                 } else {
-                    g_autofree gchar *err_msg = g_strdup_printf ("Failed to save report: %s", error->message);
+                    g_autofree gchar *err_msg = g_strdup_printf (_(PULS_STR_REPORT_SAVE_FAILED), error->message);
                     adw_toast_overlay_add_toast (
                         ADW_TOAST_OVERLAY (self->toast_overlay),
                         adw_toast_new (err_msg));
@@ -329,11 +335,11 @@ action_export_report (GSimpleAction *action G_GNUC_UNUSED,
     PulsWindow *self = PULS_WINDOW (user_data);
 
     GtkFileChooserNative *native = gtk_file_chooser_native_new (
-        "Save Diagnostic Report",
+        _(PULS_STR_REPORT_SAVE_TITLE),
         GTK_WINDOW (self),
         GTK_FILE_CHOOSER_ACTION_SAVE,
-        "Save",
-        "Cancel"
+        _(PULS_STR_REPORT_SAVE_BTN),
+        _(PULS_STR_REPORT_CANCEL_BTN)
     );
 
     gtk_file_chooser_set_current_name (GTK_FILE_CHOOSER (native), "puls-diskinfo-report.html");
@@ -359,7 +365,7 @@ action_view_alert_log (GSimpleAction *action G_GNUC_UNUSED,
 
     GString *msg = g_string_new ("");
     if (log == NULL || log->len == 0) {
-        g_string_append (msg, "No alerts recorded in this session.");
+        g_string_append (msg, _(PULS_STR_ALERT_LOG_EMPTY));
     } else {
         for (guint i = 0; i < log->len; i++) {
             PulsAlertEntry *e = g_ptr_array_index (log, i);
@@ -376,7 +382,7 @@ action_view_alert_log (GSimpleAction *action G_GNUC_UNUSED,
         GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
         GTK_MESSAGE_INFO,
         GTK_BUTTONS_OK,
-        "Alert Log"
+        "%s", _(PULS_STR_ALERT_LOG_TITLE)
     );
     gtk_message_dialog_format_secondary_text (
         GTK_MESSAGE_DIALOG (dialog), "%s", msg->str);
@@ -400,12 +406,12 @@ static GMenuModel *
 create_app_menu (void)
 {
     GMenu *menu = g_menu_new ();
-    g_menu_append (menu, "Refresh All",          "win.refresh");
-    g_menu_append (menu, "Export HTML Report",   "win.export-report");
-    g_menu_append (menu, "View Alert Log",        "win.alert-log");
-    g_menu_append (menu, "Preferences",           "win.preferences");
-    g_menu_append (menu, "About PULS DiskInfo",   "win.about");
-    g_menu_append (menu, "Quit",                  "win.quit");
+    g_menu_append (menu, _(PULS_STR_MENU_REFRESH_ALL),     "win.refresh");
+    g_menu_append (menu, _(PULS_STR_MENU_EXPORT_REPORT),   "win.export-report");
+    g_menu_append (menu, _(PULS_STR_MENU_ALERT_LOG),       "win.alert-log");
+    g_menu_append (menu, _(PULS_STR_MENU_PREFERENCES),     "win.preferences");
+    g_menu_append (menu, _(PULS_STR_MENU_ABOUT),           "win.about");
+    g_menu_append (menu, _(PULS_STR_MENU_QUIT),            "win.quit");
     return G_MENU_MODEL (menu);
 }
 
@@ -429,8 +435,7 @@ on_refresh_done (GObject      *source G_GNUC_UNUSED,
     g_autofree gchar *time_str = g_date_time_format (now, "%H:%M:%S");
     g_date_time_unref (now);
 
-    g_autofree gchar *status = g_strdup_printf ("Last refreshed: %s",
-                                                 time_str);
+    g_autofree gchar *status = g_strdup_printf (_(PULS_STR_STATUS_LAST_REFRESHED), time_str);
     gtk_label_set_text (GTK_LABEL (self->status_label), status);
 
     gtk_widget_set_sensitive (self->refresh_button, TRUE);
@@ -469,7 +474,7 @@ refresh_current_disk (PulsWindow *self)
         return;
 
     gtk_widget_set_sensitive (self->refresh_button, FALSE);
-    gtk_label_set_text (GTK_LABEL (self->status_label), "Refreshing…");
+    gtk_label_set_text (GTK_LABEL (self->status_label), _(PULS_STR_STATUS_REFRESHING));
 
     puls_disk_manager_refresh_async (self->manager, selected, NULL,
                                      on_refresh_done, self);
@@ -583,12 +588,44 @@ puls_window_class_init (PulsWindowClass *klass)
 }
 
 static void
+on_lang_button_clicked (GtkButton *btn G_GNUC_UNUSED, PulsWindow *self)
+{
+    PulsLang new_lang = (puls_i18n_get_lang () == PULS_LANG_EN) ? PULS_LANG_TR : PULS_LANG_EN;
+    puls_i18n_set_lang (new_lang);
+    puls_settings_set_language (self->settings, (gint)new_lang);
+    puls_window_apply_lang (self);
+}
+
+static void
+puls_window_apply_lang (PulsWindow *self)
+{
+    gtk_button_set_label (GTK_BUTTON (self->lang_button), _(PULS_STR_LANG_BUTTON_LABEL));
+    gtk_widget_set_tooltip_text (self->refresh_button, _(PULS_STR_REFRESH_TOOLTIP));
+
+    gtk_menu_button_set_menu_model (GTK_MENU_BUTTON (self->menu_button),
+                                    create_app_menu ());
+
+    gtk_label_set_text (GTK_LABEL (self->empty_label),  _(PULS_STR_SCANNING_FOR_DISKS));
+    gtk_label_set_text (GTK_LABEL (self->empty_detail), _(PULS_STR_SMARTMONTOOLS_HINT));
+
+    GHashTableIter iter;
+    gpointer key, value;
+    g_hash_table_iter_init (&iter, self->info_views);
+    while (g_hash_table_iter_next (&iter, &key, &value)) {
+        puls_disk_info_view_apply_lang (PULS_DISK_INFO_VIEW (value));
+    }
+}
+
+static void
 puls_window_init (PulsWindow *self)
 {
     self->info_views = g_hash_table_new_full (g_str_hash, g_str_equal,
                                               g_free, NULL);
     self->refresh_timer_id = 0;
     self->settings = puls_settings_get_default ();
+
+    gint saved_lang = puls_settings_get_language (self->settings);
+    puls_i18n_set_lang (saved_lang == 1 ? PULS_LANG_TR : PULS_LANG_EN);
 
     gtk_window_set_title (GTK_WINDOW (self), "PULS DiskInfo");
     gtk_window_set_default_size (GTK_WINDOW (self), 920, 720);
@@ -614,12 +651,21 @@ puls_window_init (PulsWindow *self)
     gtk_box_append (GTK_BOX (self->main_box), self->header_bar);
 
     self->refresh_button = gtk_button_new_from_icon_name ("view-refresh-symbolic");
-    gtk_widget_set_tooltip_text (self->refresh_button, "Refresh SMART data");
+    gtk_widget_set_tooltip_text (self->refresh_button, _(PULS_STR_REFRESH_TOOLTIP));
     gtk_widget_add_css_class (self->refresh_button, "flat");
     g_signal_connect (self->refresh_button, "clicked",
                       G_CALLBACK (on_refresh_clicked), self);
     adw_header_bar_pack_start (ADW_HEADER_BAR (self->header_bar),
                                self->refresh_button);
+
+    self->lang_button = gtk_button_new_with_label (_(PULS_STR_LANG_BUTTON_LABEL));
+    gtk_widget_add_css_class (self->lang_button, "flat");
+    gtk_widget_add_css_class (self->lang_button, "lang-toggle");
+    gtk_widget_set_tooltip_text (self->lang_button, "Switch language / Dil değiştir");
+    g_signal_connect (self->lang_button, "clicked",
+                      G_CALLBACK (on_lang_button_clicked), self);
+    adw_header_bar_pack_start (ADW_HEADER_BAR (self->header_bar),
+                               self->lang_button);
 
     self->menu_button = gtk_menu_button_new ();
     gtk_menu_button_set_icon_name (GTK_MENU_BUTTON (self->menu_button),
@@ -660,15 +706,14 @@ puls_window_init (PulsWindow *self)
     gtk_widget_add_css_class (empty_icon, "dim-label");
     gtk_box_append (GTK_BOX (self->no_disks_page), empty_icon);
 
-    GtkWidget *empty_label = gtk_label_new ("Scanning for disks…");
-    gtk_widget_add_css_class (empty_label, "dim-label");
-    gtk_widget_add_css_class (empty_label, "title-2");
-    gtk_box_append (GTK_BOX (self->no_disks_page), empty_label);
+    self->empty_label = gtk_label_new (_(PULS_STR_SCANNING_FOR_DISKS));
+    gtk_widget_add_css_class (self->empty_label, "dim-label");
+    gtk_widget_add_css_class (self->empty_label, "title-2");
+    gtk_box_append (GTK_BOX (self->no_disks_page), self->empty_label);
 
-    GtkWidget *empty_detail = gtk_label_new (
-        "Make sure smartmontools is installed and you have permission to read disk data.");
-    gtk_widget_add_css_class (empty_detail, "dim-label");
-    gtk_box_append (GTK_BOX (self->no_disks_page), empty_detail);
+    self->empty_detail = gtk_label_new (_(PULS_STR_SMARTMONTOOLS_HINT));
+    gtk_widget_add_css_class (self->empty_detail, "dim-label");
+    gtk_box_append (GTK_BOX (self->no_disks_page), self->empty_detail);
 
     gtk_stack_add_named (GTK_STACK (self->info_stack), self->no_disks_page,
                          "empty");
@@ -685,7 +730,7 @@ puls_window_init (PulsWindow *self)
     gtk_widget_set_margin_bottom (self->status_bar, 6);
     gtk_box_append (GTK_BOX (self->main_box), self->status_bar);
 
-    self->status_label = gtk_label_new ("Starting…");
+    self->status_label = gtk_label_new (_(PULS_STR_STATUS_STARTING));
     gtk_widget_add_css_class (self->status_label, "status-text");
     gtk_widget_set_hexpand (self->status_label, TRUE);
     gtk_label_set_xalign (GTK_LABEL (self->status_label), 0.0);
@@ -698,8 +743,8 @@ puls_window_init (PulsWindow *self)
                                                    G_CALLBACK (on_settings_changed), self);
 
     guint count = puls_disk_manager_get_device_count (self->manager);
-    g_autofree gchar *init_status = g_strdup_printf (
-        "Found %u disk%s", count, count == 1 ? "" : "s");
+    const gchar *fmt = (count == 1) ? _(PULS_STR_STATUS_FOUND_DISK) : _(PULS_STR_STATUS_FOUND_DISKS);
+    g_autofree gchar *init_status = g_strdup_printf (fmt, count);
     gtk_label_set_text (GTK_LABEL (self->status_label), init_status);
 }
 
@@ -710,3 +755,4 @@ puls_window_new (PulsApplication *app)
                          "application", app,
                          NULL);
 }
+

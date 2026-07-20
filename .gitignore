@@ -1,5 +1,6 @@
 build/
 build-binary/
+dist/
 *.o
 *.so
 *.a
@@ -14,3 +15,6 @@ puls-diskinfo-helper
 *.log
 __pycache__/
 *.pyc
+compile_commands.json
+*.AppImage
+*.appimage

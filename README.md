@@ -1,3 +1,6 @@
+![Dil TR](https://github.com/word-sys/puls-diskinfo/blob/main/README_TR.md)
+
+
 # PULS DiskInfo
 
 A professional-grade, highly detailed storage health and S.M.A.R.T. monitoring application for Linux, built with **GTK4** and **C**. Inspired by CrystalDiskInfo, it displays critical health status, temperatures, and detailed drive attributes.
@@ -65,12 +68,12 @@ You can generate a self-contained release package with helper binaries, desktop 
 # Build the portable tarball
 ./packaging/build-binary.sh
 ```
-The tarball will be saved in `dist/puls-diskinfo-1.0.0-linux-x86_64.tar.gz`.
+The tarball will be saved in `dist/puls-diskinfo-1.1.2-linux-x86_64.tar.gz`.
 
 To install from the tarball:
 ```bash
-tar xzf dist/puls-diskinfo-1.0.0-linux-x86_64.tar.gz
-cd puls-diskinfo-1.0.0-linux-x86_64
+tar xzf dist/puls-diskinfo-1.1.2-linux-x86_64.tar.gz
+cd puls-diskinfo-1.1.2-linux-x86_64
 sudo ./install.sh
 ```
 

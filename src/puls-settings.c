@@ -27,6 +27,7 @@ struct _PulsSettings {
     gboolean alerts_enabled;
     gint     alert_temp_threshold;
     gint     alert_health_threshold;
+    gint     language;
 };
 
 G_DEFINE_TYPE (PulsSettings, puls_settings, G_TYPE_OBJECT)
@@ -101,6 +102,9 @@ puls_settings_load (PulsSettings *self)
 
         if (json_object_has_member (root, "alert_health_threshold"))
             self->alert_health_threshold = json_object_get_int_member (root, "alert_health_threshold");
+
+        if (json_object_has_member (root, "language"))
+            self->language = json_object_get_int_member (root, "language");
     }
 }
 
@@ -114,6 +118,7 @@ puls_settings_init (PulsSettings *self)
     self->alerts_enabled        = TRUE;
     self->alert_temp_threshold   = 55;
     self->alert_health_threshold = 80;
+    self->language               = 0;
 
     puls_settings_load (self);
 }
@@ -234,6 +239,9 @@ puls_settings_save (PulsSettings *self)
     json_builder_set_member_name (builder, "alert_health_threshold");
     json_builder_add_int_value (builder, self->alert_health_threshold);
 
+    json_builder_set_member_name (builder, "language");
+    json_builder_add_int_value (builder, self->language);
+
     json_builder_end_object (builder);
 
     g_autoptr(JsonGenerator) gen = json_generator_new ();
@@ -299,5 +307,22 @@ puls_settings_set_alert_health_threshold (PulsSettings *self, gint val)
         self->alert_health_threshold = val;
         puls_settings_save (self);
         g_signal_emit (self, settings_changed_signal, 0);
+    }
+}
+
+gint
+puls_settings_get_language (PulsSettings *self)
+{
+    g_return_val_if_fail (PULS_IS_SETTINGS (self), 0);
+    return self->language;
+}
+
+void
+puls_settings_set_language (PulsSettings *self, gint val)
+{
+    g_return_if_fail (PULS_IS_SETTINGS (self));
+    if (self->language != val) {
+        self->language = val;
+        puls_settings_save (self);
     }
 }

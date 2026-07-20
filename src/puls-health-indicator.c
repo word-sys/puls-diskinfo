@@ -12,6 +12,7 @@
  */
 
 #include "puls-health-indicator.h"
+#include "puls-i18n.h"
 
 struct _PulsHealthIndicator {
     GtkWidget parent_instance;
@@ -31,25 +32,25 @@ G_DEFINE_TYPE (PulsHealthIndicator, puls_health_indicator, GTK_TYPE_WIDGET)
 static void
 update_display (PulsHealthIndicator *self)
 {
-    const gchar *text      = "UNKNOWN";
+    const gchar *text      = _(PULS_STR_HEALTH_UNKNOWN);
     const gchar *css_class = "health-unknown";
 
     switch (self->status) {
     case PULS_HEALTH_GOOD:
-        text      = "GOOD";
+        text      = _(PULS_STR_HEALTH_GOOD);
         css_class = "health-good";
         break;
     case PULS_HEALTH_CAUTION:
-        text      = "CAUTION";
+        text      = _(PULS_STR_HEALTH_CAUTION);
         css_class = "health-caution";
         break;
     case PULS_HEALTH_BAD:
-        text      = "BAD";
+        text      = _(PULS_STR_HEALTH_BAD);
         css_class = "health-bad";
         break;
     case PULS_HEALTH_UNKNOWN:
     default:
-        text      = "UNKNOWN";
+        text      = _(PULS_STR_HEALTH_UNKNOWN);
         css_class = "health-unknown";
         break;
     }
@@ -62,7 +63,6 @@ update_display (PulsHealthIndicator *self)
         gtk_widget_remove_css_class (GTK_WIDGET (self), classes[i]);
     gtk_widget_add_css_class (GTK_WIDGET (self), css_class);
 
-    /* Health % sub-label */
     if (self->health_pct >= 0) {
         g_autofree gchar *pct_str = g_strdup_printf ("%d%%", self->health_pct);
         gtk_label_set_text (GTK_LABEL (self->pct_label), pct_str);
@@ -71,16 +71,17 @@ update_display (PulsHealthIndicator *self)
         gtk_widget_set_visible (self->pct_label, FALSE);
     }
 
-    /* Estimated lifetime sub-label */
     if (self->lifetime_days >= 0) {
         g_autofree gchar *lt_str = NULL;
         if (self->lifetime_days >= 365)
-            lt_str = g_strdup_printf ("Est. %.1f yr remaining",
+            lt_str = g_strdup_printf (_(PULS_STR_HEALTH_EST_YEARS),
                                       (double)self->lifetime_days / 365.25);
+        else if (self->lifetime_days == 1)
+            lt_str = g_strdup_printf (_(PULS_STR_HEALTH_EST_DAY),
+                                      self->lifetime_days);
         else
-            lt_str = g_strdup_printf ("Est. %d day%s remaining",
-                                      self->lifetime_days,
-                                      self->lifetime_days == 1 ? "" : "s");
+            lt_str = g_strdup_printf (_(PULS_STR_HEALTH_EST_DAYS),
+                                      self->lifetime_days);
         gtk_label_set_text (GTK_LABEL (self->lifetime_label), lt_str);
         gtk_widget_set_visible (self->lifetime_label, TRUE);
     } else {

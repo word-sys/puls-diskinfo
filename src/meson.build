@@ -20,6 +20,7 @@ puls_sources = files(
   'puls-surface-scan.c',
   'puls-alert-manager.c',
   'puls-smart-history.c',
+  'puls-i18n.c',
 )
 
 executable('puls-diskinfo',

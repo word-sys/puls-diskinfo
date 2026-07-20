@@ -13,6 +13,7 @@
 
 #include "puls-smart-table.h"
 #include "puls-smart-history.h"
+#include "puls-i18n.h"
 
 #define PULS_TYPE_ATTR_ROW (puls_attr_row_get_type ())
 G_DECLARE_FINAL_TYPE (PulsAttrRow, puls_attr_row, PULS, ATTR_ROW, GObject)
@@ -78,7 +79,17 @@ struct _PulsSmartTable {
     GtkWidget      *empty_label;
     GtkWidget      *stack;
     GListStore     *store;
+
+    GtkColumnViewColumn *col_id;
+    GtkColumnViewColumn *col_name;
+    GtkColumnViewColumn *col_current;
+    GtkColumnViewColumn *col_worst;
+    GtkColumnViewColumn *col_thresh;
+    GtkColumnViewColumn *col_raw;
+    GtkColumnViewColumn *col_status;
+    GtkColumnViewColumn *col_trend;
 };
+
 
 G_DEFINE_TYPE (PulsSmartTable, puls_smart_table, GTK_TYPE_WIDGET)
 
@@ -192,17 +203,17 @@ bind_status_cell (GtkListItemFactory *factory G_GNUC_UNUSED,
     gtk_widget_remove_css_class (label, "status-fail");
 
     if (row->failing_now) {
-        gtk_label_set_text (GTK_LABEL (label), "● FAIL");
+        gtk_label_set_text (GTK_LABEL (label), _(PULS_STR_SMART_STATUS_FAIL));
         gtk_widget_add_css_class (label, "status-fail");
     } else if (row->failed_past) {
-        gtk_label_set_text (GTK_LABEL (label), "● Past");
+        gtk_label_set_text (GTK_LABEL (label), _(PULS_STR_SMART_STATUS_PAST));
         gtk_widget_add_css_class (label, "status-warn");
     } else if (row->threshold > 0 && row->current > 0 &&
                row->current - row->threshold <= 10) {
-        gtk_label_set_text (GTK_LABEL (label), "● Warn");
+        gtk_label_set_text (GTK_LABEL (label), _(PULS_STR_SMART_STATUS_WARN));
         gtk_widget_add_css_class (label, "status-warn");
     } else {
-        gtk_label_set_text (GTK_LABEL (label), "● OK");
+        gtk_label_set_text (GTK_LABEL (label), _(PULS_STR_SMART_STATUS_OK));
         gtk_widget_add_css_class (label, "status-ok");
     }
 }
@@ -221,20 +232,20 @@ bind_trend_cell (GtkListItemFactory *factory G_GNUC_UNUSED,
 
     switch (row->trend) {
     case PULS_ATTR_TREND_IMPROVING:
-        gtk_label_set_text (GTK_LABEL (label), "↑");
+        gtk_label_set_text (GTK_LABEL (label), "\xe2\x86\x91");
         gtk_widget_add_css_class (label, "trend-improving");
-        gtk_widget_set_tooltip_text (label, "Improving since last snapshot");
+        gtk_widget_set_tooltip_text (label, _(PULS_STR_SMART_TREND_IMPROVING));
         break;
     case PULS_ATTR_TREND_DEGRADING:
-        gtk_label_set_text (GTK_LABEL (label), "↓");
+        gtk_label_set_text (GTK_LABEL (label), "\xe2\x86\x93");
         gtk_widget_add_css_class (label, "trend-degrading");
-        gtk_widget_set_tooltip_text (label, "Degrading since last snapshot");
+        gtk_widget_set_tooltip_text (label, _(PULS_STR_SMART_TREND_DEGRADING));
         break;
     case PULS_ATTR_TREND_STABLE:
     default:
-        gtk_label_set_text (GTK_LABEL (label), "—");
+        gtk_label_set_text (GTK_LABEL (label), "\xe2\x80\x94");
         gtk_widget_add_css_class (label, "trend-stable");
-        gtk_widget_set_tooltip_text (label, "Stable");
+        gtk_widget_set_tooltip_text (label, _(PULS_STR_SMART_TREND_STABLE));
         break;
     }
 }
@@ -286,7 +297,7 @@ puls_smart_table_init (PulsSmartTable *self)
     gtk_widget_set_vexpand (self->stack, TRUE);
     gtk_widget_set_hexpand (self->stack, TRUE);
 
-    self->empty_label = gtk_label_new ("No S.M.A.R.T. attributes available");
+    self->empty_label = gtk_label_new (_(PULS_STR_SMART_NO_ATTRS));
     gtk_widget_add_css_class (self->empty_label, "dim-label");
     gtk_stack_add_named (GTK_STACK (self->stack), self->empty_label, "empty");
 
@@ -297,22 +308,23 @@ puls_smart_table_init (PulsSmartTable *self)
     gtk_column_view_set_show_row_separators (GTK_COLUMN_VIEW (self->column_view), TRUE);
     gtk_column_view_set_show_column_separators (GTK_COLUMN_VIEW (self->column_view), TRUE);
 
-    gtk_column_view_append_column (GTK_COLUMN_VIEW (self->column_view),
-        create_column ("ID", 50, G_CALLBACK (bind_id_cell)));
-    gtk_column_view_append_column (GTK_COLUMN_VIEW (self->column_view),
-        create_column ("Attribute Name", -1, G_CALLBACK (bind_name_cell)));
-    gtk_column_view_append_column (GTK_COLUMN_VIEW (self->column_view),
-        create_column ("Current", 80, G_CALLBACK (bind_current_cell)));
-    gtk_column_view_append_column (GTK_COLUMN_VIEW (self->column_view),
-        create_column ("Worst", 70, G_CALLBACK (bind_worst_cell)));
-    gtk_column_view_append_column (GTK_COLUMN_VIEW (self->column_view),
-        create_column ("Thresh", 70, G_CALLBACK (bind_threshold_cell)));
-    gtk_column_view_append_column (GTK_COLUMN_VIEW (self->column_view),
-        create_column ("Raw Value", 200, G_CALLBACK (bind_raw_cell)));
-    gtk_column_view_append_column (GTK_COLUMN_VIEW (self->column_view),
-        create_column ("Status", 80, G_CALLBACK (bind_status_cell)));
-    gtk_column_view_append_column (GTK_COLUMN_VIEW (self->column_view),
-        create_column ("Trend", 55, G_CALLBACK (bind_trend_cell)));
+    self->col_id = create_column (_(PULS_STR_SMART_COL_ID),      50, G_CALLBACK (bind_id_cell));
+    self->col_name = create_column (_(PULS_STR_SMART_COL_NAME),  -1, G_CALLBACK (bind_name_cell));
+    self->col_current = create_column (_(PULS_STR_SMART_COL_CURRENT), 80, G_CALLBACK (bind_current_cell));
+    self->col_worst = create_column (_(PULS_STR_SMART_COL_WORST),  70, G_CALLBACK (bind_worst_cell));
+    self->col_thresh = create_column (_(PULS_STR_SMART_COL_THRESH), 70, G_CALLBACK (bind_threshold_cell));
+    self->col_raw = create_column (_(PULS_STR_SMART_COL_RAW),    200, G_CALLBACK (bind_raw_cell));
+    self->col_status = create_column (_(PULS_STR_SMART_COL_STATUS), 80, G_CALLBACK (bind_status_cell));
+    self->col_trend = create_column (_(PULS_STR_SMART_COL_TREND),  55, G_CALLBACK (bind_trend_cell));
+
+    gtk_column_view_append_column (GTK_COLUMN_VIEW (self->column_view), self->col_id);
+    gtk_column_view_append_column (GTK_COLUMN_VIEW (self->column_view), self->col_name);
+    gtk_column_view_append_column (GTK_COLUMN_VIEW (self->column_view), self->col_current);
+    gtk_column_view_append_column (GTK_COLUMN_VIEW (self->column_view), self->col_worst);
+    gtk_column_view_append_column (GTK_COLUMN_VIEW (self->column_view), self->col_thresh);
+    gtk_column_view_append_column (GTK_COLUMN_VIEW (self->column_view), self->col_raw);
+    gtk_column_view_append_column (GTK_COLUMN_VIEW (self->column_view), self->col_status);
+    gtk_column_view_append_column (GTK_COLUMN_VIEW (self->column_view), self->col_trend);
 
     self->scrolled_window = gtk_scrolled_window_new ();
     gtk_scrolled_window_set_min_content_height (
@@ -373,4 +385,21 @@ puls_smart_table_clear (PulsSmartTable *self)
     g_return_if_fail (PULS_IS_SMART_TABLE (self));
     g_list_store_remove_all (self->store);
     gtk_stack_set_visible_child_name (GTK_STACK (self->stack), "empty");
+}
+
+void
+puls_smart_table_apply_lang (PulsSmartTable *self)
+{
+    g_return_if_fail (PULS_IS_SMART_TABLE (self));
+
+    gtk_label_set_text (GTK_LABEL (self->empty_label), _(PULS_STR_SMART_NO_ATTRS));
+
+    gtk_column_view_column_set_title (self->col_id,      _(PULS_STR_SMART_COL_ID));
+    gtk_column_view_column_set_title (self->col_name,    _(PULS_STR_SMART_COL_NAME));
+    gtk_column_view_column_set_title (self->col_current, _(PULS_STR_SMART_COL_CURRENT));
+    gtk_column_view_column_set_title (self->col_worst,   _(PULS_STR_SMART_COL_WORST));
+    gtk_column_view_column_set_title (self->col_thresh,  _(PULS_STR_SMART_COL_THRESH));
+    gtk_column_view_column_set_title (self->col_raw,     _(PULS_STR_SMART_COL_RAW));
+    gtk_column_view_column_set_title (self->col_status,  _(PULS_STR_SMART_COL_STATUS));
+    gtk_column_view_column_set_title (self->col_trend,   _(PULS_STR_SMART_COL_TREND));
 }
