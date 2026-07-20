@@ -5,6 +5,15 @@
 
 A professional-grade, highly detailed storage health and S.M.A.R.T. monitoring application for Linux, built with **GTK4** and **C**. Inspired by CrystalDiskInfo, it displays critical health status, temperatures, and detailed drive attributes.
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/word-sys/puls-diskinfo/main/screenshots/ss1.png" width="49%">
+  <img src="https://raw.githubusercontent.com/word-sys/puls-diskinfo/main/screenshots/ss2.png" width="49%">
+</p>
+<p align="center">
+  <img src="https://raw.githubusercontent.com/word-sys/puls-diskinfo/main/screenshots/ss3.png" width="49%">
+  <img src="https://raw.githubusercontent.com/word-sys/puls-diskinfo/main/screenshots/ss4.png" width="49%">
+</p>
+
 ---
 
 ## Features
