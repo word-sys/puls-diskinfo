@@ -13,9 +13,10 @@
 
 #include "puls-about-dialog.h"
 #include "puls-utils.h"
+#include "puls-i18n.h"
 
 #ifndef PULS_VERSION
-#define PULS_VERSION "1.1.1"
+#define PULS_VERSION "1.1.2"
 #endif
 
 void
@@ -31,13 +32,9 @@ puls_show_about_dialog (GtkWindow *parent)
 
     g_autofree gchar *comments = NULL;
     if (smartctl_ver)
-        comments = g_strdup_printf (
-            "Disk health and S.M.A.R.T. monitoring for Linux.\n\n"
-            "Backend: %s", smartctl_ver);
+        comments = g_strdup_printf (_(PULS_STR_ABOUT_COMMENTS), smartctl_ver);
     else
-        comments = g_strdup (
-            "Disk health and S.M.A.R.T. monitoring for Linux.\n\n"
-            "Warning: smartmontools not found!");
+        comments = g_strdup (_(PULS_STR_ABOUT_NO_SMART));
 
     GtkWidget *dialog = gtk_about_dialog_new ();
     gtk_about_dialog_set_program_name (GTK_ABOUT_DIALOG (dialog), "PULS DiskInfo");

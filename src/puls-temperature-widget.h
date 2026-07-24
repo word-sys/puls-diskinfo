@@ -25,5 +25,6 @@ GtkWidget *puls_temperature_widget_new             (void);
 void       puls_temperature_widget_set_temperature  (PulsTemperatureWidget *self,
                                                      gint                   celsius);
 gint       puls_temperature_widget_get_temperature  (PulsTemperatureWidget *self);
+void       puls_temperature_widget_apply_lang       (PulsTemperatureWidget *self);
 
 G_END_DECLS

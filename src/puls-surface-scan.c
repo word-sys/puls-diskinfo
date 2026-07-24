@@ -15,6 +15,7 @@
 #define _GNU_SOURCE
 #include "puls-surface-scan.h"
 
+#include <stdio.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
@@ -107,6 +108,27 @@ emit_finished (PulsSurfaceFinishedFunc cb,
     g_idle_add (emit_finished_idle, f);
 }
 
+static ssize_t
+read_block_full (int fd, void *buf, gsize count, gboolean is_pipe, off_t offset)
+{
+    if (!is_pipe) {
+        return pread (fd, buf, count, offset);
+    }
+
+    gsize total = 0;
+    gchar *ptr = (gchar *)buf;
+    while (total < count) {
+        ssize_t nr = read (fd, ptr + total, count - total);
+        if (nr < 0) {
+            if (errno == EINTR) continue;
+            return (total > 0) ? (ssize_t)total : -1;
+        }
+        if (nr == 0) break;
+        total += nr;
+    }
+    return (ssize_t)total;
+}
+
 static void
 surface_scan_thread (GTask        *task,
                      gpointer      source_object G_GNUC_UNUSED,
@@ -119,10 +141,30 @@ surface_scan_thread (GTask        *task,
     gboolean scan_cancelled = FALSE;
     gchar   *error_msg      = NULL;
 
+    const gchar *dev_name = strrchr (d->device_path, '/');
+    dev_name = dev_name ? dev_name + 1 : d->device_path;
+
+    guint64 dev_size = 0;
+    g_autofree gchar *sysfs_size_path = g_build_filename ("/sys/block", dev_name, "size", NULL);
+    g_autofree gchar *size_str = NULL;
+    if (g_file_get_contents (sysfs_size_path, &size_str, NULL, NULL)) {
+        dev_size = (guint64)g_ascii_strtoull (size_str, NULL, 10) * 512ULL;
+    }
+
     int fd = open (d->device_path, O_RDONLY | O_DIRECT | O_CLOEXEC);
     if (fd < 0) {
         fd = open (d->device_path, O_RDONLY | O_CLOEXEC);
     }
+
+    FILE *pipe_fp = NULL;
+    if (fd < 0 && errno == EACCES) {
+        g_autofree gchar *cmd = g_strdup_printf ("pkexec dd if=%s bs=1M status=none 2>/dev/null", d->device_path);
+        pipe_fp = popen (cmd, "r");
+        if (pipe_fp) {
+            fd = fileno (pipe_fp);
+        }
+    }
+
     if (fd < 0) {
         error_msg = g_strdup_printf ("Cannot open %s: %s",
                                      d->device_path, strerror (errno));
@@ -131,40 +173,30 @@ surface_scan_thread (GTask        *task,
         return;
     }
 
-    guint64 dev_size = 0;
-    if (ioctl (fd, BLKGETSIZE64, &dev_size) < 0) {
-        error_msg = g_strdup_printf ("Cannot determine device size for %s: %s",
-                                     d->device_path, strerror (errno));
-        close (fd);
-        emit_finished (d->finished_cb, &result, FALSE, error_msg, d->user_data);
-        g_free (error_msg);
-        return;
-    }
-
     if (dev_size == 0) {
-        error_msg = g_strdup ("Device reported zero size");
-        close (fd);
-        emit_finished (d->finished_cb, &result, FALSE, error_msg, d->user_data);
-        g_free (error_msg);
-        return;
+        if (ioctl (fd, BLKGETSIZE64, &dev_size) < 0 || dev_size == 0) {
+            error_msg = g_strdup ("Cannot determine device size");
+            if (pipe_fp) pclose (pipe_fp); else close (fd);
+            emit_finished (d->finished_cb, &result, FALSE, error_msg, d->user_data);
+            g_free (error_msg);
+            return;
+        }
     }
 
     const gsize block_size = PULS_SURFACE_BLOCK_SIZE;
     void *buf = NULL;
     if (posix_memalign (&buf, 4096, block_size) != 0) {
         error_msg = g_strdup ("Memory allocation failed");
-        close (fd);
+        if (pipe_fp) pclose (pipe_fp); else close (fd);
         emit_finished (d->finished_cb, &result, FALSE, error_msg, d->user_data);
         g_free (error_msg);
         return;
     }
 
-    guint64 total_blocks = (dev_size + block_size - 1) / block_size;
     result.total_sectors = dev_size / 512;
 
     guint64 offset = 0;
-    guint64 blocks_done = 0;
-    const guint64 PROGRESS_EVERY = MAX (1, total_blocks / 2000);
+    guint64 last_emit_ms = 0;
 
     while (offset < dev_size) {
         if (g_cancellable_is_cancelled (cancellable)) {
@@ -177,11 +209,12 @@ surface_scan_thread (GTask        *task,
 
         struct timespec t0, t1;
         clock_gettime (CLOCK_MONOTONIC, &t0);
-        ssize_t nr = pread (fd, buf, to_read, (off_t)offset);
+        ssize_t nr = read_block_full (fd, buf, to_read, (pipe_fp != NULL), (off_t)offset);
         clock_gettime (CLOCK_MONOTONIC, &t1);
 
         guint64 elapsed_ms = ((guint64)(t1.tv_sec - t0.tv_sec)) * 1000
                            + ((guint64)(t1.tv_nsec - t0.tv_nsec)) / 1000000;
+        guint64 now_ms = ((guint64)t1.tv_sec) * 1000 + ((guint64)t1.tv_nsec) / 1000000;
 
         guint64 sectors_in_block = to_read / 512;
         result.sectors_scanned += sectors_in_block;
@@ -198,8 +231,8 @@ surface_scan_thread (GTask        *task,
             result.sectors_ok += sectors_in_block;
         }
 
-        blocks_done++;
-        if ((blocks_done % PROGRESS_EVERY) == 0) {
+        if (state != PULS_SECTOR_OK || (now_ms - last_emit_ms) >= 50) {
+            last_emit_ms = now_ms;
             emit_progress (d->progress_cb,
                            result.sectors_scanned, result.total_sectors,
                            lba, state, d->user_data);
@@ -209,7 +242,10 @@ surface_scan_thread (GTask        *task,
     }
 
     free (buf);
-    close (fd);
+    if (pipe_fp)
+        pclose (pipe_fp);
+    else
+        close (fd);
 
     emit_finished (d->finished_cb, &result, scan_cancelled, error_msg, d->user_data);
 }

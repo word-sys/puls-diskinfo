@@ -179,3 +179,10 @@ puls_health_indicator_set_lifetime_days (PulsHealthIndicator *self, gint days)
     self->lifetime_days = days;
     update_display (self);
 }
+
+void
+puls_health_indicator_apply_lang (PulsHealthIndicator *self)
+{
+    g_return_if_fail (PULS_IS_HEALTH_INDICATOR (self));
+    update_display (self);
+}

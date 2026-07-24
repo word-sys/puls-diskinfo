@@ -274,9 +274,10 @@ on_bench_progress (PulsBenchmarkTest test,
         "RND4K Q1T1"
     };
 
-    g_autofree gchar *status = g_strdup_printf ("Running %s %s... (%d%%)",
+    const gchar *rw_str = is_write ? _(PULS_STR_BENCH_WRITE) : _(PULS_STR_BENCH_READ);
+    g_autofree gchar *status = g_strdup_printf (_(PULS_STR_BENCH_RUNNING),
                                                  test_names[test],
-                                                 is_write ? "Write" : "Read",
+                                                 rw_str,
                                                  (gint)(progress * 100.0));
     gtk_label_set_text (GTK_LABEL (self->bench_status_label), status);
 
@@ -493,7 +494,7 @@ on_surface_progress (guint64 scanned, guint64 total,
     gdouble frac = (total > 0) ? (gdouble)scanned / (gdouble)total : 0.0;
     gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (self->surface_progress_bar), frac);
     g_autofree gchar *status = g_strdup_printf (
-        "Scanning… %" G_GUINT64_FORMAT " / %" G_GUINT64_FORMAT " sectors (%.1f%%)",
+        _(PULS_STR_SURFACE_SCANNING),
         scanned, total, frac * 100.0);
     gtk_label_set_text (GTK_LABEL (self->surface_status_label), status);
 }
@@ -512,23 +513,23 @@ on_surface_finished (const PulsSurfaceScanResult *result,
     g_clear_object (&self->surface_cancellable);
 
     if (cancelled) {
-        gtk_label_set_text (GTK_LABEL (self->surface_status_label), "Surface scan cancelled.");
+        gtk_label_set_text (GTK_LABEL (self->surface_status_label), _(PULS_STR_BENCH_STOPPED));
         return;
     }
     if (error_msg) {
-        g_autofree gchar *msg = g_strdup_printf ("Error: %s", error_msg);
+        g_autofree gchar *msg = g_strdup_printf (_(PULS_STR_SURFACE_ERROR_FMT), error_msg);
         gtk_label_set_text (GTK_LABEL (self->surface_status_label), msg);
         return;
     }
 
     g_autofree gchar *summary = g_strdup_printf (
-        "Scan complete. %" G_GUINT64_FORMAT " sectors scanned.",
+        _(PULS_STR_SURFACE_COMPLETE),
         result->sectors_scanned);
     gtk_label_set_text (GTK_LABEL (self->surface_status_label), summary);
 
-    g_autofree gchar *ok_str   = g_strdup_printf ("OK: %" G_GUINT64_FORMAT, result->sectors_ok);
-    g_autofree gchar *slow_str = g_strdup_printf ("Slow: %" G_GUINT64_FORMAT, result->sectors_slow);
-    g_autofree gchar *err_str  = g_strdup_printf ("Errors: %" G_GUINT64_FORMAT, result->sectors_error);
+    g_autofree gchar *ok_str   = g_strdup_printf (_(PULS_STR_SURFACE_OK_FMT), result->sectors_ok);
+    g_autofree gchar *slow_str = g_strdup_printf (_(PULS_STR_SURFACE_SLOW_FMT), result->sectors_slow);
+    g_autofree gchar *err_str  = g_strdup_printf (_(PULS_STR_SURFACE_ERROR_COUNT_FMT), result->sectors_error);
     gtk_label_set_text (GTK_LABEL (self->surface_ok_label),    ok_str);
     gtk_label_set_text (GTK_LABEL (self->surface_slow_label),  slow_str);
     gtk_label_set_text (GTK_LABEL (self->surface_error_label), err_str);
@@ -571,16 +572,14 @@ on_surface_start_clicked (GtkButton *btn G_GNUC_UNUSED, PulsDiskInfoView *self)
         GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
         GTK_MESSAGE_QUESTION,
         GTK_BUTTONS_NONE,
-        "Start Surface Scan?"
+        "%s", _(PULS_STR_SURFACE_CONFIRM_TITLE)
     );
     gtk_message_dialog_format_secondary_text (
         GTK_MESSAGE_DIALOG (dialog),
-        "This will read every sector of the disk. The scan is non-destructive "
-        "(read-only) and will not modify any data. However, it may take a long "
-        "time on large drives. You can cancel at any time."
+        "%s", _(PULS_STR_SURFACE_CONFIRM_MSG)
     );
-    gtk_dialog_add_button (GTK_DIALOG (dialog), "Cancel",     GTK_RESPONSE_CANCEL);
-    gtk_dialog_add_button (GTK_DIALOG (dialog), "Start Scan", GTK_RESPONSE_OK);
+    gtk_dialog_add_button (GTK_DIALOG (dialog), _(PULS_STR_REPORT_CANCEL_BTN), GTK_RESPONSE_CANCEL);
+    gtk_dialog_add_button (GTK_DIALOG (dialog), _(PULS_STR_BTN_START_SURFACE), GTK_RESPONSE_OK);
     gtk_dialog_set_default_response (GTK_DIALOG (dialog), GTK_RESPONSE_CANCEL);
     g_signal_connect (dialog, "response",
                       G_CALLBACK (on_surface_confirm_response), self);
@@ -605,7 +604,7 @@ on_seek_finished (const PulsSeekLatencyResult *result,
     g_clear_object (&self->seek_cancellable);
 
     if (cancelled) {
-        gtk_label_set_text (GTK_LABEL (self->seek_status_label), "Cancelled.");
+        gtk_label_set_text (GTK_LABEL (self->seek_status_label), _(PULS_STR_BENCH_STOPPED));
         return;
     }
     if (error_msg) {
@@ -625,7 +624,7 @@ on_seek_finished (const PulsSeekLatencyResult *result,
     gtk_label_set_text (GTK_LABEL (self->seek_max_label), mx);
 
     g_autofree gchar *status = g_strdup_printf (
-        "Seek latency measured (%u samples).", result->samples);
+        _(PULS_STR_SEEK_COMPLETE), result->samples);
     gtk_label_set_text (GTK_LABEL (self->seek_status_label), status);
 }
 
@@ -1186,9 +1185,9 @@ get_wear_level_string (PulsSmartData *data)
 
     PulsDriveType dtype = puls_smart_data_get_drive_type (data);
     if (dtype == PULS_DRIVE_TYPE_SATA_SSD || dtype == PULS_DRIVE_TYPE_NVME_SSD) {
-        return g_strdup ("N/A (SSD)");
+        return g_strdup (_(PULS_STR_NA_SSD));
     } else {
-        return g_strdup ("N/A (HDD/Rotational)");
+        return g_strdup (_(PULS_STR_NA_HDD));
     }
 }
 
@@ -1220,11 +1219,11 @@ static gchar *
 get_mount_points_string (const gchar *device_path)
 {
     if (device_path == NULL)
-        return g_strdup ("Not mounted");
+        return g_strdup (_(PULS_STR_NOT_MOUNTED));
 
     GList *parts = puls_get_disk_partitions (device_path);
     if (parts == NULL) {
-        return g_strdup ("Not mounted");
+        return g_strdup (_(PULS_STR_NOT_MOUNTED));
     }
 
     g_autoptr(GString) gstr = g_string_new (NULL);
@@ -1242,8 +1241,28 @@ get_mount_points_string (const gchar *device_path)
     if (gstr->len > 0) {
         return g_string_free (g_steal_pointer (&gstr), FALSE);
     } else {
-        return g_strdup ("Not mounted");
+        return g_strdup (_(PULS_STR_NOT_MOUNTED));
     }
+}
+
+static gboolean
+is_system_mount (const gchar *mp)
+{
+    if (mp == NULL) return TRUE;
+    if (g_strcmp0 (mp, "/boot") == 0 ||
+        g_str_has_prefix (mp, "/boot/") ||
+        g_strcmp0 (mp, "/etc") == 0 ||
+        g_str_has_prefix (mp, "/etc/") ||
+        g_strcmp0 (mp, "/sys") == 0 ||
+        g_str_has_prefix (mp, "/sys/") ||
+        g_strcmp0 (mp, "/proc") == 0 ||
+        g_str_has_prefix (mp, "/proc/") ||
+        g_strcmp0 (mp, "/dev") == 0 ||
+        g_str_has_prefix (mp, "/dev/") ||
+        g_strcmp0 (mp, "/run") == 0 ||
+        g_str_has_prefix (mp, "/run/"))
+        return TRUE;
+    return FALSE;
 }
 
 static gchar *
@@ -1258,7 +1277,7 @@ get_device_benchmark_dir (const gchar *device_path)
 
     for (GList *l = parts; l != NULL; l = l->next) {
         PulsPartitionInfo *pinfo = l->data;
-        if (pinfo->mount_point && g_access (pinfo->mount_point, W_OK) == 0) {
+        if (pinfo->mount_point && !is_system_mount (pinfo->mount_point) && g_access (pinfo->mount_point, W_OK) == 0) {
             writeable_dir = g_strdup (pinfo->mount_point);
             break;
         }
@@ -1326,10 +1345,11 @@ get_sysfs_write_cache (const gchar *base)
     g_autofree gchar *contents = NULL;
     if (g_file_get_contents (path, &contents, NULL, NULL)) {
         g_strstrip (contents);
+        PulsLang lang = puls_i18n_get_lang ();
         if (g_ascii_strcasecmp (contents, "write back") == 0) {
-            return g_strdup ("Write Back (Enabled)");
+            return g_strdup (lang == PULS_LANG_TR ? "Geri Yazma (Etkin)" : "Write Back (Enabled)");
         } else if (g_ascii_strcasecmp (contents, "write through") == 0) {
-            return g_strdup ("Write Through");
+            return g_strdup (lang == PULS_LANG_TR ? "Doğrudan Yazma" : "Write Through");
         }
         return g_strdup (contents);
     }
@@ -1589,7 +1609,7 @@ puls_disk_info_view_set_data (PulsDiskInfoView *self,
 
     GList *parts = puls_get_disk_partitions (self->current_device);
     if (parts == NULL) {
-        GtkWidget *no_parts = gtk_label_new ("No active mount points found for this disk.");
+        GtkWidget *no_parts = gtk_label_new (_(PULS_STR_PARTITIONS_EMPTY));
         gtk_widget_add_css_class (no_parts, "dim-label");
         gtk_label_set_xalign (GTK_LABEL (no_parts), 0.0);
         gtk_box_append (GTK_BOX (self->partitions_box), no_parts);
@@ -1602,7 +1622,7 @@ puls_disk_info_view_set_data (PulsDiskInfoView *self,
             gtk_widget_add_css_class (dev_lbl, "bold");
             gtk_box_append (GTK_BOX (row), dev_lbl);
 
-            g_autofree gchar *mp_str = g_strdup_printf ("mounted at %s (%s)", pinfo->mount_point, pinfo->fs_type);
+            g_autofree gchar *mp_str = g_strdup_printf ("%s (%s)", pinfo->mount_point, pinfo->fs_type);
             GtkWidget *mp_lbl = gtk_label_new (mp_str);
             gtk_widget_add_css_class (mp_lbl, "dim-label");
             gtk_widget_set_hexpand (mp_lbl, TRUE);
@@ -1626,7 +1646,7 @@ puls_disk_info_view_set_data (PulsDiskInfoView *self,
                 gtk_widget_set_valign (pb, GTK_ALIGN_CENTER);
                 gtk_box_append (GTK_BOX (row), pb);
             } else {
-                GtkWidget *use_lbl = gtk_label_new ("Unknown size");
+                GtkWidget *use_lbl = gtk_label_new (_(PULS_STR_PARTITION_UNKNOWN_SIZE));
                 gtk_box_append (GTK_BOX (row), use_lbl);
             }
 
@@ -1638,12 +1658,10 @@ puls_disk_info_view_set_data (PulsDiskInfoView *self,
     gboolean testing = puls_smart_data_get_self_test_in_progress (data);
     if (testing) {
         gint test_pct = puls_smart_data_get_self_test_percent (data);
-        const gchar *status_txt = puls_smart_data_get_self_test_status_str (data);
-        const gchar *type_txt = puls_smart_data_get_self_test_type_str (data);
+        PulsLang lang = puls_i18n_get_lang ();
 
-        g_autofree gchar *stat_msg = g_strdup_printf ("%s in progress: %s (%d%% completed)",
-            type_txt ? type_txt : "Self-Test",
-            status_txt ? status_txt : "running",
+        g_autofree gchar *stat_msg = g_strdup_printf (
+            lang == PULS_LANG_TR ? "Test çalışıyor... (%%%d tamamlandı)" : "Self-test in progress... (%d%% completed)",
             test_pct);
         gtk_label_set_text (GTK_LABEL (self->test_status_label), stat_msg);
 
@@ -1654,7 +1672,7 @@ puls_disk_info_view_set_data (PulsDiskInfoView *self,
         gtk_widget_set_sensitive (self->long_test_btn, FALSE);
         gtk_widget_set_sensitive (self->abort_test_btn, TRUE);
     } else {
-        gtk_label_set_text (GTK_LABEL (self->test_status_label), "No diagnostic test currently running.");
+        gtk_label_set_text (GTK_LABEL (self->test_status_label), _(PULS_STR_TEST_NO_RUNNING));
         gtk_widget_set_visible (self->test_progress_bar, FALSE);
 
         gtk_widget_set_sensitive (self->short_test_btn, TRUE);
@@ -1809,6 +1827,16 @@ update_frame_title (GtkFrame *frame, const gchar *title)
     gtk_frame_set_label_widget (frame, box);
 }
 
+static void
+update_key_label (GtkWidget *val_label, PulsStringId id)
+{
+    if (!val_label)
+        return;
+    GtkWidget *key = g_object_get_data (G_OBJECT (val_label), "key-label");
+    if (key)
+        gtk_label_set_text (GTK_LABEL (key), _(id));
+}
+
 void
 puls_disk_info_view_apply_lang (PulsDiskInfoView *self)
 {
@@ -1826,6 +1854,59 @@ puls_disk_info_view_apply_lang (PulsDiskInfoView *self)
     update_frame_title (GTK_FRAME (self->surface_frame),    _(PULS_STR_SECTION_SURFACE_SCAN));
     update_frame_title (GTK_FRAME (self->seek_frame),       _(PULS_STR_SECTION_SEEK_LATENCY));
 
+    if (self->model_key_label)
+        gtk_label_set_text (GTK_LABEL (self->model_key_label), _(PULS_STR_FIELD_MODEL));
+    if (self->mount_points_key_label)
+        gtk_label_set_text (GTK_LABEL (self->mount_points_key_label), _(PULS_STR_FIELD_MOUNT_POINTS));
+
+    update_key_label (self->firmware_label,         PULS_STR_FIELD_FIRMWARE);
+    update_key_label (self->serial_label,           PULS_STR_FIELD_SERIAL);
+    update_key_label (self->interface_label,        PULS_STR_FIELD_INTERFACE);
+    update_key_label (self->transfer_mode_label,    PULS_STR_FIELD_TRANSFER_MODE);
+    update_key_label (self->standard_label,         PULS_STR_FIELD_STANDARD);
+    update_key_label (self->capacity_label,         PULS_STR_FIELD_CAPACITY);
+    update_key_label (self->rotation_label,         PULS_STR_FIELD_TYPE);
+    update_key_label (self->features_label,         PULS_STR_FIELD_FEATURES);
+    update_key_label (self->power_hours_label,      PULS_STR_FIELD_POWER_HOURS);
+    update_key_label (self->power_cycles_label,     PULS_STR_FIELD_POWER_CYCLES);
+    update_key_label (self->total_read_label,       PULS_STR_FIELD_TOTAL_READS);
+    update_key_label (self->total_written_label,    PULS_STR_FIELD_TOTAL_WRITES);
+    update_key_label (self->sector_size_label,      PULS_STR_FIELD_SECTOR_SIZE);
+    update_key_label (self->form_factor_label,      PULS_STR_FIELD_FORM_FACTOR);
+    update_key_label (self->rotation_rate_label,    PULS_STR_FIELD_ROTATION_RATE);
+    update_key_label (self->device_path_label,      PULS_STR_FIELD_DEVICE_PATH);
+    update_key_label (self->wear_level_label,       PULS_STR_FIELD_WEAR_LEVEL);
+    update_key_label (self->unsafe_shutdowns_label, PULS_STR_FIELD_UNSAFE_SHUTDOWNS);
+    update_key_label (self->io_scheduler_label,     PULS_STR_FIELD_IO_SCHEDULER);
+    update_key_label (self->read_ahead_label,       PULS_STR_FIELD_READ_AHEAD);
+    update_key_label (self->write_cache_label,      PULS_STR_FIELD_WRITE_CACHE);
+    update_key_label (self->trim_support_label,     PULS_STR_FIELD_TRIM_SUPPORT);
+    update_key_label (self->buffer_size_label,      PULS_STR_FIELD_BUFFER_SIZE);
+    update_key_label (self->error_count_label,      PULS_STR_FIELD_ERROR_COUNT);
+    update_key_label (self->apm_label,              PULS_STR_FIELD_APM_LEVEL);
+    update_key_label (self->aam_label,              PULS_STR_FIELD_AAM_LEVEL);
+    update_key_label (self->spin_up_label,          PULS_STR_FIELD_SPIN_UP_TIME);
+
+    PulsStringId nvme_str_ids[] = {
+        PULS_STR_NVME_CRITICAL_WARNING,
+        PULS_STR_NVME_AVAIL_SPARE,
+        PULS_STR_NVME_AVAIL_SPARE_THRESH,
+        PULS_STR_NVME_PCT_USED,
+        PULS_STR_NVME_DATA_UNITS_READ,
+        PULS_STR_NVME_DATA_UNITS_WRITTEN,
+        PULS_STR_NVME_HOST_READ_CMDS,
+        PULS_STR_NVME_HOST_WRITE_CMDS,
+        PULS_STR_NVME_CTRL_BUSY_TIME,
+        PULS_STR_NVME_POWER_CYCLES,
+        PULS_STR_NVME_POWER_ON_HOURS,
+        PULS_STR_NVME_UNSAFE_SHUTDOWNS,
+        PULS_STR_NVME_MEDIA_ERRORS,
+        PULS_STR_NVME_ERROR_LOG_ENTRIES
+    };
+    for (gint i = 0; i < 14; i++) {
+        update_key_label (self->nvme_labels[i], nvme_str_ids[i]);
+    }
+
     gtk_button_set_label (GTK_BUTTON (self->short_test_btn),    _(PULS_STR_BTN_SHORT_TEST));
     gtk_button_set_label (GTK_BUTTON (self->long_test_btn),     _(PULS_STR_BTN_LONG_TEST));
     gtk_button_set_label (GTK_BUTTON (self->abort_test_btn),    _(PULS_STR_BTN_ABORT_TEST));
@@ -1834,4 +1915,8 @@ puls_disk_info_view_apply_lang (PulsDiskInfoView *self)
     gtk_button_set_label (GTK_BUTTON (self->surface_start_btn), _(PULS_STR_BTN_START_SURFACE));
     gtk_button_set_label (GTK_BUTTON (self->surface_stop_btn),  _(PULS_STR_BTN_STOP_SURFACE));
     gtk_button_set_label (GTK_BUTTON (self->seek_start_btn),    _(PULS_STR_BTN_SEEK_LATENCY));
+
+    puls_health_indicator_apply_lang (PULS_HEALTH_INDICATOR (self->health_indicator));
+    puls_temperature_widget_apply_lang (PULS_TEMPERATURE_WIDGET (self->temperature_widget));
+    puls_smart_table_apply_lang (PULS_SMART_TABLE (self->smart_table));
 }

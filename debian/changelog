@@ -3,6 +3,8 @@ puls-diskinfo (1.1.2) bookworm; urgency=medium
   * Added full Turkish language support with in-app language switch button
   * Language preference persisted across sessions
   * Language toggle button visible in header bar, defaults to English
+  * Fixed crashing issues
+  * Improved disk benchmark tools
 
  -- Barın Güzeldemirci <baringuzeldemir@gmail.com>  Sun, 20 Jul 2026 18:00:00 +0300
 

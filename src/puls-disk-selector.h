@@ -28,6 +28,6 @@ const gchar *puls_disk_selector_get_selected (PulsDiskSelector *self);
 void         puls_disk_selector_select       (PulsDiskSelector *self,
                                               const gchar      *device_path);
 void         puls_disk_selector_refresh      (PulsDiskSelector *self);
-
+void         puls_disk_selector_apply_lang   (PulsDiskSelector *self);
 
 G_END_DECLS

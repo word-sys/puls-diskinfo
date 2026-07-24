@@ -100,22 +100,53 @@ static gchar *
 generate_report_html (PulsWindow *self)
 {
     GString *html = g_string_new ("");
-    g_string_append (html,
+    PulsLang lang = puls_i18n_get_lang ();
+    const gchar *lang_code = (lang == PULS_LANG_TR) ? "tr" : "en";
+
+    g_string_append_printf (html,
         "<!DOCTYPE html>\n"
-        "<html lang=\"en\">\n<head><meta charset=\"UTF-8\">\n"
-        "<title>PULS DiskInfo Report</title>\n"
-        "<style>body{font-family:sans-serif;background:#111;color:#eee;padding:2rem}\n"
-        "h1{color:#7fc8f8}h2{color:#aef;border-bottom:1px solid #444;padding-bottom:.3rem}\n"
-        "table{border-collapse:collapse;width:100%;margin-bottom:1.5rem}td,th{padding:.4rem .8rem;text-align:left}\n"
-        "th{background:#1e2a38;color:#7fc8f8}tr:nth-child(even){background:#1a1a2e}\n"
-        ".ok{color:#4ade80}.warn{color:#fbbf24}.bad{color:#f87171}\n"
-        "</style>\n</head>\n<body>\n"
-        "<h1>PULS DiskInfo v" PULS_VERSION " Report</h1>\n");
+        "<html lang=\"%s\">\n<head><meta charset=\"UTF-8\">\n"
+        "<title>%s</title>\n"
+        "<style>\n"
+        "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen,Ubuntu,Cantarell,sans-serif;"
+        "background:#0f172a;color:#f8fafc;margin:0;padding:2rem;line-height:1.5}\n"
+        ".container{max-width:1150px;margin:0 auto}\n"
+        ".header{display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #334155;"
+        "padding-bottom:1rem;margin-bottom:2rem}\n"
+        ".header h1{color:#38bdf8;margin:0;font-size:1.8rem;font-weight:700}\n"
+        ".header .meta{color:#94a3b8;font-size:0.9rem;text-align:right}\n"
+        ".card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:1.5rem;margin-bottom:2rem;"
+        "box-shadow:0 4px 6px -1px rgba(0,0,0,0.3)}\n"
+        ".card-title{color:#38bdf8;font-size:1.3rem;margin-top:0;margin-bottom:1rem;border-bottom:1px solid #334155;"
+        "padding-bottom:0.5rem;display:flex;justify-content:space-between;align-items:center}\n"
+        ".section-subtitle{color:#94a3b8;font-size:1.05rem;margin-top:1.5rem;margin-bottom:0.75rem;font-weight:600;"
+        "text-transform:uppercase;letter-spacing:0.05em;border-left:3px solid #38bdf8;padding-left:0.5rem}\n"
+        "table{width:100%%;border-collapse:collapse;margin-bottom:1rem;font-size:0.92rem}\n"
+        "th,td{padding:0.55rem 0.8rem;text-align:left;border-bottom:1px solid #334155}\n"
+        "th{background:#0f172a;color:#38bdf8;font-weight:600}\n"
+        "tr:nth-child(even){background:rgba(255,255,255,0.02)}\n"
+        "tr:hover{background:rgba(56,189,248,0.05)}\n"
+        ".badge{display:inline-block;padding:0.25rem 0.6rem;border-radius:6px;font-weight:700;font-size:0.85rem}\n"
+        ".badge-good{background:rgba(74,222,128,0.15);color:#4ade80;border:1px solid #4ade80}\n"
+        ".badge-caution{background:rgba(251,191,36,0.15);color:#fbbf24;border:1px solid #fbbf24}\n"
+        ".badge-bad{background:rgba(248,113,113,0.15);color:#f87171;border:1px solid #f87171}\n"
+        ".badge-unknown{background:rgba(148,163,184,0.15);color:#94a3b8;border:1px solid #94a3b8}\n"
+        "@media print{body{background:#fff;color:#000}.card{background:#fff;border:1px solid #ccc;color:#000}"
+        "th{background:#eee;color:#000}td,th{border-bottom:1px solid #ddd}}\n"
+        "</style>\n</head>\n<body>\n<div class=\"container\">\n"
+        "<div class=\"header\">\n"
+        "  <div><h1>%s</h1><div style=\"color:#94a3b8;font-size:0.9rem\">PULS DiskInfo v" PULS_VERSION "</div></div>\n",
+        lang_code,
+        _(PULS_STR_REPORT_TITLE_HEADER),
+        _(PULS_STR_REPORT_TITLE_HEADER));
 
     GDateTime *now = g_date_time_new_now_local ();
     g_autofree gchar *ts = g_date_time_format (now, "%Y-%m-%d %H:%M:%S");
     g_date_time_unref (now);
-    g_string_append_printf (html, "<p>Generated: %s</p>\n", ts);
+    g_string_append_printf (html,
+        "  <div class=\"meta\"><div>%s %s</div></div>\n"
+        "</div>\n",
+        _(PULS_STR_REPORT_GENERATED_AT), ts);
 
     GList *devices = puls_disk_manager_get_devices (self->manager);
     for (GList *l = devices; l != NULL; l = l->next) {
@@ -127,59 +158,111 @@ generate_report_html (PulsWindow *self)
         const gchar *serial = puls_smart_data_get_serial_number (data);
         const gchar *fw     = puls_smart_data_get_firmware_version (data);
         const gchar *iface  = puls_smart_data_get_interface_type (data);
+        const gchar *std    = puls_smart_data_get_standard (data);
+        const gchar *tmode  = puls_smart_data_get_transfer_mode (data);
         PulsHealthStatus hs = puls_smart_data_get_health (data);
         gint temp           = puls_smart_data_get_temperature (data);
         gint health_pct     = puls_smart_data_get_health_percent (data);
         gint lifetime_days  = puls_smart_data_get_estimated_lifetime_days (data);
-        g_autofree gchar *cap_str = puls_format_bytes_exact (puls_smart_data_get_capacity_bytes (data));
+        guint64 cap_bytes   = puls_smart_data_get_capacity_bytes (data);
+        g_autofree gchar *cap_str = puls_format_bytes_exact (cap_bytes);
 
-        const gchar *status_class = "ok";
-        const gchar *status_text  = puls_health_status_to_string (hs);
-        if (hs == PULS_HEALTH_CAUTION) status_class = "warn";
-        else if (hs == PULS_HEALTH_BAD) status_class = "bad";
+        const gchar *badge_class = "badge-unknown";
+        const gchar *badge_text  = _(PULS_STR_HEALTH_UNKNOWN);
+        switch (hs) {
+        case PULS_HEALTH_GOOD:
+            badge_class = "badge-good";
+            badge_text = _(PULS_STR_HEALTH_GOOD);
+            break;
+        case PULS_HEALTH_CAUTION:
+            badge_class = "badge-caution";
+            badge_text = _(PULS_STR_HEALTH_CAUTION);
+            break;
+        case PULS_HEALTH_BAD:
+            badge_class = "badge-bad";
+            badge_text = _(PULS_STR_HEALTH_BAD);
+            break;
+        default: break;
+        }
 
-        g_string_append_printf (html, "<h2>%s (%s)</h2>\n",
-                                model ? model : "Unknown Drive", path);
-        g_string_append (html, "<table><tr><th>Field</th><th>Value</th></tr>\n");
-
-        g_string_append_printf (html, "<tr><td>Serial Number</td><td>%s</td></tr>\n",
-                                serial ? serial : "—");
-        g_string_append_printf (html, "<tr><td>Firmware</td><td>%s</td></tr>\n",
-                                fw ? fw : "—");
-        g_string_append_printf (html, "<tr><td>Interface</td><td>%s</td></tr>\n",
-                                iface ? iface : "—");
-        g_string_append_printf (html, "<tr><td>Capacity</td><td>%s</td></tr>\n", cap_str);
+        g_string_append_printf (html, "<div class=\"card\">\n");
         g_string_append_printf (html,
-            "<tr><td>Health</td><td class=\"%s\">%s",
-            status_class, status_text);
+            "<div class=\"card-title\"><span>%s</span><span style=\"color:#94a3b8;font-size:0.95rem;font-weight:normal\">%s</span></div>\n",
+            model ? model : "Unknown Drive", path);
+
+        g_string_append_printf (html,
+            "<table>\n<thead><tr><th>%s</th><th>%s</th></tr></thead>\n<tbody>\n",
+            _(PULS_STR_REPORT_FIELD_COL), _(PULS_STR_REPORT_VALUE_COL));
+
+        g_string_append_printf (html, "<tr><td>%s</td><td>%s</td></tr>\n", _(PULS_STR_FIELD_MODEL), model ? model : "—");
+        g_string_append_printf (html, "<tr><td>%s</td><td>%s</td></tr>\n", _(PULS_STR_FIELD_SERIAL), serial ? serial : "—");
+        g_string_append_printf (html, "<tr><td>%s</td><td>%s</td></tr>\n", _(PULS_STR_FIELD_FIRMWARE), fw ? fw : "—");
+        g_string_append_printf (html, "<tr><td>%s</td><td>%s</td></tr>\n", _(PULS_STR_FIELD_INTERFACE), iface ? iface : "—");
+        if (tmode)
+            g_string_append_printf (html, "<tr><td>%s</td><td>%s</td></tr>\n", _(PULS_STR_FIELD_TRANSFER_MODE), tmode);
+        if (std)
+            g_string_append_printf (html, "<tr><td>%s</td><td>%s</td></tr>\n", _(PULS_STR_FIELD_STANDARD), std);
+        g_string_append_printf (html, "<tr><td>%s</td><td>%s</td></tr>\n", _(PULS_STR_FIELD_CAPACITY), cap_str);
+
+        g_string_append_printf (html, "<tr><td>%s</td><td><span class=\"badge %s\">%s</span>",
+            _(PULS_STR_SECTION_HEALTH), badge_class, badge_text);
         if (health_pct >= 0)
             g_string_append_printf (html, " (%d%%)", health_pct);
         g_string_append (html, "</td></tr>\n");
 
         if (lifetime_days >= 0) {
+            g_autofree gchar *est_str = NULL;
             if (lifetime_days >= 365)
-                g_string_append_printf (html,
-                    "<tr><td>Est. Lifetime Remaining</td><td>%.1f yr</td></tr>\n",
-                    (double)lifetime_days / 365.25);
+                est_str = g_strdup_printf (_(PULS_STR_HEALTH_EST_YEARS), (double)lifetime_days / 365.25);
+            else if (lifetime_days == 1)
+                est_str = g_strdup_printf (_(PULS_STR_HEALTH_EST_DAY), lifetime_days);
             else
-                g_string_append_printf (html,
-                    "<tr><td>Est. Lifetime Remaining</td><td>%d day%s</td></tr>\n",
-                    lifetime_days, lifetime_days == 1 ? "" : "s");
+                est_str = g_strdup_printf (_(PULS_STR_HEALTH_EST_DAYS), lifetime_days);
+            g_string_append_printf (html, "<tr><td>%s</td><td>%s</td></tr>\n",
+                _(PULS_STR_REPORT_EST_LIFETIME), est_str);
         }
 
-        if (temp >= 0) {
-            g_autofree gchar *ts2 = g_strdup_printf ("%d °C", temp);
-            g_string_append_printf (html, "<tr><td>Temperature</td><td>%s</td></tr>\n", ts2);
-        } else {
-            g_string_append (html, "<tr><td>Temperature</td><td>N/A</td></tr>\n");
-        }
-        g_string_append_printf (html,
-            "<tr><td>Power On Hours</td><td>%" G_GUINT64_FORMAT "</td></tr>\n",
-            puls_smart_data_get_power_on_hours (data));
-        g_string_append_printf (html,
-            "<tr><td>Power Cycles</td><td>%" G_GUINT64_FORMAT "</td></tr>\n",
-            puls_smart_data_get_power_cycle_count (data));
+        if (temp >= 0)
+            g_string_append_printf (html, "<tr><td>%s</td><td>%d °C</td></tr>\n", _(PULS_STR_SECTION_HEALTH), temp);
+        else
+            g_string_append_printf (html, "<tr><td>%s</td><td>%s</td></tr>\n", _(PULS_STR_SECTION_HEALTH), _(PULS_STR_TEMP_UNAVAIL));
 
+        g_string_append_printf (html, "<tr><td>%s</td><td>%" G_GUINT64_FORMAT " hrs</td></tr>\n",
+            _(PULS_STR_FIELD_POWER_HOURS), puls_smart_data_get_power_on_hours (data));
+        g_string_append_printf (html, "<tr><td>%s</td><td>%" G_GUINT64_FORMAT "</td></tr>\n",
+            _(PULS_STR_FIELD_POWER_CYCLES), puls_smart_data_get_power_cycle_count (data));
+
+        guint64 reads = puls_smart_data_get_total_bytes_read (data);
+        if (reads > 0) {
+            g_autofree gchar *r_str = puls_format_bytes (reads);
+            g_string_append_printf (html, "<tr><td>%s</td><td>%s</td></tr>\n", _(PULS_STR_FIELD_TOTAL_READS), r_str);
+        }
+        guint64 writes = puls_smart_data_get_total_bytes_written (data);
+        if (writes > 0) {
+            g_autofree gchar *w_str = puls_format_bytes (writes);
+            g_string_append_printf (html, "<tr><td>%s</td><td>%s</td></tr>\n", _(PULS_STR_FIELD_TOTAL_WRITES), w_str);
+        }
+
+        guint32 log_sec = puls_smart_data_get_logical_sector_size (data);
+        guint32 phy_sec = puls_smart_data_get_physical_sector_size (data);
+        if (log_sec > 0) {
+            g_string_append_printf (html, "<tr><td>%s</td><td>%u / %u bytes</td></tr>\n",
+                _(PULS_STR_FIELD_SECTOR_SIZE), log_sec, phy_sec > 0 ? phy_sec : log_sec);
+        }
+
+        const gchar *ff = puls_smart_data_get_form_factor (data);
+        if (ff)
+            g_string_append_printf (html, "<tr><td>%s</td><td>%s</td></tr>\n", _(PULS_STR_FIELD_FORM_FACTOR), ff);
+
+        gint rpm = puls_smart_data_get_rotation_rpm (data);
+        if (rpm > 0)
+            g_string_append_printf (html, "<tr><td>%s</td><td>%d RPM</td></tr>\n", _(PULS_STR_FIELD_ROTATION_RATE), rpm);
+        else if (rpm == 0)
+            g_string_append_printf (html, "<tr><td>%s</td><td>Solid State Device (SSD)</td></tr>\n", _(PULS_STR_FIELD_ROTATION_RATE));
+
+        g_string_append_printf (html, "<tr><td>%s</td><td>%s</td></tr>\n", _(PULS_STR_FIELD_DEVICE_PATH), path);
+
+        /* Wear Level */
         g_autofree gchar *wear_str = NULL;
         PulsNvmeHealth *nvme = puls_smart_data_get_nvme_health (data);
         if (nvme) {
@@ -196,9 +279,8 @@ generate_report_html (PulsWindow *self)
                 }
             }
         }
-        if (wear_str) {
-            g_string_append_printf (html, "<tr><td>Wear Level</td><td>%s</td></tr>\n", wear_str);
-        }
+        if (wear_str)
+            g_string_append_printf (html, "<tr><td>%s</td><td>%s</td></tr>\n", _(PULS_STR_FIELD_WEAR_LEVEL), wear_str);
 
         guint64 unsafe_shutdowns = 0;
         gboolean has_unsafe = FALSE;
@@ -218,36 +300,33 @@ generate_report_html (PulsWindow *self)
                 }
             }
         }
-        if (has_unsafe) {
-            g_string_append_printf (html, "<tr><td>Unsafe Shutdowns</td><td>%" G_GUINT64_FORMAT "</td></tr>\n", unsafe_shutdowns);
-        }
+        if (has_unsafe)
+            g_string_append_printf (html, "<tr><td>%s</td><td>%" G_GUINT64_FORMAT "</td></tr>\n",
+                _(PULS_STR_FIELD_UNSAFE_SHUTDOWNS), unsafe_shutdowns);
 
         guint32 bufsz = puls_smart_data_get_buffer_size_kb (data);
-        if (bufsz > 0) {
-            g_string_append_printf (html, "<tr><td>Buffer Size</td><td>%u KB</td></tr>\n", bufsz);
-        }
-
+        if (bufsz > 0)
+            g_string_append_printf (html, "<tr><td>%s</td><td>%u KB</td></tr>\n", _(PULS_STR_FIELD_BUFFER_SIZE), bufsz);
         gint apm = puls_smart_data_get_apm_level (data);
-        if (apm >= 0) {
-            g_string_append_printf (html, "<tr><td>APM Level</td><td>%d</td></tr>\n", apm);
-        }
-
+        if (apm >= 0)
+            g_string_append_printf (html, "<tr><td>%s</td><td>%d</td></tr>\n", _(PULS_STR_FIELD_APM_LEVEL), apm);
         gint aam = puls_smart_data_get_aam_level (data);
-        if (aam >= 0) {
-            g_string_append_printf (html, "<tr><td>AAM Level</td><td>%d</td></tr>\n", aam);
-        }
-
+        if (aam >= 0)
+            g_string_append_printf (html, "<tr><td>%s</td><td>%d</td></tr>\n", _(PULS_STR_FIELD_AAM_LEVEL), aam);
         gint spin = puls_smart_data_get_spin_up_time_ms (data);
-        if (spin >= 0) {
-            g_string_append_printf (html, "<tr><td>Spin-Up Time</td><td>%d ms</td></tr>\n", spin);
-        }
-
+        if (spin >= 0)
+            g_string_append_printf (html, "<tr><td>%s</td><td>%d ms</td></tr>\n", _(PULS_STR_FIELD_SPIN_UP_TIME), spin);
         guint64 errs = puls_smart_data_get_error_count_total (data);
-        g_string_append_printf (html, "<tr><td>Error Count</td><td>%" G_GUINT64_FORMAT "</td></tr>\n", errs);
+        g_string_append_printf (html, "<tr><td>%s</td><td>%" G_GUINT64_FORMAT "</td></tr>\n",
+            _(PULS_STR_FIELD_ERROR_COUNT), errs);
 
+        g_string_append (html, "</tbody>\n</table>\n");
+
+        /* Partitions Table */
         GList *parts = puls_get_disk_partitions (path);
         if (parts) {
-            g_string_append (html, "<tr><td>Partition Usage</td><td>");
+            g_string_append_printf (html, "<div class=\"section-subtitle\">%s</div>\n", _(PULS_STR_REPORT_PARTITIONS_TITLE));
+            g_string_append (html, "<table>\n<thead><tr><th>Device</th><th>Mount Point</th><th>FS</th><th>Usage</th></tr></thead>\n<tbody>\n");
             for (GList *pl = parts; pl != NULL; pl = pl->next) {
                 PulsPartitionInfo *pinfo = pl->data;
                 if (pinfo->total_bytes > 0) {
@@ -255,42 +334,77 @@ generate_report_html (PulsWindow *self)
                     double pct = (double)used / pinfo->total_bytes * 100.0;
                     g_autofree gchar *u_str = puls_format_bytes (used);
                     g_autofree gchar *t_str = puls_format_bytes (pinfo->total_bytes);
-                    g_string_append_printf (html, "<div>%s mounted at %s (%s): %s / %s (%.1f%%)</div>",
-                        pinfo->device_path, pinfo->mount_point, pinfo->fs_type, u_str, t_str, pct);
+                    g_string_append_printf (html,
+                        "<tr><td>%s</td><td>%s</td><td>%s</td><td>%s / %s (%.1f%%)</td></tr>\n",
+                        pinfo->device_path, pinfo->mount_point ? pinfo->mount_point : "—",
+                        pinfo->fs_type ? pinfo->fs_type : "—", u_str, t_str, pct);
                 } else {
-                    g_string_append_printf (html, "<div>%s mounted at %s (%s)</div>",
-                        pinfo->device_path, pinfo->mount_point, pinfo->fs_type);
+                    g_string_append_printf (html,
+                        "<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>\n",
+                        pinfo->device_path, pinfo->mount_point ? pinfo->mount_point : "—",
+                        pinfo->fs_type ? pinfo->fs_type : "—", _(PULS_STR_PARTITION_UNKNOWN_SIZE));
                 }
             }
-            g_string_append (html, "</td></tr>\n");
+            g_string_append (html, "tbody>\n</table>\n");
             g_list_free_full (parts, (GDestroyNotify)puls_partition_info_free);
         }
 
-        g_string_append (html, "</table>\n");
+        /* NVMe Statistics Table */
+        if (nvme) {
+            g_string_append_printf (html, "<div class=\"section-subtitle\">%s</div>\n", _(PULS_STR_REPORT_NVME_TITLE));
+            g_string_append (html, "<table>\n<thead><tr><th>Metric</th><th>Value</th></tr></thead>\n<tbody>\n");
+            g_string_append_printf (html, "<tr><td>%s</td><td>0x%02x</td></tr>\n", _(PULS_STR_NVME_CRITICAL_WARNING), nvme->critical_warning);
+            g_string_append_printf (html, "<tr><td>%s</td><td>%u%%</td></tr>\n", _(PULS_STR_NVME_AVAIL_SPARE), nvme->available_spare);
+            g_string_append_printf (html, "<tr><td>%s</td><td>%u%%</td></tr>\n", _(PULS_STR_NVME_AVAIL_SPARE_THRESH), nvme->available_spare_threshold);
+            g_string_append_printf (html, "<tr><td>%s</td><td>%u%%</td></tr>\n", _(PULS_STR_NVME_PCT_USED), nvme->percentage_used);
+            g_string_append_printf (html, "<tr><td>%s</td><td>%" G_GUINT64_FORMAT "</td></tr>\n", _(PULS_STR_NVME_DATA_UNITS_READ), nvme->data_units_read);
+            g_string_append_printf (html, "<tr><td>%s</td><td>%" G_GUINT64_FORMAT "</td></tr>\n", _(PULS_STR_NVME_DATA_UNITS_WRITTEN), nvme->data_units_written);
+            g_string_append_printf (html, "<tr><td>%s</td><td>%" G_GUINT64_FORMAT "</td></tr>\n", _(PULS_STR_NVME_HOST_READ_CMDS), nvme->host_read_commands);
+            g_string_append_printf (html, "<tr><td>%s</td><td>%" G_GUINT64_FORMAT "</td></tr>\n", _(PULS_STR_NVME_HOST_WRITE_CMDS), nvme->host_write_commands);
+            g_string_append_printf (html, "<tr><td>%s</td><td>%" G_GUINT64_FORMAT " min</td></tr>\n", _(PULS_STR_NVME_CTRL_BUSY_TIME), nvme->controller_busy_time);
+            g_string_append_printf (html, "<tr><td>%s</td><td>%" G_GUINT64_FORMAT "</td></tr>\n", _(PULS_STR_NVME_MEDIA_ERRORS), nvme->media_errors);
+            g_string_append_printf (html, "<tr><td>%s</td><td>%" G_GUINT64_FORMAT "</td></tr>\n", _(PULS_STR_NVME_ERROR_LOG_ENTRIES), nvme->error_log_entries);
+            g_string_append (html, "</tbody>\n</table>\n");
+        }
 
+        /* SMART Attributes Table */
         GArray *attrs = puls_smart_data_get_ata_attributes (data);
         if (attrs && attrs->len > 0) {
-            g_string_append (html,
-                "<h3>S.M.A.R.T. Attributes</h3>\n"
-                "<table><tr><th>ID</th><th>Name</th><th>Current</th>"
-                "<th>Worst</th><th>Threshold</th><th>Raw</th><th>Status</th></tr>\n");
+            g_string_append_printf (html, "<div class=\"section-subtitle\">%s</div>\n", _(PULS_STR_REPORT_SMART_TITLE));
+            g_string_append_printf (html,
+                "<table>\n<thead><tr><th>%s</th><th>%s</th><th>%s</th><th>%s</th><th>%s</th><th>%s</th><th>%s</th></tr></thead>\n<tbody>\n",
+                _(PULS_STR_SMART_COL_ID), _(PULS_STR_SMART_COL_NAME),
+                _(PULS_STR_SMART_COL_CURRENT), _(PULS_STR_SMART_COL_WORST),
+                _(PULS_STR_SMART_COL_THRESH), _(PULS_STR_SMART_COL_RAW),
+                _(PULS_STR_SMART_COL_STATUS));
             for (guint i = 0; i < attrs->len; i++) {
                 PulsSmartAttribute *a = &g_array_index (attrs, PulsSmartAttribute, i);
-                const gchar *row_class = a->failing_now ? "bad" : (a->failed_past ? "warn" : "ok");
+                const gchar *status_text = _(PULS_STR_SMART_STATUS_OK);
+                const gchar *badge_c = "badge-good";
+                if (a->failing_now) {
+                    status_text = _(PULS_STR_SMART_STATUS_FAIL);
+                    badge_c = "badge-bad";
+                } else if (a->failed_past) {
+                    status_text = _(PULS_STR_SMART_STATUS_PAST);
+                    badge_c = "badge-caution";
+                } else if (a->threshold > 0 && a->current > 0 && a->current - a->threshold <= 10) {
+                    status_text = _(PULS_STR_SMART_STATUS_WARN);
+                    badge_c = "badge-caution";
+                }
                 g_string_append_printf (html,
-                    "<tr><td>0x%02x</td><td>%s</td><td class=\"%s\">%d</td>"
-                    "<td>%d</td><td>%d</td><td>%s</td><td class=\"%s\">%s</td></tr>\n",
-                    a->id, a->name ? a->name : "—",
-                    row_class, a->current, a->worst, a->threshold,
+                    "<tr><td>0x%02X (%d)</td><td>%s</td><td>%d</td><td>%d</td><td>%d</td><td>%s</td><td><span class=\"badge %s\">%s</span></td></tr>\n",
+                    a->id, a->id, a->name ? a->name : "—",
+                    a->current, a->worst, a->threshold,
                     a->raw_string ? a->raw_string : "0",
-                    row_class, a->failing_now ? "FAIL" : (a->failed_past ? "Past" : "OK"));
+                    badge_c, status_text);
             }
-            g_string_append (html, "</table>\n");
+            g_string_append (html, "</tbody>\n</table>\n");
         }
-    }
-    g_list_free (devices);
 
-    g_string_append (html, "</body>\n</html>\n");
+        g_string_append (html, "</div>\n");
+    }
+
+    g_string_append (html, "</div>\n</body>\n</html>\n");
     return g_string_free (html, FALSE);
 }
 
@@ -607,6 +721,8 @@ puls_window_apply_lang (PulsWindow *self)
 
     gtk_label_set_text (GTK_LABEL (self->empty_label),  _(PULS_STR_SCANNING_FOR_DISKS));
     gtk_label_set_text (GTK_LABEL (self->empty_detail), _(PULS_STR_SMARTMONTOOLS_HINT));
+
+    puls_disk_selector_apply_lang (PULS_DISK_SELECTOR (self->disk_selector));
 
     GHashTableIter iter;
     gpointer key, value;

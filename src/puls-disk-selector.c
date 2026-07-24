@@ -13,6 +13,8 @@
 
 #include "puls-disk-selector.h"
 #include "puls-utils.h"
+#include "puls-i18n.h"
+
 
 enum {
     SIGNAL_DISK_SELECTED,
@@ -69,15 +71,19 @@ update_card (DiskCard      *card,
              PulsSmartData *data,
              gboolean       is_selected)
 {
-    if (data == NULL)
-        return;
-
-    const gchar *dev_path = puls_smart_data_get_device_path (data);
-    if (dev_path) {
-        const gchar *name = strrchr (dev_path, '/');
-        name = name ? name + 1 : dev_path;
+    if (card->device_path) {
+        const gchar *name = strrchr (card->device_path, '/');
+        name = name ? name + 1 : card->device_path;
         gtk_label_set_text (GTK_LABEL (card->name_label), name);
     }
+
+    if (is_selected)
+        gtk_widget_add_css_class (card->button, "disk-card-active");
+    else
+        gtk_widget_remove_css_class (card->button, "disk-card-active");
+
+    if (data == NULL)
+        return;
 
     const gchar *model = puls_smart_data_get_model_name (data);
     if (model) {
@@ -91,24 +97,24 @@ update_card (DiskCard      *card,
     }
 
     PulsHealthStatus health = puls_smart_data_get_health (data);
-    const gchar *health_text;
+    g_autofree gchar *health_text = NULL;
     const gchar *health_class;
 
     switch (health) {
     case PULS_HEALTH_GOOD:
-        health_text = "● Good";
+        health_text = g_strdup_printf ("\xe2\x97\x8f %s", _(PULS_STR_HEALTH_GOOD));
         health_class = "card-health-good";
         break;
     case PULS_HEALTH_CAUTION:
-        health_text = "● Caution";
+        health_text = g_strdup_printf ("\xe2\x97\x8f %s", _(PULS_STR_HEALTH_CAUTION));
         health_class = "card-health-caution";
         break;
     case PULS_HEALTH_BAD:
-        health_text = "● Bad";
+        health_text = g_strdup_printf ("\xe2\x97\x8f %s", _(PULS_STR_HEALTH_BAD));
         health_class = "card-health-bad";
         break;
     default:
-        health_text = "● Unknown";
+        health_text = g_strdup_printf ("\xe2\x97\x8f %s", _(PULS_STR_HEALTH_UNKNOWN));
         health_class = "card-health-unknown";
         break;
     }
@@ -132,10 +138,6 @@ update_card (DiskCard      *card,
     PulsDriveType dtype = puls_smart_data_get_drive_type (data);
     gtk_image_set_from_icon_name (GTK_IMAGE (card->icon),
                                  puls_drive_type_to_icon (dtype));
-    if (is_selected)
-        gtk_widget_add_css_class (card->button, "disk-card-active");
-    else
-        gtk_widget_remove_css_class (card->button, "disk-card-active");
 }
 
 static void
@@ -258,9 +260,18 @@ puls_disk_selector_init (PulsDiskSelector *self)
 GtkWidget *
 puls_disk_selector_new (PulsDiskManager *manager)
 {
+    g_return_val_if_fail (PULS_IS_DISK_MANAGER (manager), NULL);
+
     PulsDiskSelector *self = g_object_new (PULS_TYPE_DISK_SELECTOR, NULL);
     self->manager = manager;
+
     rebuild_cards (self);
+
+    GList *devices = puls_disk_manager_get_devices (manager);
+    if (devices != NULL) {
+        puls_disk_selector_select (self, devices->data);
+    }
+
     return GTK_WIDGET (self);
 }
 
@@ -300,5 +311,27 @@ void
 puls_disk_selector_refresh (PulsDiskSelector *self)
 {
     g_return_if_fail (PULS_IS_DISK_SELECTOR (self));
-    rebuild_cards (self);
+
+    GList *devices = puls_disk_manager_get_devices (self->manager);
+    guint device_count = g_list_length (devices);
+    guint card_count = g_list_length (self->cards);
+
+    if (device_count != card_count) {
+        rebuild_cards (self);
+        return;
+    }
+
+    for (GList *l = self->cards; l != NULL; l = l->next) {
+        DiskCard *card = l->data;
+        PulsSmartData *data = puls_disk_manager_get_smart_data (self->manager, card->device_path);
+        gboolean selected = g_strcmp0 (self->selected, card->device_path) == 0;
+        update_card (card, data, selected);
+    }
+}
+
+void
+puls_disk_selector_apply_lang (PulsDiskSelector *self)
+{
+    g_return_if_fail (PULS_IS_DISK_SELECTOR (self));
+    puls_disk_selector_refresh (self);
 }

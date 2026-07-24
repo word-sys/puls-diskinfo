@@ -28,5 +28,6 @@ void             puls_health_indicator_set_status        (PulsHealthIndicator *s
 PulsHealthStatus puls_health_indicator_get_status        (PulsHealthIndicator *self);
 void             puls_health_indicator_set_health_percent (PulsHealthIndicator *self, gint pct);
 void             puls_health_indicator_set_lifetime_days  (PulsHealthIndicator *self, gint days);
+void             puls_health_indicator_apply_lang         (PulsHealthIndicator *self);
 
 G_END_DECLS

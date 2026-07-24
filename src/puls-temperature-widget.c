@@ -14,6 +14,8 @@
 #include "puls-temperature-widget.h"
 #include "puls-settings.h"
 #include "puls-utils.h"
+#include "puls-i18n.h"
+
 
 struct _PulsTemperatureWidget {
     GtkWidget parent_instance;
@@ -73,26 +75,26 @@ update_display (PulsTemperatureWidget *self)
         const gchar *status;
         if (fahr) {
             if (self->temperature < 50)
-                status = "Safe range: < 122 °F";
+                status = _(PULS_STR_TEMP_SAFE_F);
             else if (self->temperature < 60)
-                status = "⚠ Getting warm";
+                status = _(PULS_STR_TEMP_WARM);
             else if (self->temperature < 70)
-                status = "⚠ Hot — check cooling";
+                status = _(PULS_STR_TEMP_HOT);
             else
-                status = "⚠ Critical temperature!";
+                status = _(PULS_STR_TEMP_CRITICAL);
         } else {
             if (self->temperature < 50)
-                status = "Safe range: < 50 °C";
+                status = _(PULS_STR_TEMP_SAFE_C);
             else if (self->temperature < 60)
-                status = "⚠ Getting warm";
+                status = _(PULS_STR_TEMP_WARM);
             else if (self->temperature < 70)
-                status = "⚠ Hot — check cooling";
+                status = _(PULS_STR_TEMP_HOT);
             else
-                status = "⚠ Critical temperature!";
+                status = _(PULS_STR_TEMP_CRITICAL);
         }
         gtk_label_set_text (GTK_LABEL (self->range_label), status);
     } else {
-        gtk_label_set_text (GTK_LABEL (self->range_label), "Temperature unavailable");
+        gtk_label_set_text (GTK_LABEL (self->range_label), _(PULS_STR_TEMP_UNAVAIL));
     }
 }
 
@@ -168,4 +170,11 @@ puls_temperature_widget_get_temperature (PulsTemperatureWidget *self)
 {
     g_return_val_if_fail (PULS_IS_TEMPERATURE_WIDGET (self), -1);
     return self->temperature;
+}
+
+void
+puls_temperature_widget_apply_lang (PulsTemperatureWidget *self)
+{
+    g_return_if_fail (PULS_IS_TEMPERATURE_WIDGET (self));
+    update_display (self);
 }

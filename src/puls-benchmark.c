@@ -216,6 +216,10 @@ run_seq_test (BenchmarkRunner *runner, int fd, guint64 size, guint num_threads, 
     guint actual_threads = MIN (num_threads, 8);
     guint64 chunk_size = size / actual_threads;
 
+    if (!is_write) {
+        posix_fadvise (fd, 0, 0, POSIX_FADV_DONTNEED);
+    }
+
     GTimer *timer = g_timer_new ();
 
     for (guint i = 0; i < actual_threads; i++) {
@@ -232,6 +236,10 @@ run_seq_test (BenchmarkRunner *runner, int fd, guint64 size, guint num_threads, 
 
     for (guint i = 0; i < actual_threads; i++) {
         g_thread_join (threads[i]);
+    }
+
+    if (is_write) {
+        fdatasync (fd);
     }
 
     g_timer_stop (timer);
@@ -274,6 +282,10 @@ run_random_test (BenchmarkRunner *runner, int fd, guint64 size, guint num_thread
     }
     guint ops_per_thread = total_ops / actual_threads;
 
+    if (!is_write) {
+        posix_fadvise (fd, 0, 0, POSIX_FADV_DONTNEED);
+    }
+
     GTimer *timer = g_timer_new ();
 
     for (guint i = 0; i < actual_threads; i++) {
@@ -291,6 +303,10 @@ run_random_test (BenchmarkRunner *runner, int fd, guint64 size, guint num_thread
 
     for (guint i = 0; i < actual_threads; i++) {
         g_thread_join (threads[i]);
+    }
+
+    if (is_write) {
+        fdatasync (fd);
     }
 
     g_timer_stop (timer);
@@ -327,19 +343,38 @@ benchmark_background_thread (gpointer data)
     BenchmarkRunner *runner = data;
 
     GFile *file = g_file_new_for_path (runner->test_directory);
-    GFileInfo *info = g_file_query_filesystem_info (file, G_FILE_ATTRIBUTE_FILESYSTEM_FREE, NULL, NULL);
+    GFileInfo *info = g_file_query_filesystem_info (file, G_FILE_ATTRIBUTE_FILESYSTEM_FREE "," G_FILE_ATTRIBUTE_FILESYSTEM_TYPE, NULL, NULL);
+    gboolean is_fat_or_removable = FALSE;
     if (info) {
         if (g_file_info_has_attribute (info, G_FILE_ATTRIBUTE_FILESYSTEM_FREE)) {
             guint64 free_space = g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_FILESYSTEM_FREE);
-            if (free_space < runner->test_size_bytes) {
+            if (free_space < runner->test_size_bytes * 2) {
                 runner->error_msg = g_strdup_printf ("Not enough free space (needs %.1f MB, only %.1f MB available)",
-                                                     (double)runner->test_size_bytes / (1000.0 * 1000.0),
+                                                     (double)(runner->test_size_bytes * 2) / (1000.0 * 1000.0),
                                                      (double)free_space / (1000.0 * 1000.0));
+            }
+        }
+        const gchar *fs_type = g_file_info_get_attribute_string (info, G_FILE_ATTRIBUTE_FILESYSTEM_TYPE);
+        if (fs_type != NULL) {
+            if (g_ascii_strcasecmp (fs_type, "vfat") == 0 ||
+                g_ascii_strcasecmp (fs_type, "fat") == 0 ||
+                g_ascii_strcasecmp (fs_type, "msdos") == 0 ||
+                g_ascii_strcasecmp (fs_type, "exfat") == 0 ||
+                g_ascii_strcasecmp (fs_type, "ntfs") == 0 ||
+                g_ascii_strcasecmp (fs_type, "fuse") == 0 ||
+                g_ascii_strcasecmp (fs_type, "fuseblk") == 0) {
+                is_fat_or_removable = TRUE;
             }
         }
         g_object_unref (info);
     }
     g_object_unref (file);
+
+    if (g_str_has_prefix (runner->test_directory, "/media") ||
+        g_str_has_prefix (runner->test_directory, "/run/media") ||
+        g_str_has_prefix (runner->test_directory, "/mnt")) {
+        is_fat_or_removable = TRUE;
+    }
 
     if (runner->error_msg != NULL) {
         FinishedUpdate *fu = g_new0 (FinishedUpdate, 1);
@@ -355,7 +390,9 @@ benchmark_background_thread (gpointer data)
 
     int flags = O_RDWR | O_CREAT;
 #ifdef O_DIRECT
-    flags |= O_DIRECT;
+    if (!is_fat_or_removable) {
+        flags |= O_DIRECT;
+    }
 #endif
 
     int fd = open (filepath, flags, 0644);
@@ -401,7 +438,7 @@ benchmark_background_thread (gpointer data)
 
         switch (current_test) {
             case PULS_BENCHMARK_TEST_SEQ1M_Q8T1:
-                threads_count = 8;
+                threads_count = is_fat_or_removable ? 1 : 4;
                 is_seq = TRUE;
                 break;
             case PULS_BENCHMARK_TEST_SEQ1M_Q1T1:
@@ -409,7 +446,7 @@ benchmark_background_thread (gpointer data)
                 is_seq = TRUE;
                 break;
             case PULS_BENCHMARK_TEST_RND4K_Q32T1:
-                threads_count = 32;
+                threads_count = is_fat_or_removable ? 1 : 4;
                 is_seq = FALSE;
                 break;
             case PULS_BENCHMARK_TEST_RND4K_Q1T1:
@@ -440,6 +477,8 @@ benchmark_background_thread (gpointer data)
             if (!ok) {
                 break;
             }
+
+            fsync (fd);
 
             if (speed > max_write_speed) {
                 max_write_speed = speed;
@@ -489,8 +528,15 @@ benchmark_background_thread (gpointer data)
         runner->results[current_test].read_done = TRUE;
     }
 
+    fsync (fd);
     close (fd);
     g_unlink (filepath);
+
+    int dir_fd = open (runner->test_directory, O_RDONLY | O_DIRECTORY);
+    if (dir_fd >= 0) {
+        fsync (dir_fd);
+        close (dir_fd);
+    }
     g_free (filepath);
 
     FinishedUpdate *fu = g_new0 (FinishedUpdate, 1);
@@ -574,16 +620,38 @@ seek_task_thread (GTask *task G_GNUC_UNUSED,
     gboolean seek_cancelled = FALSE;
     gchar *error_msg = NULL;
 
+    const gchar *dev_name = strrchr (d->device_path, '/');
+    dev_name = dev_name ? dev_name + 1 : d->device_path;
+
+    off_t dev_size = 0;
+    g_autofree gchar *sysfs_size_path = g_build_filename ("/sys/block", dev_name, "size", NULL);
+    g_autofree gchar *size_str = NULL;
+    if (g_file_get_contents (sysfs_size_path, &size_str, NULL, NULL)) {
+        dev_size = (off_t)(g_ascii_strtoull (size_str, NULL, 10) * 512ULL);
+    }
+
     int fd = open (d->device_path, O_RDONLY | O_CLOEXEC);
+    FILE *pipe_fp = NULL;
+    if (fd < 0 && errno == EACCES) {
+        g_autofree gchar *cmd = g_strdup_printf ("pkexec dd if=%s bs=512 status=none 2>/dev/null", d->device_path);
+        pipe_fp = popen (cmd, "r");
+        if (pipe_fp) {
+            fd = fileno (pipe_fp);
+        }
+    }
+
     if (fd < 0) {
         error_msg = g_strdup_printf ("Cannot open %s: %s", d->device_path, g_strerror (errno));
         goto done;
     }
 
-    off_t dev_size = lseek (fd, 0, SEEK_END);
+    if (dev_size <= 0) {
+        dev_size = lseek (fd, 0, SEEK_END);
+    }
+
     if (dev_size <= 0) {
         error_msg = g_strdup ("Cannot determine device size");
-        close (fd);
+        if (pipe_fp) pclose (pipe_fp); else close (fd);
         goto done;
     }
 
@@ -591,7 +659,7 @@ seek_task_thread (GTask *task G_GNUC_UNUSED,
     void *buf = NULL;
     if (posix_memalign (&buf, 512, 512) != 0) {
         error_msg = g_strdup ("Memory allocation failed");
-        close (fd);
+        if (pipe_fp) pclose (pipe_fp); else close (fd);
         goto done;
     }
 
@@ -615,7 +683,11 @@ seek_task_thread (GTask *task G_GNUC_UNUSED,
 
         struct timespec t0, t1;
         clock_gettime (CLOCK_MONOTONIC, &t0);
-        pread (fd, buf, 512, offset);
+        if (pipe_fp != NULL) {
+            read (fd, buf, 512);
+        } else {
+            pread (fd, buf, 512, offset);
+        }
         clock_gettime (CLOCK_MONOTONIC, &t1);
 
         gdouble ms = (double)(t1.tv_sec - t0.tv_sec) * 1000.0
@@ -628,7 +700,10 @@ seek_task_thread (GTask *task G_GNUC_UNUSED,
     }
 
     free (buf);
-    close (fd);
+    if (pipe_fp)
+        pclose (pipe_fp);
+    else
+        close (fd);
 
     if (samples > 0) {
         result.avg_ms  = sum_ms / (double)samples;
