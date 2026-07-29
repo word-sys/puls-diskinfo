@@ -242,10 +242,12 @@ surface_scan_thread (GTask        *task,
     }
 
     free (buf);
-    if (pipe_fp)
+    if (pipe_fp) {
         pclose (pipe_fp);
-    else
+        sync ();
+    } else {
         close (fd);
+    }
 
     emit_finished (d->finished_cb, &result, scan_cancelled, error_msg, d->user_data);
 }

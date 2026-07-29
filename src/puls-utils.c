@@ -589,6 +589,67 @@ puls_get_disk_partitions (const gchar *device_path)
     return list;
 }
 
+GList *
+puls_get_all_disk_partitions (const gchar *device_path)
+{
+    if (device_path == NULL)
+        return NULL;
+
+    gchar *argv[] = {
+        "lsblk", "-nlo", "NAME,TYPE", (gchar *)device_path, NULL
+    };
+
+    g_autofree gchar *output = NULL;
+    if (!g_spawn_sync (NULL, argv, NULL,
+                       G_SPAWN_SEARCH_PATH,
+                       NULL, NULL,
+                       &output, NULL, NULL, NULL) || output == NULL)
+        return NULL;
+
+    GList *list = NULL;
+    gchar **lines = g_strsplit (output, "\n", -1);
+    for (gint i = 0; lines[i] != NULL; i++) {
+        gchar *line = g_strstrip (lines[i]);
+        if (*line == '\0') continue;
+
+        gchar **cols = g_strsplit_set (line, " \t", -1);
+        const gchar *name = NULL;
+        const gchar *type = NULL;
+        gint filled = 0;
+        for (gint j = 0; cols[j] != NULL; j++) {
+            gchar *tok = g_strstrip (cols[j]);
+            if (*tok == '\0') continue;
+            if (filled == 0) { name = tok; filled++; }
+            else             { type = tok; filled++; break; }
+        }
+
+        if (name && type && g_strcmp0 (type, "part") == 0) {
+            gchar *full_path = g_strdup_printf ("/dev/%s", name);
+            PulsPartitionInfo *info = g_new0 (PulsPartitionInfo, 1);
+            info->device_path   = full_path;
+            info->mount_point   = g_strdup ("—");
+            info->fs_type       = g_strdup ("unknown");
+            info->total_bytes   = 0;
+            info->available_bytes = 0;
+            list = g_list_append (list, info);
+        }
+        g_strfreev (cols);
+    }
+    g_strfreev (lines);
+
+    if (list == NULL) {
+        PulsPartitionInfo *info = g_new0 (PulsPartitionInfo, 1);
+        info->device_path   = g_strdup (device_path);
+        info->mount_point   = g_strdup ("—");
+        info->fs_type       = g_strdup ("unknown");
+        info->total_bytes   = 0;
+        info->available_bytes = 0;
+        list = g_list_append (list, info);
+    }
+
+    return list;
+}
+
 static void
 action_task_data_free (ActionTaskData *atd)
 {

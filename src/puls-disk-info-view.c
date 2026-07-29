@@ -26,6 +26,11 @@
 #include "puls-i18n.h"
 #include <adwaita.h>
 #include <glib/gstdio.h>
+#include <stdio.h>
+#include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/wait.h>
 
 struct _PulsDiskInfoView {
     GtkWidget parent_instance;
@@ -135,6 +140,11 @@ struct _PulsDiskInfoView {
     GtkWidget    *seek_start_btn;
     GtkWidget    *seek_status_label;
     GCancellable *seek_cancellable;
+
+    GtkWidget    *fix_disk_btn;
+    GtkWidget    *fix_disk_combo;
+    GtkWidget    *fix_disk_status_label;
+    gboolean      fix_disk_running;
 };
 
 G_DEFINE_TYPE (PulsDiskInfoView, puls_disk_info_view, GTK_TYPE_WIDGET)
@@ -250,6 +260,181 @@ on_abort_test_clicked (GtkButton *btn G_GNUC_UNUSED, PulsDiskInfoView *self)
         return;
     gtk_label_set_text (GTK_LABEL (self->test_status_label), _(PULS_STR_TEST_ABORTING));
     puls_run_smartctl_action_async (self->current_device, "abort", NULL, on_action_done, self);
+}
+
+typedef struct {
+    PulsDiskInfoView *view;
+    gchar            *partition;
+} FixDiskData;
+
+static void
+fix_disk_data_free (FixDiskData *d)
+{
+    g_free (d->partition);
+    g_free (d);
+}
+
+static void
+fix_disk_thread (GTask *task G_GNUC_UNUSED,
+                 gpointer source G_GNUC_UNUSED,
+                 gpointer task_data,
+                 GCancellable *cancellable G_GNUC_UNUSED)
+{
+    FixDiskData *d = task_data;
+    gchar *result_msg = NULL;
+    PulsLang lang = puls_i18n_get_lang ();
+    GError *error = NULL;
+    gint raw_status = 0;
+
+    gboolean is_mounted = FALSE;
+    FILE *mounts = fopen ("/proc/mounts", "r");
+    if (mounts) {
+        gchar line[512];
+        while (fgets (line, sizeof (line), mounts)) {
+            gsize plen = strlen (d->partition);
+            if (g_str_has_prefix (line, d->partition) &&
+                (line[plen] == ' ' || line[plen] == '\t')) {
+                is_mounted = TRUE;
+                break;
+            }
+        }
+        fclose (mounts);
+    }
+
+    if (is_mounted) {
+        gchar *umount_argv[] = { "pkexec", "umount", d->partition, NULL };
+        gboolean ok = g_spawn_sync (NULL, umount_argv, NULL,
+                                    G_SPAWN_SEARCH_PATH,
+                                    NULL, NULL, NULL, NULL,
+                                    &raw_status, &error);
+        if (!ok || error || raw_status != 0) {
+            result_msg = g_strdup_printf (
+                lang == PULS_LANG_TR
+                ? "Hata: Bölüm çıkarılamadı (%s). Lütfen manuel olarak çıkarın."
+                : "Error: Could not unmount partition (%s). Please unmount manually first.",
+                error ? error->message : d->partition);
+            g_clear_error (&error);
+            g_task_return_pointer (task, result_msg, g_free);
+            return;
+        }
+        raw_status = 0;
+    }
+
+    g_autofree gchar *stdout_str = NULL;
+    g_autofree gchar *stderr_str = NULL;
+    gboolean ok = FALSE;
+
+    {
+        gchar *argv[] = { "pkexec", "ntfsfix", "-d", d->partition, NULL };
+        ok = g_spawn_sync (NULL, argv, NULL, G_SPAWN_SEARCH_PATH,
+                           NULL, NULL, &stdout_str, &stderr_str,
+                           &raw_status, &error);
+    }
+
+    gint exit_code = WIFEXITED (raw_status) ? WEXITSTATUS (raw_status) : -1;
+
+    if (exit_code != 0) {
+        g_clear_error (&error);
+        g_free (stdout_str); stdout_str = NULL;
+        g_free (stderr_str); stderr_str = NULL;
+        raw_status = 0;
+        gchar *argv[] = { "pkexec", "fsck", "-a", d->partition, NULL };
+        ok = g_spawn_sync (NULL, argv, NULL, G_SPAWN_SEARCH_PATH,
+                           NULL, NULL, &stdout_str, &stderr_str,
+                           &raw_status, &error);
+        exit_code = WIFEXITED (raw_status) ? WEXITSTATUS (raw_status) : -1;
+    }
+
+    if (!ok || error) {
+        result_msg = g_strdup (error ? error->message : "Tool failed to start");
+        g_clear_error (&error);
+        g_task_return_pointer (task, result_msg, g_free);
+        return;
+    }
+
+    g_autofree gchar *detail = NULL;
+    if (stdout_str && *stdout_str) {
+        g_strstrip (stdout_str);
+        detail = g_strdup (stdout_str);
+    } else if (stderr_str && *stderr_str) {
+        g_strstrip (stderr_str);
+        detail = g_strdup (stderr_str);
+    }
+
+    const gchar *suffix = (detail && *detail) ? detail : NULL;
+
+    if (exit_code == 0) {
+        result_msg = suffix
+            ? g_strdup (suffix)
+            : g_strdup (lang == PULS_LANG_TR
+                ? "İşlem tamamlandı." : "Operation completed successfully.");
+    } else if (exit_code == 1) {
+        result_msg = suffix
+            ? g_strdup_printf (lang == PULS_LANG_TR
+                ? "Hatalar düzeltildi.\n%s" : "Errors were corrected.\n%s", suffix)
+            : g_strdup (lang == PULS_LANG_TR
+                ? "Hatalar düzeltildi." : "Errors were corrected.");
+    } else if (exit_code == 4) {
+        result_msg = suffix
+            ? g_strdup_printf (lang == PULS_LANG_TR
+                ? "Uyarı: Bazı hatalar düzeltilemedi.\n%s"
+                : "Warning: Some errors could not be fixed.\n%s", suffix)
+            : g_strdup (lang == PULS_LANG_TR
+                ? "Uyarı: Bazı hatalar düzeltilemedi."
+                : "Warning: Some errors could not be fixed.");
+    } else if (exit_code == 32) {
+        result_msg = g_strdup (lang == PULS_LANG_TR
+            ? "İzin reddedildi veya işlem iptal edildi."
+            : "Permission denied or operation cancelled.");
+    } else {
+        result_msg = g_strdup_printf (lang == PULS_LANG_TR
+            ? "Çıkış kodu: %d%s%s" : "Exit code: %d%s%s",
+            exit_code, suffix ? "\n" : "", suffix ? suffix : "");
+    }
+
+    g_task_return_pointer (task, result_msg, g_free);
+}
+
+static void
+fix_disk_done (GObject *source G_GNUC_UNUSED,
+               GAsyncResult *result,
+               gpointer user_data)
+{
+    PulsDiskInfoView *self = PULS_DISK_INFO_VIEW (user_data);
+    self->fix_disk_running = FALSE;
+    gtk_widget_set_sensitive (self->fix_disk_btn, TRUE);
+    gtk_widget_set_sensitive (self->fix_disk_combo, TRUE);
+
+    gchar *msg = g_task_propagate_pointer (G_TASK (result), NULL);
+    if (msg) {
+        gtk_label_set_text (GTK_LABEL (self->fix_disk_status_label), msg);
+        g_free (msg);
+    }
+}
+
+static void
+on_fix_disk_clicked (GtkButton *btn G_GNUC_UNUSED, PulsDiskInfoView *self)
+{
+    if (self->current_device == NULL || self->fix_disk_running)
+        return;
+
+    g_autofree gchar *part = gtk_combo_box_text_get_active_text (GTK_COMBO_BOX_TEXT (self->fix_disk_combo));
+    if (part == NULL || *part == '\0')
+        return;
+
+    self->fix_disk_running = TRUE;
+    gtk_widget_set_sensitive (self->fix_disk_btn, FALSE);
+    gtk_widget_set_sensitive (self->fix_disk_combo, FALSE);
+    gtk_label_set_text (GTK_LABEL (self->fix_disk_status_label), _(PULS_STR_FIX_DISK_RUNNING));
+
+    FixDiskData *d = g_new0 (FixDiskData, 1);
+    d->view      = self;
+    d->partition = g_strdup (part);
+
+    GTask *task = g_task_new (NULL, NULL, fix_disk_done, self);
+    g_task_set_task_data (task, d, (GDestroyNotify)fix_disk_data_free);
+    g_task_run_in_thread (task, fix_disk_thread);
+    g_object_unref (task);
 }
 
 static void
@@ -856,6 +1041,28 @@ puls_disk_info_view_init (PulsDiskInfoView *self)
     self->test_progress_bar = gtk_progress_bar_new ();
     gtk_widget_set_visible (self->test_progress_bar, FALSE);
     gtk_box_append (GTK_BOX (self->diag_box), self->test_progress_bar);
+
+    GtkWidget *sep = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
+    gtk_widget_set_margin_top (sep, 4);
+    gtk_widget_set_margin_bottom (sep, 4);
+    gtk_box_append (GTK_BOX (self->diag_box), sep);
+
+    GtkWidget *fix_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_box_append (GTK_BOX (self->diag_box), fix_row);
+
+    self->fix_disk_combo = gtk_combo_box_text_new ();
+    gtk_widget_set_hexpand (self->fix_disk_combo, TRUE);
+    gtk_box_append (GTK_BOX (fix_row), self->fix_disk_combo);
+
+    self->fix_disk_btn = gtk_button_new_with_label (_(PULS_STR_BTN_FIX_DISK));
+    g_signal_connect (self->fix_disk_btn, "clicked", G_CALLBACK (on_fix_disk_clicked), self);
+    gtk_box_append (GTK_BOX (fix_row), self->fix_disk_btn);
+
+    self->fix_disk_status_label = gtk_label_new ("");
+    gtk_widget_add_css_class (self->fix_disk_status_label, "dim-label");
+    gtk_label_set_xalign (GTK_LABEL (self->fix_disk_status_label), 0.0);
+    gtk_label_set_wrap (GTK_LABEL (self->fix_disk_status_label), TRUE);
+    gtk_box_append (GTK_BOX (self->diag_box), self->fix_disk_status_label);
 
     /* Real-Time Disk Activity */
     self->io_graph_frame = create_section_frame (_(PULS_STR_SECTION_IO_ACTIVITY));
@@ -1608,6 +1815,8 @@ puls_disk_info_view_set_data (PulsDiskInfoView *self,
     }
 
     GList *parts = puls_get_disk_partitions (self->current_device);
+
+    gtk_combo_box_text_remove_all (GTK_COMBO_BOX_TEXT (self->fix_disk_combo));
     if (parts == NULL) {
         GtkWidget *no_parts = gtk_label_new (_(PULS_STR_PARTITIONS_EMPTY));
         gtk_widget_add_css_class (no_parts, "dim-label");
@@ -1653,6 +1862,19 @@ puls_disk_info_view_set_data (PulsDiskInfoView *self,
             gtk_box_append (GTK_BOX (self->partitions_box), row);
         }
         g_list_free_full (parts, (GDestroyNotify)puls_partition_info_free);
+    }
+
+    GList *all_parts = puls_get_all_disk_partitions (self->current_device);
+    if (all_parts) {
+        for (GList *l = all_parts; l != NULL; l = l->next) {
+            PulsPartitionInfo *pinfo = l->data;
+            gtk_combo_box_text_append_text (GTK_COMBO_BOX_TEXT (self->fix_disk_combo), pinfo->device_path);
+        }
+        gtk_combo_box_set_active (GTK_COMBO_BOX (self->fix_disk_combo), 0);
+        gtk_widget_set_sensitive (self->fix_disk_btn, TRUE);
+        g_list_free_full (all_parts, (GDestroyNotify)puls_partition_info_free);
+    } else {
+        gtk_widget_set_sensitive (self->fix_disk_btn, FALSE);
     }
 
     gboolean testing = puls_smart_data_get_self_test_in_progress (data);
@@ -1915,6 +2137,7 @@ puls_disk_info_view_apply_lang (PulsDiskInfoView *self)
     gtk_button_set_label (GTK_BUTTON (self->surface_start_btn), _(PULS_STR_BTN_START_SURFACE));
     gtk_button_set_label (GTK_BUTTON (self->surface_stop_btn),  _(PULS_STR_BTN_STOP_SURFACE));
     gtk_button_set_label (GTK_BUTTON (self->seek_start_btn),    _(PULS_STR_BTN_SEEK_LATENCY));
+    gtk_button_set_label (GTK_BUTTON (self->fix_disk_btn),      _(PULS_STR_BTN_FIX_DISK));
 
     puls_health_indicator_apply_lang (PULS_HEALTH_INDICATOR (self->health_indicator));
     puls_temperature_widget_apply_lang (PULS_TEMPERATURE_WIDGET (self->temperature_widget));

@@ -36,7 +36,8 @@ typedef struct {
 } PulsPartitionInfo;
 
 void   puls_partition_info_free (PulsPartitionInfo *info);
-GList *puls_get_disk_partitions  (const gchar *device_path);
+GList *puls_get_disk_partitions     (const gchar *device_path);
+GList *puls_get_all_disk_partitions (const gchar *device_path);
 
 
 typedef void (*PulsSmartctlCallback) (const gchar *json_output,
