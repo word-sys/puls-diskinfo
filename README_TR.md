@@ -1,5 +1,5 @@
 <p align="left">
-  <img src="https://raw.githubusercontent.com/word-sys/puls/main/pulsd_icon.svg" width="220" height="220" alt="PULS-DiskInfo Icon"/>
+  <img src="https://raw.githubusercontent.com/word-sys/puls-diskinfo/main/pulsd_icon.svg" width="220" height="220" alt="PULS-DiskInfo Icon"/>
 </p>
 
 # PULS DiskInfo
