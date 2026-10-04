@@ -1,5 +1,8 @@
 ![Dil TR](https://github.com/word-sys/puls-diskinfo/blob/main/README_TR.md)
 
+<p align="left">
+  <img src="https://raw.githubusercontent.com/word-sys/puls/main/pulsd_icon.svg" width="220" height="220" alt="PULS-DiskInfo Icon"/>
+</p>
 
 # PULS DiskInfo
 

@@ -1,3 +1,7 @@
+<p align="left">
+  <img src="https://raw.githubusercontent.com/word-sys/puls/main/pulsd_icon.svg" width="220" height="220" alt="PULS-DiskInfo Icon"/>
+</p>
+
 # PULS DiskInfo
 
 Linux için GTK4 ve C ile geliştirilmiş, kapsamlı bir depolama sağlığı ve S.M.A.R.T. izleme uygulaması. CrystalDiskInfo'dan ilham alınarak tasarlanmış olup kritik sağlık durumunu, sıcaklıkları ve ayrıntılı sürücü niteliklerini görüntüler.
