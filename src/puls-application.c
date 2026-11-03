@@ -78,10 +78,18 @@ puls_application_class_init (PulsApplicationClass *klass)
     object_class->dispose = puls_application_dispose;
 }
 
+static const GOptionEntry app_cli_entries[] = {
+    { "version", 'v', 0, G_OPTION_ARG_NONE, NULL, "Show application version", NULL },
+    { "headless", 0, 0, G_OPTION_ARG_NONE, NULL, "Run disk scan in headless terminal mode", NULL },
+    { "json", 0, 0, G_OPTION_ARG_NONE, NULL, "Output scan result as JSON", NULL },
+    { NULL }
+};
+
 static void
 puls_application_init (PulsApplication *self)
 {
     self->css_provider = NULL;
+    g_application_add_main_option_entries (G_APPLICATION (self), app_cli_entries);
 }
 
 PulsApplication *
