@@ -9,8 +9,23 @@ project('puls-diskinfo', 'c',
 )
 
 gnome = import('gnome')
+cc = meson.get_compiler('c')
+
+warning_flags = [
+  '-Werror=implicit-function-declaration',
+  '-Werror=return-type',
+  '-Wundef',
+  '-Wformat=2',
+  '-Wno-format-nonliteral',
+  '-Wformat-security',
+  '-Wpointer-arith',
+  '-Winit-self',
+  '-Wmissing-declarations',
+  '-Wredundant-decls',
+]
 
 add_project_arguments(
+  cc.get_supported_arguments(warning_flags),
   '-DPULS_VERSION="' + meson.project_version() + '"',
   language: 'c',
 )

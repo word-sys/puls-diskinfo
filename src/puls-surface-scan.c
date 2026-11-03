@@ -130,7 +130,7 @@ read_block_full (int fd, void *buf, gsize count, gboolean is_pipe, off_t offset)
 }
 
 static void
-surface_scan_thread (GTask        *task,
+surface_scan_thread (GTask        *task G_GNUC_UNUSED,
                      gpointer      source_object G_GNUC_UNUSED,
                      gpointer      task_data,
                      GCancellable *cancellable)
