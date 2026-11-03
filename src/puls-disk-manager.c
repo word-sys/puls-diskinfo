@@ -12,6 +12,7 @@
  */
 
 #include "puls-disk-manager.h"
+#include "puls-mock-data.h"
 #include "puls-smart-parser.h"
 #include "puls-utils.h"
 #include <gio/gio.h>
@@ -32,6 +33,7 @@ struct _PulsDiskManager {
 
     GHashTable *devices;
     GList *device_paths;
+    gboolean mock_mode;
 };
 
 G_DEFINE_TYPE (PulsDiskManager, puls_disk_manager, G_TYPE_OBJECT)
@@ -152,6 +154,40 @@ puls_disk_manager_init (PulsDiskManager *self)
     self->devices = g_hash_table_new_full (g_str_hash, g_str_equal,
                                            g_free, g_object_unref);
     self->device_paths = NULL;
+    self->mock_mode = puls_is_mock_mode_enabled ();
+}
+
+void
+puls_disk_manager_set_mock_mode (PulsDiskManager *self, gboolean mock_mode)
+{
+    g_return_if_fail (PULS_IS_DISK_MANAGER (self));
+    self->mock_mode = mock_mode;
+}
+
+gboolean
+puls_disk_manager_get_mock_mode (PulsDiskManager *self)
+{
+    g_return_val_if_fail (PULS_IS_DISK_MANAGER (self), FALSE);
+    return self->mock_mode;
+}
+
+void
+puls_disk_manager_add_mock_device (PulsDiskManager *self,
+                                   const gchar     *device_path,
+                                   PulsSmartData   *data)
+{
+    g_return_if_fail (PULS_IS_DISK_MANAGER (self));
+    g_return_if_fail (device_path != NULL);
+    g_return_if_fail (data != NULL);
+
+    if (!g_hash_table_contains (self->devices, device_path)) {
+        g_hash_table_insert (self->devices, g_strdup (device_path), data);
+        self->device_paths = g_list_append (self->device_paths, g_strdup (device_path));
+        g_signal_emit (self, signals[SIGNAL_DISK_ADDED], 0, device_path);
+    } else {
+        g_hash_table_replace (self->devices, g_strdup (device_path), data);
+        g_signal_emit (self, signals[SIGNAL_DISK_UPDATED], 0, device_path);
+    }
 }
 
 PulsDiskManager *
@@ -395,6 +431,11 @@ puls_disk_manager_scan (PulsDiskManager *self)
 {
     g_return_if_fail (PULS_IS_DISK_MANAGER (self));
 
+    if (self->mock_mode) {
+        puls_mock_data_populate_manager (self);
+        return;
+    }
+
     GList *found = scan_sys_block ();
 
     for (GList *l = found; l != NULL; l = l->next) {
@@ -517,6 +558,14 @@ puls_disk_manager_refresh_async (PulsDiskManager     *self,
     g_return_if_fail (PULS_IS_DISK_MANAGER (self));
 
     GTask *task = g_task_new (self, cancellable, callback, user_data);
+
+    if (self->mock_mode) {
+        PulsSmartData *data = g_hash_table_lookup (self->devices, device_path);
+        g_signal_emit (self, signals[SIGNAL_DISK_UPDATED], 0, device_path);
+        g_task_return_pointer (task, data ? g_object_ref (data) : NULL, g_object_unref);
+        g_object_unref (task);
+        return;
+    }
 
     RefreshData *rd = g_new0 (RefreshData, 1);
     rd->manager = self;

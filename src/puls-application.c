@@ -82,6 +82,7 @@ static const GOptionEntry app_cli_entries[] = {
     { "version", 'v', 0, G_OPTION_ARG_NONE, NULL, "Show application version", NULL },
     { "headless", 0, 0, G_OPTION_ARG_NONE, NULL, "Run disk scan in headless terminal mode", NULL },
     { "json", 0, 0, G_OPTION_ARG_NONE, NULL, "Output scan result as JSON", NULL },
+    { "mock-disk", 'm', 0, G_OPTION_ARG_NONE, NULL, "Simulate mock storage devices", NULL },
     { NULL }
 };
 

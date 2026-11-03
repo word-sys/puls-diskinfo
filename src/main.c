@@ -13,6 +13,7 @@
 
 #include "puls-application.h"
 #include "puls-disk-manager.h"
+#include "puls-mock-data.h"
 #include "puls-smart-data.h"
 #include "puls-utils.h"
 
@@ -27,11 +28,13 @@
 static gboolean opt_version = FALSE;
 static gboolean opt_headless = FALSE;
 static gboolean opt_json = FALSE;
+static gboolean opt_mock = FALSE;
 
 static const GOptionEntry cli_entries[] = {
     { "version", 'v', 0, G_OPTION_ARG_NONE, &opt_version, "Show application version", NULL },
     { "headless", 0, 0, G_OPTION_ARG_NONE, &opt_headless, "Run disk scan in headless terminal mode", NULL },
     { "json", 0, 0, G_OPTION_ARG_NONE, &opt_json, "Output scan result as JSON", NULL },
+    { "mock-disk", 'm', 0, G_OPTION_ARG_NONE, &opt_mock, "Simulate mock storage devices", NULL },
     { NULL }
 };
 
@@ -147,6 +150,10 @@ main (int argc, char *argv[])
         g_printerr ("Option parsing failed: %s\n", error ? error->message : "unknown error");
         g_clear_error (&error);
         return 1;
+    }
+
+    if (opt_mock) {
+        puls_set_mock_mode_enabled (TRUE);
     }
 
     if (opt_version) {

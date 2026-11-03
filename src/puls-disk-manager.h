@@ -39,4 +39,11 @@ PulsSmartData   *puls_disk_manager_refresh_finish (PulsDiskManager *self,
                                                    GError         **error);
 
 
+void             puls_disk_manager_set_mock_mode  (PulsDiskManager     *self,
+                                                   gboolean             mock_mode);
+gboolean         puls_disk_manager_get_mock_mode  (PulsDiskManager     *self);
+void             puls_disk_manager_add_mock_device (PulsDiskManager    *self,
+                                                    const gchar         *device_path,
+                                                    PulsSmartData       *data);
+
 G_END_DECLS
