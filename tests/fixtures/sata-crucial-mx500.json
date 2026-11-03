@@ -1,0 +1,148 @@
+{
+  "json_format_version": [1, 0],
+  "smartctl": {
+    "version": [7, 3],
+    "platform_info": "x86_64-linux",
+    "exit_status": 0
+  },
+  "device": {
+    "name": "/dev/sda",
+    "info_name": "/dev/sda",
+    "type": "ata",
+    "protocol": "ATA"
+  },
+  "model_name": "Crucial_CT500MX500SSD1",
+  "serial_number": "2145E5F67890",
+  "firmware_version": "M3CR043",
+  "sata_version": {
+    "string": "SATA 3.3, 6.0 Gb/s (current: 6.0 Gb/s)"
+  },
+  "user_capacity": {
+    "blocks": 976773168,
+    "bytes": 500107862016
+  },
+  "logical_block_size": 512,
+  "physical_block_size": 512,
+  "rotation_rate": 0,
+  "smart_status": {
+    "passed": true
+  },
+  "temperature": {
+    "current": 41
+  },
+  "power_on_time": {
+    "hours": 18450
+  },
+  "power_cycle_count": 1420,
+  "trim": {
+    "supported": true
+  },
+  "sata_ncq": {
+    "supported": true
+  },
+  "ata_smart_attributes": {
+    "revision": 16,
+    "table": [
+      {
+        "id": 5,
+        "name": "Reallocated_Sector_Ct",
+        "value": 98,
+        "worst": 98,
+        "thresh": 10,
+        "when_failed": "",
+        "flags": { "value": 50, "string": "w-O--K" },
+        "raw": { "value": 5, "string": "5" }
+      },
+      {
+        "id": 9,
+        "name": "Power_On_Hours",
+        "value": 90,
+        "worst": 90,
+        "thresh": 0,
+        "when_failed": "",
+        "flags": { "value": 50, "string": "-O--CK" },
+        "raw": { "value": 18450, "string": "18450" }
+      },
+      {
+        "id": 12,
+        "name": "Power_Cycle_Count",
+        "value": 95,
+        "worst": 95,
+        "thresh": 0,
+        "when_failed": "",
+        "flags": { "value": 50, "string": "-O--CK" },
+        "raw": { "value": 1420, "string": "1420" }
+      },
+      {
+        "id": 194,
+        "name": "Temperature_Celsius",
+        "value": 59,
+        "worst": 45,
+        "thresh": 0,
+        "when_failed": "",
+        "flags": { "value": 34, "string": "-O---K" },
+        "raw": { "value": 41, "string": "41 (Min/Max 18/55)" }
+      },
+      {
+        "id": 197,
+        "name": "Current_Pending_Sector",
+        "value": 100,
+        "worst": 100,
+        "thresh": 0,
+        "when_failed": "",
+        "flags": { "value": 50, "string": "-O--CK" },
+        "raw": { "value": 0, "string": "0" }
+      },
+      {
+        "id": 198,
+        "name": "Offline_Uncorrectable",
+        "value": 100,
+        "worst": 100,
+        "thresh": 0,
+        "when_failed": "",
+        "flags": { "value": 50, "string": "-O--CK" },
+        "raw": { "value": 0, "string": "0" }
+      },
+      {
+        "id": 199,
+        "name": "UDMA_CRC_Error_Count",
+        "value": 100,
+        "worst": 100,
+        "thresh": 0,
+        "when_failed": "",
+        "flags": { "value": 62, "string": "-O--CK" },
+        "raw": { "value": 0, "string": "0" }
+      },
+      {
+        "id": 202,
+        "name": "Percent_Lifetime_Used",
+        "value": 78,
+        "worst": 78,
+        "thresh": 0,
+        "when_failed": "",
+        "flags": { "value": 48, "string": "---CK" },
+        "raw": { "value": 22, "string": "22" }
+      },
+      {
+        "id": 241,
+        "name": "Total_LBAs_Written",
+        "value": 100,
+        "worst": 100,
+        "thresh": 0,
+        "when_failed": "",
+        "flags": { "value": 48, "string": "---CK" },
+        "raw": { "value": 88281250000, "string": "88281250000" }
+      },
+      {
+        "id": 242,
+        "name": "Total_LBAs_Read",
+        "value": 100,
+        "worst": 100,
+        "thresh": 0,
+        "when_failed": "",
+        "flags": { "value": 48, "string": "---CK" },
+        "raw": { "value": 74414062500, "string": "74414062500" }
+      }
+    ]
+  }
+}

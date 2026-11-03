@@ -1,0 +1,34 @@
+{
+  "json_format_version": [1, 0],
+  "smartctl": {
+    "version": [7, 3],
+    "platform_info": "x86_64-linux",
+    "exit_status": 0
+  },
+  "device": {
+    "name": "/dev/nvme1n1",
+    "info_name": "/dev/nvme1n1",
+    "type": "nvme",
+    "protocol": "NVMe"
+  },
+  "model_name": "Samsung SSD 970 EVO Plus 500GB",
+  "serial_number": "S4EVNF0M123456K",
+  "firmware_version": "2B2QEXM7",
+  "smart_status": {
+    "passed": true
+  },
+  "temperature": {
+    "current": 46
+  },
+  "nvme_smart_health_information_log": {
+    "critical_warning": 0,
+    "temperature": 46,
+    "available_spare": 80,
+    "available_spare_threshold": 10,
+    "percentage_used": 94,
+    "data_units_read": 50000000,
+    "data_units_written": 65000000,
+    "power_cycles": 1200,
+    "power_on_hours": 15000
+  }
+}
