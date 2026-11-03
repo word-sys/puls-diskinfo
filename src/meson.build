@@ -1,5 +1,4 @@
-puls_sources = files(
-  'main.c',
+puls_core_sources = files(
   'puls-application.c',
   'puls-window.c',
   'puls-smart-data.c',
@@ -24,16 +23,34 @@ puls_sources = files(
   'puls-i18n.c',
 )
 
-executable('puls-diskinfo',
-  puls_sources,
+src_inc = include_directories('.')
+
+m_dep = meson.get_compiler('c').find_library('m', required: false)
+
+puls_deps = [
+  gtk4_dep,
+  libadwaita_dep,
+  json_glib_dep,
+  gio_dep,
+  gio_unix_dep,
+  m_dep,
+]
+
+puls_lib = static_library('puls_core',
+  puls_core_sources,
   gresource,
-  dependencies: [
-    gtk4_dep,
-    libadwaita_dep,
-    json_glib_dep,
-    gio_dep,
-    gio_unix_dep,
-    meson.get_compiler('c').find_library('m', required: false),
-  ],
+  include_directories: src_inc,
+  dependencies: puls_deps,
+)
+
+puls_dep = declare_dependency(
+  link_with: puls_lib,
+  include_directories: src_inc,
+  dependencies: puls_deps,
+)
+
+executable('puls-diskinfo',
+  'main.c',
+  dependencies: puls_dep,
   install: true,
 )
