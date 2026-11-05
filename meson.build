@@ -30,6 +30,16 @@ add_project_arguments(
   language: 'c',
 )
 
+profile = get_option('profile')
+if profile == 'development'
+  add_project_arguments('-DPULS_DEVELOPMENT_BUILD=1', language: 'c')
+endif
+
+sanitize_opt = get_option('b_sanitize')
+if sanitize_opt != 'none'
+  message('Building with sanitizers: ' + sanitize_opt)
+endif
+
 gtk4_dep      = dependency('gtk4', version: '>= 4.0')
 libadwaita_dep = dependency('libadwaita-1', version: '>= 1.1.0')
 json_glib_dep = dependency('json-glib-1.0')

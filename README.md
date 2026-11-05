@@ -69,6 +69,18 @@ Run the compiled binary directly:
 ./build/src/puls-diskinfo
 ```
 
+### 4. Run Tests & Sanitizers
+Run the automated test suite:
+```bash
+meson test -C build --verbose
+```
+
+Build and test with AddressSanitizer (ASan) and UndefinedBehaviorSanitizer (UBSan):
+```bash
+meson setup build-asan -Db_sanitize=address,undefined
+meson test -C build-asan --verbose
+```
+
 ---
 
 ## Installation & Packaging
