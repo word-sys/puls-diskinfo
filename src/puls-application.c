@@ -41,6 +41,7 @@ load_css (PulsApplication *self)
             GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
 
         GtkIconTheme *icon_theme = gtk_icon_theme_get_for_display (display);
+        gtk_icon_theme_add_resource_path (icon_theme, "/io/github/word_sys/puls_diskinfo/icons");
         gtk_icon_theme_add_resource_path (icon_theme, "/io/github/puls/diskinfo/icons");
     }
 }
@@ -106,7 +107,7 @@ PulsApplication *
 puls_application_new (void)
 {
     return g_object_new (PULS_TYPE_APPLICATION,
-                         "application-id", "io.github.puls.diskinfo",
+                         "application-id", "io.github.word_sys.puls_diskinfo",
                          "flags", G_APPLICATION_FLAGS_NONE,
                          NULL);
 }

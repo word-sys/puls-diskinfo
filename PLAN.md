@@ -116,8 +116,8 @@ flowchart TD
   - *Deliverable & Usability:* Consistent, colorized terminal diagnostics for debugging.
   - *Verification:* Running with `G_MESSAGES_DEBUG=puls ./build/src/puls-diskinfo --headless` displays structured timestamps and domains.
 - **Step 9: Metainfo & Desktop Validation**
-  - Update `data/io.github.puls.diskinfo.metainfo.xml` and `data/io.github.puls.diskinfo.desktop` to current AppStream 1.0 specifications.
-  - *Deliverable & Usability:* Conforming desktop integration files.
+  - Update `data/io.github.word_sys.puls_diskinfo.metainfo.xml` and `data/io.github.word_sys.puls_diskinfo.desktop` to current AppStream 1.0 specifications.
+  - *Deliverable & Usability:* Conforming desktop integration files matching `https://github.com/word-sys/puls-diskinfo`.
   - *Verification:* `desktop-file-validate` and `appstreamcli validate` return 0 errors.
 - **Step 10: Phase 1 Final Integration & Verification**
   - Run full test harness, verify compiler flags, test headless execution, and ensure zero regressions in UI build.
@@ -233,7 +233,7 @@ flowchart TD
   - Restrict helper capabilities strictly to smartctl read, smartctl self-test commands (`short`, `long`, `abort`), and read-only sector probing.
   - *Deliverable & Usability:* Auditable, minimal attack surface for the privileged helper.
   - *Verification:* Helper rejects unrecognized subcommands with explicit error codes.
-- **Step 34: Polkit Policy Update (`io.github.puls.diskinfo.policy`)**
+- **Step 34: Polkit Policy Update (`io.github.word_sys.puls_diskinfo.policy`)**
   - Update Polkit action IDs with localized Turkish and English explanations, configuring `auth_admin_keep` so users authenticate only once per session.
   - *Deliverable & Usability:* User-friendly password prompt with session persistence.
   - *Verification:* `pkcheck` validates policy syntax and action annotations.
@@ -775,7 +775,7 @@ flowchart TD
   - *Deliverable & Usability:* Complete power-user keyboard accessibility.
   - *Verification:* Shortcut test validates keypress event bindings.
 - **Step 146: Keyboard Shortcuts Help Dialog (`GtkShortcutsWindow`)**
-  - Add standard `io.github.puls.diskinfo.shortcuts.ui` dialog presenting all shortcuts organized by category.
+  - Add standard `io.github.word_sys.puls_diskinfo.shortcuts.ui` dialog presenting all shortcuts organized by category.
   - *Deliverable & Usability:* Discoverable keyboard shortcuts via `Ctrl+?` or menu.
   - *Verification:* Shortcuts window opens cleanly without layout warnings.
 - **Step 147: Modern Status Bar & Session Telemetry Footer**
@@ -1031,7 +1031,7 @@ flowchart TD
     - **JSON:** Complete raw diagnostic data for automated processing
   - *Deliverable & Usability:* Comprehensive export options for every sharing need.
   - *Verification:* Export test validates generation of all 4 formats.
-- **Step 197: Modern Flatpak Packaging Manifest (`io.github.puls.diskinfo.yml`)**
+- **Step 197: Modern Flatpak Packaging Manifest (`io.github.word_sys.puls_diskinfo.yml`)**
   - Author Flatpak manifest with proper sandbox permissions (`--device=all`, udev rules access) and bundled dependencies.
   - *Deliverable & Usability:* One-click installation from Flathub for any Linux distribution.
   - *Verification:* `flatpak-builder --lint` validates manifest syntax and permissions.

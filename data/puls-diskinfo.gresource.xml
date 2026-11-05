@@ -1,10 +1,21 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <gresources>
+  <gresource prefix="/io/github/word_sys/puls_diskinfo">
+    <file alias="style.css" compressed="true">css/style.css</file>
+    <file alias="css/style.css" compressed="true">css/style.css</file>
+    <file alias="icons/io.github.word_sys.puls_diskinfo.svg" compressed="true">icons/io.github.word_sys.puls_diskinfo.svg</file>
+    <file alias="icons/hicolor/scalable/apps/io.github.word_sys.puls_diskinfo.svg" compressed="true">icons/hicolor/scalable/apps/io.github.word_sys.puls_diskinfo.svg</file>
+    <file alias="fixtures/nvme-samsung-980.json" compressed="true">fixtures/nvme-samsung-980.json</file>
+    <file alias="fixtures/sata-crucial-mx500.json" compressed="true">fixtures/sata-crucial-mx500.json</file>
+    <file alias="fixtures/hdd-seagate-ironwolf.json" compressed="true">fixtures/hdd-seagate-ironwolf.json</file>
+    <file alias="fixtures/caution-drive.json" compressed="true">fixtures/caution-drive.json</file>
+    <file alias="fixtures/failing-drive.json" compressed="true">fixtures/failing-drive.json</file>
+  </gresource>
   <gresource prefix="/io/github/puls/diskinfo">
     <file alias="style.css" compressed="true">css/style.css</file>
     <file alias="css/style.css" compressed="true">css/style.css</file>
-    <file alias="icons/io.github.puls.diskinfo.svg" compressed="true">icons/io.github.puls.diskinfo.svg</file>
-    <file alias="icons/hicolor/scalable/apps/io.github.puls.diskinfo.svg" compressed="true">icons/hicolor/scalable/apps/io.github.puls.diskinfo.svg</file>
+    <file alias="icons/io.github.puls.diskinfo.svg" compressed="true">icons/io.github.word_sys.puls_diskinfo.svg</file>
+    <file alias="icons/hicolor/scalable/apps/io.github.puls.diskinfo.svg" compressed="true">icons/hicolor/scalable/apps/io.github.word_sys.puls_diskinfo.svg</file>
     <file alias="fixtures/nvme-samsung-980.json" compressed="true">fixtures/nvme-samsung-980.json</file>
     <file alias="fixtures/sata-crucial-mx500.json" compressed="true">fixtures/sata-crucial-mx500.json</file>
     <file alias="fixtures/hdd-seagate-ironwolf.json" compressed="true">fixtures/hdd-seagate-ironwolf.json</file>

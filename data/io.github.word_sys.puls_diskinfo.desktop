@@ -1,11 +1,14 @@
 [Desktop Entry]
 Name=PULS DiskInfo
 GenericName=Disk Health Monitor
+GenericName[tr]=Disk Sağlığı İzleyici
 Comment=Monitor disk health, S.M.A.R.T. attributes, and temperature
+Comment[tr]=Disk sağlığını, S.M.A.R.T. özniteliklerini ve sıcaklığı izleyin
 Exec=puls-diskinfo
-Icon=io.github.puls.diskinfo
+Icon=io.github.word_sys.puls_diskinfo
 Terminal=false
 Type=Application
-Categories=System;Monitor;Utility;
+Categories=System;Monitor;
 Keywords=disk;smart;health;temperature;nvme;ssd;hdd;monitor;
+Keywords[tr]=disk;smart;sağlık;sıcaklık;nvme;ssd;hdd;izleyici;
 StartupNotify=true

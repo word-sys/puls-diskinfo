@@ -7,7 +7,7 @@
   <vendor>PULS DiskInfo</vendor>
   <vendor_url>https://github.com/word-sys/puls-diskinfo</vendor_url>
 
-  <action id="io.github.puls.diskinfo.smart-read">
+  <action id="io.github.word_sys.puls_diskinfo.smart-read">
     <description>Read S.M.A.R.T. data from disks</description>
     <description xml:lang="en">Read S.M.A.R.T. data from disk drives</description>
     <message>Authentication is required to read disk health information</message>

@@ -123,7 +123,7 @@ test_gresource_bundle (void)
     g_assert_no_error (error);
     g_assert_true (has_legacy_css);
 
-    gboolean has_icon = g_resources_get_info ("/io/github/puls/diskinfo/icons/io.github.puls.diskinfo.svg",
+    gboolean has_icon = g_resources_get_info ("/io/github/word_sys/puls_diskinfo/icons/io.github.word_sys.puls_diskinfo.svg",
                                               G_RESOURCE_LOOKUP_FLAGS_NONE,
                                               &size, &flags, &error);
     g_assert_no_error (error);
@@ -131,11 +131,11 @@ test_gresource_bundle (void)
     g_assert_cmpuint (size, >, 0);
 
     const gchar *fixtures[] = {
-        "/io/github/puls/diskinfo/fixtures/nvme-samsung-980.json",
-        "/io/github/puls/diskinfo/fixtures/sata-crucial-mx500.json",
-        "/io/github/puls/diskinfo/fixtures/hdd-seagate-ironwolf.json",
-        "/io/github/puls/diskinfo/fixtures/caution-drive.json",
-        "/io/github/puls/diskinfo/fixtures/failing-drive.json",
+        "/io/github/word_sys/puls_diskinfo/fixtures/nvme-samsung-980.json",
+        "/io/github/word_sys/puls_diskinfo/fixtures/sata-crucial-mx500.json",
+        "/io/github/word_sys/puls_diskinfo/fixtures/hdd-seagate-ironwolf.json",
+        "/io/github/word_sys/puls_diskinfo/fixtures/caution-drive.json",
+        "/io/github/word_sys/puls_diskinfo/fixtures/failing-drive.json",
     };
 
     for (guint i = 0; i < G_N_ELEMENTS (fixtures); i++) {

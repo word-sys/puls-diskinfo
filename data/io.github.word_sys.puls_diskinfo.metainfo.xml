@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>io.github.puls.diskinfo</id>
+  <id>io.github.word_sys.puls_diskinfo</id>
   <name>PULS DiskInfo</name>
   <summary>Disk health and S.M.A.R.T. monitoring for Linux</summary>
   <metadata_license>CC0-1.0</metadata_license>
@@ -23,10 +23,30 @@
       <li>Drive identity details (model, serial, firmware, interface, capacity)</li>
       <li>Power-on hours, cycle count, and total data written/read statistics</li>
       <li>Periodic auto-refresh of disk health data</li>
+      <li>Non-destructive surface testing and sector latency benchmarks</li>
     </ul>
   </description>
 
-  <launchable type="desktop-id">io.github.puls.diskinfo.desktop</launchable>
+  <launchable type="desktop-id">io.github.word_sys.puls_diskinfo.desktop</launchable>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>Main storage health and temperature overview</caption>
+      <image>https://raw.githubusercontent.com/word-sys/puls-diskinfo/main/screenshots/ss1.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Detailed S.M.A.R.T. attributes table</caption>
+      <image>https://raw.githubusercontent.com/word-sys/puls-diskinfo/main/screenshots/ss2.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Temperature history and dynamic telemetry graphing</caption>
+      <image>https://raw.githubusercontent.com/word-sys/puls-diskinfo/main/screenshots/ss3.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Storage benchmark and performance testing</caption>
+      <image>https://raw.githubusercontent.com/word-sys/puls-diskinfo/main/screenshots/ss4.png</image>
+    </screenshot>
+  </screenshots>
 
   <url type="homepage">https://github.com/word-sys/puls-diskinfo</url>
   <url type="bugtracker">https://github.com/word-sys/puls-diskinfo/issues</url>
@@ -36,6 +56,11 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="1.1.2" date="2026-11-05">
+      <description>
+        <p>Modernized build system, modular test suites, headless CLI reporting, mock storage simulation, structured logging, and enhanced S.M.A.R.T. diagnostic accuracy.</p>
+      </description>
+    </release>
     <release version="1.1.1" date="2026-07-01">
       <description>
         <p>Feature expansion release inspired by Hard Disk Sentinel. Adds health score %, temperature history graph, live I/O rate labels, non-destructive surface scan with heatmap, alert system, enhanced export (HTML/JSON/file), S.M.A.R.T. trend indicators, seek latency benchmark, expanded drive details, and partition usage progress bars.</p>

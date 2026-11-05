@@ -54,8 +54,8 @@ fi
 echo ""
 echo "▸ Creating AppImage..."
 
-ICON_SRC="$PROJECT_DIR/data/io.github.puls.diskinfo.svg"
-ICON_DST="$APP_DIR/usr/share/icons/hicolor/scalable/apps/io.github.puls.diskinfo.svg"
+ICON_SRC="$PROJECT_DIR/data/icons/io.github.word_sys.puls_diskinfo.svg"
+ICON_DST="$APP_DIR/usr/share/icons/hicolor/scalable/apps/io.github.word_sys.puls_diskinfo.svg"
 if [ -f "$ICON_SRC" ]; then
     mkdir -p "$(dirname "$ICON_DST")"
     cp "$ICON_SRC" "$ICON_DST"
@@ -74,14 +74,14 @@ cd "$BUILD_DIR"
     --appdir "$APP_DIR" \
     --plugin gtk \
     --output appimage \
-    --desktop-file "$APP_DIR/usr/share/applications/io.github.puls.diskinfo.desktop" \
+    --desktop-file "$APP_DIR/usr/share/applications/io.github.word_sys.puls_diskinfo.desktop" \
     || {
         echo ""
         echo "⚠ linuxdeploy failed. Trying without GTK plugin..."
         "$TOOLS_DIR/linuxdeploy-$ARCH.AppImage" \
             --appdir "$APP_DIR" \
             --output appimage \
-            --desktop-file "$APP_DIR/usr/share/applications/io.github.puls.diskinfo.desktop"
+            --desktop-file "$APP_DIR/usr/share/applications/io.github.word_sys.puls_diskinfo.desktop"
     }
 
 echo ""

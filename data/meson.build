@@ -7,24 +7,24 @@ gresource = gnome.compile_resources(
 
 # Install desktop file
 install_data(
-  'io.github.puls.diskinfo.desktop',
+  'io.github.word_sys.puls_diskinfo.desktop',
   install_dir: get_option('datadir') / 'applications',
 )
 
 # Install metainfo
 install_data(
-  'io.github.puls.diskinfo.metainfo.xml',
+  'io.github.word_sys.puls_diskinfo.metainfo.xml',
   install_dir: get_option('datadir') / 'metainfo',
 )
 
 # Install polkit policy
 install_data(
-  'io.github.puls.diskinfo.policy',
+  'io.github.word_sys.puls_diskinfo.policy',
   install_dir: get_option('datadir') / 'polkit-1' / 'actions',
 )
 
 # Install application icon
 install_data(
-  'icons/hicolor/scalable/apps/io.github.puls.diskinfo.svg',
+  'icons/hicolor/scalable/apps/io.github.word_sys.puls_diskinfo.svg',
   install_dir: get_option('datadir') / 'icons' / 'hicolor' / 'scalable' / 'apps',
 )

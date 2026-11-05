@@ -54,10 +54,10 @@ cp "$BUILD_DIR/meson/helper/puls-diskinfo-helper" "$PKG_DIR/"
 
 # Data files
 mkdir -p "$PKG_DIR/data"
-cp "$PROJECT_DIR/data/io.github.puls.diskinfo.desktop" "$PKG_DIR/data/"
-cp "$PROJECT_DIR/data/io.github.puls.diskinfo.policy" "$PKG_DIR/data/"
-[ -f "$PROJECT_DIR/data/io.github.puls.diskinfo.svg" ] && \
-    cp "$PROJECT_DIR/data/io.github.puls.diskinfo.svg" "$PKG_DIR/data/" || true
+cp "$PROJECT_DIR/data/io.github.word_sys.puls_diskinfo.desktop" "$PKG_DIR/data/"
+cp "$PROJECT_DIR/data/io.github.word_sys.puls_diskinfo.policy" "$PKG_DIR/data/"
+[ -f "$PROJECT_DIR/data/icons/io.github.word_sys.puls_diskinfo.svg" ] && \
+    cp "$PROJECT_DIR/data/icons/io.github.word_sys.puls_diskinfo.svg" "$PKG_DIR/data/" || true
 
 # Docs
 cp "$PROJECT_DIR/LICENSE" "$PKG_DIR/"
@@ -90,21 +90,21 @@ install -Dm755 "$SCRIPT_DIR/puls-diskinfo" "$PREFIX/bin/puls-diskinfo"
 install -Dm755 "$SCRIPT_DIR/puls-diskinfo-helper" "$PREFIX/libexec/puls-diskinfo-helper"
 
 # Install desktop file
-install -Dm644 "$SCRIPT_DIR/data/io.github.puls.diskinfo.desktop" \
-    "$PREFIX/share/applications/io.github.puls.diskinfo.desktop"
+install -Dm644 "$SCRIPT_DIR/data/io.github.word_sys.puls_diskinfo.desktop" \
+    "$PREFIX/share/applications/io.github.word_sys.puls_diskinfo.desktop"
 
 # Install polkit policy
-install -Dm644 "$SCRIPT_DIR/data/io.github.puls.diskinfo.policy" \
-    "$PREFIX/share/polkit-1/actions/io.github.puls.diskinfo.policy"
+install -Dm644 "$SCRIPT_DIR/data/io.github.word_sys.puls_diskinfo.policy" \
+    "$PREFIX/share/polkit-1/actions/io.github.word_sys.puls_diskinfo.policy"
 
 # Update polkit policy helper path
 sed -i "s|/usr/libexec/puls-diskinfo-helper|$PREFIX/libexec/puls-diskinfo-helper|g" \
-    "$PREFIX/share/polkit-1/actions/io.github.puls.diskinfo.policy"
+    "$PREFIX/share/polkit-1/actions/io.github.word_sys.puls_diskinfo.policy"
 
 # Install icon if available
-if [ -f "$SCRIPT_DIR/data/io.github.puls.diskinfo.svg" ]; then
-    install -Dm644 "$SCRIPT_DIR/data/io.github.puls.diskinfo.svg" \
-        "$PREFIX/share/icons/hicolor/scalable/apps/io.github.puls.diskinfo.svg"
+if [ -f "$SCRIPT_DIR/data/io.github.word_sys.puls_diskinfo.svg" ]; then
+    install -Dm644 "$SCRIPT_DIR/data/io.github.word_sys.puls_diskinfo.svg" \
+        "$PREFIX/share/icons/hicolor/scalable/apps/io.github.word_sys.puls_diskinfo.svg"
     gtk-update-icon-cache -f "$PREFIX/share/icons/hicolor/" 2>/dev/null || true
 fi
 
@@ -134,9 +134,9 @@ echo "Removing PULS DiskInfo from $PREFIX..."
 
 rm -f "$PREFIX/bin/puls-diskinfo"
 rm -f "$PREFIX/libexec/puls-diskinfo-helper"
-rm -f "$PREFIX/share/applications/io.github.puls.diskinfo.desktop"
-rm -f "$PREFIX/share/polkit-1/actions/io.github.puls.diskinfo.policy"
-rm -f "$PREFIX/share/icons/hicolor/scalable/apps/io.github.puls.diskinfo.svg"
+rm -f "$PREFIX/share/applications/io.github.word_sys.puls_diskinfo.desktop"
+rm -f "$PREFIX/share/polkit-1/actions/io.github.word_sys.puls_diskinfo.policy"
+rm -f "$PREFIX/share/icons/hicolor/scalable/apps/io.github.word_sys.puls_diskinfo.svg"
 
 echo "✓ PULS DiskInfo removed."
 UNINSTALL_EOF
