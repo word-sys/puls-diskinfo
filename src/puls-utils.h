@@ -82,4 +82,50 @@ gboolean puls_get_partition_usage (const gchar *mount_point,
                                    guint64     *out_used_bytes,
                                    guint64     *out_total_bytes);
 
+void puls_log_init (void);
+
+void puls_log_structured (const gchar   *domain,
+                          GLogLevelFlags level,
+                          const gchar   *file,
+                          gint           line,
+                          const gchar   *func,
+                          const gchar   *format,
+                          ...) G_GNUC_PRINTF (6, 7);
+
+#ifndef PULS_LOG_DEFAULT_DOMAIN
+#define PULS_LOG_DEFAULT_DOMAIN "puls"
+#endif
+
+#define PULS_LOG_DEBUG(fmt, ...) \
+    puls_log_structured (PULS_LOG_DEFAULT_DOMAIN, G_LOG_LEVEL_DEBUG, \
+                         __FILE__, __LINE__, G_STRFUNC, fmt, ##__VA_ARGS__)
+
+#define PULS_LOG_INFO(fmt, ...) \
+    puls_log_structured (PULS_LOG_DEFAULT_DOMAIN, G_LOG_LEVEL_INFO, \
+                         __FILE__, __LINE__, G_STRFUNC, fmt, ##__VA_ARGS__)
+
+#define PULS_LOG_WARN(fmt, ...) \
+    puls_log_structured (PULS_LOG_DEFAULT_DOMAIN, G_LOG_LEVEL_WARNING, \
+                         __FILE__, __LINE__, G_STRFUNC, fmt, ##__VA_ARGS__)
+
+#define PULS_LOG_ERROR(fmt, ...) \
+    puls_log_structured (PULS_LOG_DEFAULT_DOMAIN, G_LOG_LEVEL_CRITICAL, \
+                         __FILE__, __LINE__, G_STRFUNC, fmt, ##__VA_ARGS__)
+
+#define PULS_LOG_DOMAIN_DEBUG(domain, fmt, ...) \
+    puls_log_structured (domain, G_LOG_LEVEL_DEBUG, \
+                         __FILE__, __LINE__, G_STRFUNC, fmt, ##__VA_ARGS__)
+
+#define PULS_LOG_DOMAIN_INFO(domain, fmt, ...) \
+    puls_log_structured (domain, G_LOG_LEVEL_INFO, \
+                         __FILE__, __LINE__, G_STRFUNC, fmt, ##__VA_ARGS__)
+
+#define PULS_LOG_DOMAIN_WARN(domain, fmt, ...) \
+    puls_log_structured (domain, G_LOG_LEVEL_WARNING, \
+                         __FILE__, __LINE__, G_STRFUNC, fmt, ##__VA_ARGS__)
+
+#define PULS_LOG_DOMAIN_ERROR(domain, fmt, ...) \
+    puls_log_structured (domain, G_LOG_LEVEL_CRITICAL, \
+                         __FILE__, __LINE__, G_STRFUNC, fmt, ##__VA_ARGS__)
+
 G_END_DECLS

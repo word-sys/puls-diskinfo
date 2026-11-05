@@ -753,3 +753,113 @@ puls_get_partition_usage (const gchar *mount_point,
     return TRUE;
 }
 
+static GLogWriterOutput
+puls_log_writer (GLogLevelFlags   log_level,
+                 const GLogField *fields,
+                 gsize            n_fields,
+                 gpointer         user_data G_GNUC_UNUSED)
+{
+    const gchar *domain = NULL;
+    const gchar *message = NULL;
+
+    for (gsize i = 0; i < n_fields; i++) {
+        if (g_strcmp0 (fields[i].key, "GLIB_DOMAIN") == 0)
+            domain = fields[i].value;
+        else if (g_strcmp0 (fields[i].key, "MESSAGE") == 0)
+            message = fields[i].value;
+    }
+
+    if (domain == NULL)
+        domain = "puls";
+
+    if (!g_str_has_prefix (domain, "puls"))
+        return g_log_writer_default (log_level, fields, n_fields, user_data);
+
+    if ((log_level & (G_LOG_LEVEL_DEBUG | G_LOG_LEVEL_INFO)) != 0) {
+        const gchar *debug_env = g_getenv ("G_MESSAGES_DEBUG");
+        if (debug_env == NULL)
+            return G_LOG_WRITER_HANDLED;
+
+        if (g_strcmp0 (debug_env, "all") != 0 &&
+            strstr (debug_env, "puls") == NULL &&
+            strstr (debug_env, domain) == NULL)
+            return G_LOG_WRITER_HANDLED;
+    }
+
+    if (message == NULL)
+        message = "";
+
+    GDateTime *now = g_date_time_new_now_local ();
+    g_autofree gchar *time_str = g_date_time_format (now, "%H:%M:%S");
+    gint usec = g_date_time_get_microsecond (now) / 1000;
+    g_date_time_unref (now);
+
+    gboolean is_tty = isatty (fileno (stderr));
+    const gchar *level_tag = "INFO ";
+    const gchar *color_start = "";
+    const gchar *color_end = is_tty ? "\033[0m" : "";
+
+    if (log_level & G_LOG_LEVEL_DEBUG) {
+        level_tag = "DEBUG";
+        if (is_tty) color_start = "\033[36m";
+    } else if (log_level & G_LOG_LEVEL_INFO) {
+        level_tag = "INFO ";
+        if (is_tty) color_start = "\033[32m";
+    } else if (log_level & G_LOG_LEVEL_WARNING) {
+        level_tag = "WARN ";
+        if (is_tty) color_start = "\033[33m";
+    } else if (log_level & (G_LOG_LEVEL_CRITICAL | G_LOG_LEVEL_ERROR)) {
+        level_tag = "ERROR";
+        if (is_tty) color_start = "\033[1;31m";
+    }
+
+    if (is_tty) {
+        fprintf (stderr, "[%s.%03d] %s[%s]%s \033[35m[%s]\033[0m %s\n",
+                 time_str, usec,
+                 color_start, level_tag, color_end,
+                 domain, message);
+    } else {
+        fprintf (stderr, "[%s.%03d] [%s] [%s] %s\n",
+                 time_str, usec,
+                 level_tag,
+                 domain, message);
+    }
+    fflush (stderr);
+
+    return G_LOG_WRITER_HANDLED;
+}
+
+void
+puls_log_init (void)
+{
+    static gsize initialized = 0;
+    if (g_once_init_enter (&initialized)) {
+        g_log_set_writer_func (puls_log_writer, NULL, NULL);
+        g_once_init_leave (&initialized, 1);
+    }
+}
+
+void
+puls_log_structured (const gchar   *domain,
+                     GLogLevelFlags level,
+                     const gchar   *file,
+                     gint           line,
+                     const gchar   *func,
+                     const gchar   *format,
+                     ...)
+{
+    va_list args;
+    va_start (args, format);
+    g_autofree gchar *formatted = g_strdup_vprintf (format, args);
+    va_end (args);
+
+    g_autofree gchar *line_str = g_strdup_printf ("%d", line);
+
+    g_log_structured (domain ? domain : "puls",
+                      level,
+                      "CODE_FILE", file ? file : "",
+                      "CODE_LINE", line_str,
+                      "CODE_FUNC", func ? func : "",
+                      "MESSAGE", "%s", formatted);
+}
+

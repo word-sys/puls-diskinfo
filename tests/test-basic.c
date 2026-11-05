@@ -154,6 +154,20 @@ test_gresource_bundle (void)
     }
 }
 
+static void
+test_structured_logging (void)
+{
+    puls_log_init ();
+
+    PULS_LOG_DEBUG ("Test debug log message: %s", "sample");
+    PULS_LOG_INFO ("Test info log message: %d", 42);
+    PULS_LOG_WARN ("Test warning log message: %f", 3.14);
+    PULS_LOG_ERROR ("Test error log message: 0x%x", 0xDEAD);
+
+    PULS_LOG_DOMAIN_DEBUG ("puls/test", "Subdomain debug: %s", "ok");
+    PULS_LOG_DOMAIN_INFO ("puls/test", "Subdomain info: %d", 100);
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -164,6 +178,7 @@ main (int argc, char *argv[])
     g_test_add_func ("/basic/smart-data-model", test_smart_data_model);
     g_test_add_func ("/basic/mock-manager", test_mock_manager);
     g_test_add_func ("/basic/gresource-bundle", test_gresource_bundle);
+    g_test_add_func ("/basic/structured-logging", test_structured_logging);
 
     return g_test_run ();
 }

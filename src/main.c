@@ -41,11 +41,15 @@ static const GOptionEntry cli_entries[] = {
 static int
 run_headless_scan (gboolean json_output)
 {
+    PULS_LOG_DEBUG ("Initializing headless storage scan (mock=%d, json=%d)", opt_mock, json_output);
+
     g_autoptr(PulsDiskManager) manager = puls_disk_manager_new ();
     puls_disk_manager_scan (manager);
 
     GList *devices = puls_disk_manager_get_devices (manager);
     guint count = g_list_length (devices);
+
+    PULS_LOG_INFO ("Scan completed: discovered %u storage device(s)", count);
 
     if (json_output) {
         g_autoptr(JsonBuilder) builder = json_builder_new ();
@@ -140,6 +144,7 @@ int
 main (int argc, char *argv[])
 {
     setlocale (LC_ALL, "");
+    puls_log_init ();
 
     g_autoptr(GOptionContext) context = g_option_context_new ("- S.M.A.R.T. disk health monitor and benchmark");
     g_option_context_add_main_entries (context, cli_entries, NULL);
@@ -147,10 +152,13 @@ main (int argc, char *argv[])
 
     GError *error = NULL;
     if (!g_option_context_parse (context, &argc, &argv, &error)) {
+        PULS_LOG_ERROR ("Option parsing failed: %s", error ? error->message : "unknown error");
         g_printerr ("Option parsing failed: %s\n", error ? error->message : "unknown error");
         g_clear_error (&error);
         return 1;
     }
+
+    PULS_LOG_DEBUG ("PULS DiskInfo starting up (version %s)", PULS_VERSION);
 
     if (opt_mock) {
         puls_set_mock_mode_enabled (TRUE);

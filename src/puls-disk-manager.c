@@ -432,11 +432,13 @@ puls_disk_manager_scan (PulsDiskManager *self)
     g_return_if_fail (PULS_IS_DISK_MANAGER (self));
 
     if (self->mock_mode) {
+        PULS_LOG_DEBUG ("Scanning in mock storage simulation mode");
         puls_mock_data_populate_manager (self);
         return;
     }
 
     GList *found = scan_sys_block ();
+    PULS_LOG_DEBUG ("Scanning /sys/block: found %u device path(s)", g_list_length (found));
 
     for (GList *l = found; l != NULL; l = l->next) {
         const gchar *dev_path = l->data;
