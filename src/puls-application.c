@@ -15,6 +15,8 @@
 #include "puls-window.h"
 #include "puls-settings.h"
 
+GResource *puls_diskinfo_get_resource (void);
+
 struct _PulsApplication {
     AdwApplication parent_instance;
 
@@ -29,12 +31,18 @@ load_css (PulsApplication *self)
     self->css_provider = gtk_css_provider_new ();
 
     gtk_css_provider_load_from_resource (self->css_provider,
-        "/io/github/puls/diskinfo/style.css");
+        "/io/github/puls/diskinfo/css/style.css");
 
-    gtk_style_context_add_provider_for_display (
-        gdk_display_get_default (),
-        GTK_STYLE_PROVIDER (self->css_provider),
-        GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    GdkDisplay *display = gdk_display_get_default ();
+    if (display) {
+        gtk_style_context_add_provider_for_display (
+            display,
+            GTK_STYLE_PROVIDER (self->css_provider),
+            GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+
+        GtkIconTheme *icon_theme = gtk_icon_theme_get_for_display (display);
+        gtk_icon_theme_add_resource_path (icon_theme, "/io/github/puls/diskinfo/icons");
+    }
 }
 
 static void
@@ -89,6 +97,7 @@ static const GOptionEntry app_cli_entries[] = {
 static void
 puls_application_init (PulsApplication *self)
 {
+    g_resources_register (puls_diskinfo_get_resource ());
     self->css_provider = NULL;
     g_application_add_main_option_entries (G_APPLICATION (self), app_cli_entries);
 }

@@ -7,6 +7,7 @@
  */
 
 #include <glib.h>
+#include <gio/gio.h>
 #include "puls-smart-parser.h"
 #include "puls-smart-data.h"
 
@@ -14,12 +15,25 @@
 #define TEST_FIXTURES_DIR "tests/fixtures"
 #endif
 
+GResource *puls_diskinfo_get_resource (void);
+
 static gchar *
 load_fixture (const gchar *filename)
 {
+    g_autofree gchar *res_path = g_strdup_printf ("/io/github/puls/diskinfo/fixtures/%s", filename);
+    GError *error = NULL;
+    GBytes *bytes = g_resources_lookup_data (res_path, G_RESOURCE_LOOKUP_FLAGS_NONE, &error);
+    if (bytes) {
+        gsize size = 0;
+        const gchar *data = g_bytes_get_data (bytes, &size);
+        gchar *content = g_strndup (data, size);
+        g_bytes_unref (bytes);
+        return content;
+    }
+    g_clear_error (&error);
+
     g_autofree gchar *path = g_build_filename (TEST_FIXTURES_DIR, filename, NULL);
     gchar *content = NULL;
-    GError *error = NULL;
 
     if (!g_file_get_contents (path, &content, NULL, &error)) {
         g_error ("Failed to load test fixture '%s': %s", path, error->message);
@@ -152,6 +166,7 @@ int
 main (int argc, char **argv)
 {
     g_test_init (&argc, &argv, NULL);
+    g_resources_register (puls_diskinfo_get_resource ());
 
     g_test_add_func ("/parser/nvme-samsung-980", test_parser_nvme_samsung);
     g_test_add_func ("/parser/sata-crucial-mx500", test_parser_sata_crucial);

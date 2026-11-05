@@ -1,0 +1,84 @@
+{
+  "json_format_version": [1, 0],
+  "smartctl": {
+    "version": [7, 3],
+    "platform_info": "x86_64-linux",
+    "exit_status": 0
+  },
+  "device": {
+    "name": "/dev/sdc",
+    "info_name": "/dev/sdc",
+    "type": "ata",
+    "protocol": "ATA"
+  },
+  "model_name": "WDC WD10EZEX-00WN4A0",
+  "serial_number": "WD-WCC6Y1234567",
+  "firmware_version": "01.01A01",
+  "user_capacity": {
+    "blocks": 1953525168,
+    "bytes": 1000204886016
+  },
+  "logical_block_size": 512,
+  "physical_block_size": 4096,
+  "rotation_rate": 7200,
+  "smart_status": {
+    "passed": false
+  },
+  "temperature": {
+    "current": 48
+  },
+  "power_on_time": {
+    "hours": 45120
+  },
+  "power_cycle_count": 3100,
+  "ata_smart_attributes": {
+    "revision": 16,
+    "table": [
+      {
+        "id": 1,
+        "name": "Raw_Read_Error_Rate",
+        "value": 1,
+        "worst": 1,
+        "thresh": 51,
+        "when_failed": "FAILING_NOW",
+        "raw": { "value": 65535, "string": "65535" }
+      },
+      {
+        "id": 5,
+        "name": "Reallocated_Sector_Ct",
+        "value": 1,
+        "worst": 1,
+        "thresh": 140,
+        "when_failed": "FAILING_NOW",
+        "raw": { "value": 2048, "string": "2048" }
+      },
+      {
+        "id": 9,
+        "name": "Power_On_Hours",
+        "value": 38,
+        "worst": 38,
+        "thresh": 0,
+        "when_failed": "",
+        "raw": { "value": 45120, "string": "45120" }
+      },
+      {
+        "id": 197,
+        "name": "Current_Pending_Sector",
+        "value": 1,
+        "worst": 1,
+        "thresh": 0,
+        "when_failed": "",
+        "raw": { "value": 1024, "string": "1024" }
+      },
+      {
+        "id": 198,
+        "name": "Offline_Uncorrectable",
+        "value": 1,
+        "worst": 1,
+        "thresh": 0,
+        "when_failed": "",
+        "raw": { "value": 1024, "string": "1024" }
+      }
+    ]
+  }
+}

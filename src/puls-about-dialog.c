@@ -50,7 +50,7 @@ puls_show_about_dialog (GtkWindow *parent)
     gtk_about_dialog_set_copyright (GTK_ABOUT_DIALOG (dialog),
                                     "© 2026 Barın Güzeldemirci");
     gtk_about_dialog_set_logo_icon_name (GTK_ABOUT_DIALOG (dialog),
-                                         "drive-harddisk-solidstate-symbolic");
+                                         "io.github.puls.diskinfo");
 
     if (parent)
         gtk_window_set_transient_for (GTK_WINDOW (dialog), parent);

@@ -22,3 +22,9 @@ install_data(
   'io.github.puls.diskinfo.policy',
   install_dir: get_option('datadir') / 'polkit-1' / 'actions',
 )
+
+# Install application icon
+install_data(
+  'icons/hicolor/scalable/apps/io.github.puls.diskinfo.svg',
+  install_dir: get_option('datadir') / 'icons' / 'hicolor' / 'scalable' / 'apps',
+)

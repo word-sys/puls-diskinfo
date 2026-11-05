@@ -1,0 +1,290 @@
+/*
+ * PULS DiskInfo — Application Stylesheet
+ *
+ * Designed to complement Libadwaita's system theme (light and dark modes).
+ */
+
+disk-selector {
+    padding: 10px;
+    min-height: 100px;
+}
+
+button.flat.disk-card {
+    border: 1px solid alpha(@borders, 0.7);
+    background-color: @card_bg_color;
+    background-image: none;
+    color: @card_fg_color;
+    border-radius: 6px;
+    padding: 6px;
+    min-width: 130px;
+    transition: none;
+    box-shadow: none;
+}
+
+button.flat.disk-card:hover {
+    border-color: @borders;
+    background-color: alpha(@card_fg_color, 0.08);
+    background-image: none;
+    color: @card_fg_color;
+    box-shadow: none;
+}
+
+button.flat.disk-card-active {
+    border-color: @accent_color;
+    background-color: alpha(@card_fg_color, 0.08);
+    background-image: none;
+    color: @card_fg_color;
+    box-shadow: 0 0 0 1px @accent_color;
+}
+
+button.flat.disk-card-active:hover {
+    border-color: @accent_color;
+    background-color: alpha(@card_fg_color, 0.15);
+    background-image: none;
+    color: @card_fg_color;
+    box-shadow: 0 0 0 1px @accent_color;
+}
+
+.card-icon {
+    margin-bottom: 2px;
+}
+
+.card-device-name {
+    font-weight: 700;
+    font-size: 13px;
+}
+
+.card-model {
+    font-size: 11px;
+}
+
+.card-health {
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.card-health-good {
+    color: #2ea043;
+}
+
+.card-health-caution {
+    color: #d29922;
+}
+
+.card-health-bad {
+    color: #f85149;
+}
+
+.card-temp {
+    font-size: 11px;
+}
+
+.info-key {
+    font-weight: 600;
+    font-size: 12px;
+    min-width: 110px;
+}
+
+.info-value {
+    font-size: 13px;
+    font-family: "JetBrains Mono", "Fira Code", "Source Code Pro", monospace;
+}
+
+health-indicator {
+    padding: 12px;
+    border-radius: 8px;
+    min-width: 100px;
+    border: none;
+    background-color: alpha(@card_fg_color, 0.08);
+}
+
+.health-text {
+    font-weight: 900;
+    font-size: 16px;
+    letter-spacing: 0.5px;
+    color: white;
+}
+
+health-indicator.health-good {
+    background-color: #2ea043;
+}
+
+health-indicator.health-good .health-text {
+    color: white;
+}
+
+health-indicator.health-caution {
+    background-color: #d29922;
+}
+
+health-indicator.health-caution .health-text {
+    color: white;
+}
+
+health-indicator.health-bad {
+    background-color: #f85149;
+}
+
+health-indicator.health-bad .health-text {
+    color: white;
+}
+
+health-indicator.health-unknown {
+    background-color: #7a7a7a;
+}
+
+health-indicator.health-unknown .health-text {
+    color: white;
+}
+
+temperature-widget {
+    padding: 8px;
+}
+
+.temp-value {
+    font-size: 18px;
+    font-weight: 700;
+    margin-bottom: 4px;
+}
+
+.temp-bar {
+    min-height: 10px;
+    border-radius: 5px;
+}
+
+.temp-bar.temp-cold progress {
+    background: linear-gradient(to right, #3584e4, #1c71d8);
+    border-radius: 5px;
+}
+
+.temp-bar.temp-normal progress {
+    background: linear-gradient(to right, #2ea043, #56d364);
+    border-radius: 5px;
+}
+
+.temp-bar.temp-warm progress {
+    background: linear-gradient(to right, #d29922, #e3b341);
+    border-radius: 5px;
+}
+
+.temp-bar.temp-hot progress {
+    background: linear-gradient(to right, #f85149, #ff7b72);
+    border-radius: 5px;
+}
+
+.temp-range {
+    font-size: 11px;
+    margin-top: 2px;
+}
+
+smart-table {
+    padding: 0;
+}
+
+.smart-cell {
+    font-size: 12px;
+    font-family: "JetBrains Mono", "Fira Code", "Source Code Pro", monospace;
+    padding: 4px 8px;
+}
+
+.status-ok {
+    color: #2ea043;
+    font-weight: 600;
+}
+
+.status-warn {
+    color: #d29922;
+    font-weight: 600;
+}
+
+.status-fail {
+    color: #f85149;
+    font-weight: 700;
+}
+
+.attr-good {}
+
+.attr-caution {
+    color: #d29922;
+}
+
+.attr-bad {
+    color: #f85149;
+    font-weight: 700;
+}
+
+.status-bar {
+    border-top: 1px solid @borders;
+    padding: 4px 12px;
+}
+
+.status-text {
+    font-size: 11px;
+}
+
+.status-version {
+    font-size: 11px;
+    font-weight: 600;
+}
+
+button {
+    transition: all 200ms ease;
+}
+
+label {}
+
+.bench-test-name {
+    font-weight: 700;
+    font-size: 13px;
+    font-family: "JetBrains Mono", "Fira Code", "Source Code Pro", monospace;
+    min-width: 120px;
+    padding: 8px;
+}
+
+.bench-val {
+    font-weight: 700;
+    font-size: 18px;
+    font-family: "JetBrains Mono", "Fira Code", "Source Code Pro", monospace;
+    padding: 8px 16px;
+    border-radius: 4px;
+    background-color: @window_bg_color;
+    min-width: 100px;
+}
+
+.bench-read-val {
+    color: #06b6d4;
+}
+
+.bench-write-val {
+    color: #d946ef;
+}
+
+.bench-header {
+    font-weight: 700;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    padding: 4px 8px;
+}
+
+.bench-grid {
+    background-color: @card_bg_color;
+    border: 1px solid alpha(@borders, 0.5);
+    border-radius: 6px;
+    padding: 8px;
+}
+button.flat.lang-toggle {
+    font-weight: 700;
+    font-size: 0.82rem;
+    letter-spacing: 0.05em;
+    min-width: 36px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    border: 1px solid alpha(@borders, 0.6);
+    color: @accent_color;
+}
+
+button.flat.lang-toggle:hover {
+    background-color: alpha(@accent_color, 0.12);
+    border-color: @accent_color;
+}

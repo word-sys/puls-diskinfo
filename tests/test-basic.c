@@ -16,6 +16,8 @@
 #define PULS_VERSION "1.1.2"
 #endif
 
+GResource *puls_diskinfo_get_resource (void);
+
 static void
 test_version (void)
 {
@@ -99,6 +101,59 @@ test_mock_manager (void)
     g_assert_cmpint (puls_smart_data_get_drive_type (usb), ==, PULS_DRIVE_TYPE_USB);
 }
 
+static void
+test_gresource_bundle (void)
+{
+    g_resources_register (puls_diskinfo_get_resource ());
+
+    gsize size = 0;
+    guint32 flags = 0;
+    GError *error = NULL;
+
+    gboolean has_css = g_resources_get_info ("/io/github/puls/diskinfo/css/style.css",
+                                             G_RESOURCE_LOOKUP_FLAGS_NONE,
+                                             &size, &flags, &error);
+    g_assert_no_error (error);
+    g_assert_true (has_css);
+    g_assert_cmpuint (size, >, 0);
+
+    gboolean has_legacy_css = g_resources_get_info ("/io/github/puls/diskinfo/style.css",
+                                                    G_RESOURCE_LOOKUP_FLAGS_NONE,
+                                                    &size, &flags, &error);
+    g_assert_no_error (error);
+    g_assert_true (has_legacy_css);
+
+    gboolean has_icon = g_resources_get_info ("/io/github/puls/diskinfo/icons/io.github.puls.diskinfo.svg",
+                                              G_RESOURCE_LOOKUP_FLAGS_NONE,
+                                              &size, &flags, &error);
+    g_assert_no_error (error);
+    g_assert_true (has_icon);
+    g_assert_cmpuint (size, >, 0);
+
+    const gchar *fixtures[] = {
+        "/io/github/puls/diskinfo/fixtures/nvme-samsung-980.json",
+        "/io/github/puls/diskinfo/fixtures/sata-crucial-mx500.json",
+        "/io/github/puls/diskinfo/fixtures/hdd-seagate-ironwolf.json",
+        "/io/github/puls/diskinfo/fixtures/caution-drive.json",
+        "/io/github/puls/diskinfo/fixtures/failing-drive.json",
+    };
+
+    for (guint i = 0; i < G_N_ELEMENTS (fixtures); i++) {
+        gboolean exists = g_resources_get_info (fixtures[i],
+                                                G_RESOURCE_LOOKUP_FLAGS_NONE,
+                                                &size, &flags, &error);
+        g_assert_no_error (error);
+        g_assert_true (exists);
+        g_assert_cmpuint (size, >, 0);
+
+        g_autoptr(GBytes) bytes = g_resources_lookup_data (fixtures[i],
+                                                           G_RESOURCE_LOOKUP_FLAGS_NONE,
+                                                           &error);
+        g_assert_no_error (error);
+        g_assert_nonnull (bytes);
+    }
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -108,6 +163,7 @@ main (int argc, char *argv[])
     g_test_add_func ("/basic/format-utils", test_format_utils);
     g_test_add_func ("/basic/smart-data-model", test_smart_data_model);
     g_test_add_func ("/basic/mock-manager", test_mock_manager);
+    g_test_add_func ("/basic/gresource-bundle", test_gresource_bundle);
 
     return g_test_run ();
 }
