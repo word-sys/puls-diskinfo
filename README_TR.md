@@ -24,8 +24,36 @@ Linux için GTK4 ve C ile geliştirilmiş, kapsamlı bir depolama sağlığı ve
 - **Gerçek Zamanlı Sıcaklık**: Güvenli aralıklarla dinamik sıcaklık termometre göstergesi.
 - **S.M.A.R.T. Nitelikleri Tablosu**: Tüm standart niteliklerin renk kodlu, sıralanabilir listesi.
 - **NVMe'ye Özgü Günlükler**: NVMe SSD'ler için kapsamlı sağlık ölçümleri (kullanılabilir yedek, kullanım yüzdesi, medya hataları vb.).
+- **Başsız (Headless) ve Uçbirim Kipi**: Ekran sunucusu olmadan doğrudan uçbirimden disk taraması (`--headless`) veya JSON çıktısı (`--json`) alma desteği.
+- **Donanım Simülatörü**: Yerleşik sanal sürücülerle (`--mock-disk`) test ve önizleme yapabilme.
 - **Polkit Entegrasyonu**: Temiz ayrıcalık ayrımı. Ana GUI ayrıcalıksız çalışır; S.M.A.R.T. verilerini sorgularken `pkexec` aracılığıyla küçük, denetlenebilir bir yardımcı çalıştırılabilir dosya çağrılır.
 - **Türkçe / İngilizce Dil Desteği**: Başlık çubuğundaki dil düğmesiyle anında geçiş yapılabilir; tercih kaydedilir.
+
+---
+
+## Komut Satırı Kullanımı
+
+PULS DiskInfo hem grafiksel arayüzle hem de uçbirim üzerinden başsız kipte kullanılabilir:
+
+```bash
+# GTK4 grafik arayüzünü başlat
+puls-diskinfo
+
+# Uçbirimde başsız disk sağlığı taraması
+puls-diskinfo --headless
+
+# Otomasyon ve betikler için JSON çıktısı
+puls-diskinfo --json
+
+# Simüle edilmiş sanal sürücülerle test (NVMe, SATA SSD, HDD, USB)
+puls-diskinfo --headless --mock-disk
+
+# Mikrosaniye hassasiyetli yapılandırılmış günlük kaydı
+G_MESSAGES_DEBUG=puls puls-diskinfo --headless --mock-disk
+
+# Sürüm bilgisini görüntüle
+puls-diskinfo --version
+```
 
 ---
 
@@ -68,6 +96,18 @@ Derlenmiş ikili dosyayı doğrudan çalıştırın:
 ./build/src/puls-diskinfo
 ```
 
+### 4. Testleri ve Denetleyicileri Çalıştırma
+Otomatik birim test paketini çalıştırın:
+```bash
+meson test -C build --verbose
+```
+
+AddressSanitizer (ASan) ve UndefinedBehaviorSanitizer (UBSan) ile derleyip test edin:
+```bash
+meson setup build-asan -Db_sanitize=address,undefined
+meson test -C build-asan --verbose
+```
+
 ---
 
 ## Kurulum ve Paketleme
@@ -76,14 +116,15 @@ Derlenmiş ikili dosyayı doğrudan çalıştırın:
 Yardımcı ikili dosyaları, masaüstü entegrasyonu ve kurma/kaldırma betiklerini içeren bağımsız bir sürüm paketi oluşturabilirsiniz:
 
 ```bash
+# Taşınabilir tarball oluştur
 ./packaging/build-binary.sh
 ```
-Arşiv `dist/puls-diskinfo-1.1.2-linux-x86_64.tar.gz` konumuna kaydedilir.
+Arşiv `dist/puls-diskinfo-1.1.3-linux-x86_64.tar.gz` konumuna kaydedilir.
 
 Arşivden kurulum için:
 ```bash
-tar xzf dist/puls-diskinfo-1.1.2-linux-x86_64.tar.gz
-cd puls-diskinfo-1.1.2-linux-x86_64
+tar xzf dist/puls-diskinfo-1.1.3-linux-x86_64.tar.gz
+cd puls-diskinfo-1.1.3-linux-x86_64
 sudo ./install.sh
 ```
 

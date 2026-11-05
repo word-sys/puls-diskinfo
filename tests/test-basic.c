@@ -13,7 +13,7 @@
 #include "puls-utils.h"
 
 #ifndef PULS_VERSION
-#define PULS_VERSION "1.1.2"
+#define PULS_VERSION "1.1.3"
 #endif
 
 GResource *puls_diskinfo_get_resource (void);

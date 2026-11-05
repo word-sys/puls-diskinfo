@@ -26,7 +26,35 @@ A highly detailed storage health and S.M.A.R.T. monitoring application for Linux
 - **Real-Time Temperature**: Dynamic temperature thermometer gauge widget with safe ranges.
 - **S.M.A.R.T. Attributes Table**: Color-coded, sortable list of all standard attributes.
 - **NVMe Specific Logs**: Comprehensive health metrics for NVMe SSDs (available spare, percentage used, media errors, etc.).
+- **Headless & CLI Mode**: Run comprehensive disk scans directly in the terminal (`--headless`) or output structured JSON (`--json`) without a display server.
+- **Hardware Simulator**: Test and preview storage metrics with built-in mock drives (`--mock-disk`).
 - **Polkit Integration**: Clean privilege separation. The main GUI runs unprivileged, calling a small, auditable helper executable via `pkexec` when querying S.M.A.R.T. data.
+
+---
+
+## Command-Line Usage
+
+PULS DiskInfo can be used both as a rich graphical application and as a headless terminal tool:
+
+```bash
+# Launch GTK4 graphical interface
+puls-diskinfo
+
+# Headless terminal storage health scan
+puls-diskinfo --headless
+
+# Machine-readable JSON output for scripts and automation
+puls-diskinfo --json
+
+# Test with simulated mock storage devices (NVMe, SATA SSD, HDD, USB)
+puls-diskinfo --headless --mock-disk
+
+# Enable structured microsecond-precision diagnostic logging
+G_MESSAGES_DEBUG=puls puls-diskinfo --headless --mock-disk
+
+# Display version
+puls-diskinfo --version
+```
 
 ---
 
@@ -92,12 +120,12 @@ You can generate a self-contained release package with helper binaries, desktop 
 # Build the portable tarball
 ./packaging/build-binary.sh
 ```
-The tarball will be saved in `dist/puls-diskinfo-1.1.2-linux-x86_64.tar.gz`.
+The tarball will be saved in `dist/puls-diskinfo-1.1.3-linux-x86_64.tar.gz`.
 
 To install from the tarball:
 ```bash
-tar xzf dist/puls-diskinfo-1.1.2-linux-x86_64.tar.gz
-cd puls-diskinfo-1.1.2-linux-x86_64
+tar xzf dist/puls-diskinfo-1.1.3-linux-x86_64.tar.gz
+cd puls-diskinfo-1.1.3-linux-x86_64
 sudo ./install.sh
 ```
 

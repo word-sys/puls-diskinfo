@@ -16,7 +16,7 @@
 #include "puls-i18n.h"
 
 #ifndef PULS_VERSION
-#define PULS_VERSION "1.1.2"
+#define PULS_VERSION "1.1.3"
 #endif
 
 void

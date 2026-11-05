@@ -1,3 +1,14 @@
+puls-diskinfo (1.1.3) bookworm; urgency=medium
+
+  * Architectural overhaul: headless CLI mode (--headless) and JSON output (--json)
+  * Multi-drive mock storage simulation engine (--mock-disk)
+  * Comprehensive automated unit test suites and smartctl JSON fixtures
+  * AddressSanitizer and UndefinedBehaviorSanitizer memory safety validation
+  * Microsecond-precision structured logging framework (PULS_LOG)
+  * GResource bundle modularization and FreeDesktop/AppStream 1.0 conformance
+
+ -- Barın Güzeldemirci <baringuzeldemir@gmail.com>  Thu, 05 Nov 2026 20:00:00 +0300
+
 puls-diskinfo (1.1.2) bookworm; urgency=medium
 
   * Added full Turkish language support with in-app language switch button
