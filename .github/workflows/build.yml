@@ -36,6 +36,9 @@ jobs:
     - name: Compile Code
       run: meson compile -C build
 
+    - name: Run Tests
+      run: meson test -C build --verbose
+
   release:
     name: Release
     runs-on: ubuntu-22.04
@@ -62,6 +65,9 @@ jobs:
           debhelper \
           dpkg-dev \
           fakeroot
+
+    - name: Clean Distribution Directory
+      run: rm -rf dist && mkdir -p dist
 
     - name: Build Portable Binary Tarball
       run: |
@@ -102,9 +108,5 @@ jobs:
       with:
         name: "PULS DiskInfo ${{ github.ref_name }}"
         body: ${{ steps.changelog.outputs.notes }}
-        files: |
-          dist/*.tar.gz
-          dist/*.zip
-          dist/*.deb
-          dist/puls-diskinfo-*-linux-*
+        files: dist/*
         fail_on_unmatched_files: false
