@@ -26,13 +26,34 @@ typedef enum {
 } PulsHealthStatus;
 
 typedef enum {
-    PULS_DRIVE_TYPE_HDD,
-    PULS_DRIVE_TYPE_SATA_SSD,
+    PULS_DRIVE_TYPE_UNKNOWN = 0,
     PULS_DRIVE_TYPE_NVME_SSD,
+    PULS_DRIVE_TYPE_SATA_SSD,
+    PULS_DRIVE_TYPE_SATA_HDD,
+    PULS_DRIVE_TYPE_SAS_SSD,
+    PULS_DRIVE_TYPE_SAS_HDD,
     PULS_DRIVE_TYPE_USB,
     PULS_DRIVE_TYPE_SSHD,
-    PULS_DRIVE_TYPE_UNKNOWN
+    PULS_DRIVE_TYPE_EMMC,
+    PULS_DRIVE_TYPE_SD_CARD,
+    PULS_DRIVE_TYPE_VIRTUAL
 } PulsDriveType;
+
+#define PULS_DRIVE_TYPE_HDD         PULS_DRIVE_TYPE_SATA_HDD
+#define PULS_DRIVE_TYPE_USB_STORAGE PULS_DRIVE_TYPE_USB
+#define PULS_DRIVE_TYPE_NVME        PULS_DRIVE_TYPE_NVME_SSD
+
+typedef enum {
+    PULS_TRANSPORT_UNKNOWN = 0,
+    PULS_TRANSPORT_PCIE,
+    PULS_TRANSPORT_SATA,
+    PULS_TRANSPORT_SAS,
+    PULS_TRANSPORT_USB,
+    PULS_TRANSPORT_MMC,
+    PULS_TRANSPORT_VIRTUAL
+} PulsTransportProtocol;
+
+#define PULS_TRANSPORT_NVME PULS_TRANSPORT_PCIE
 
 typedef struct {
     guint8   id;
@@ -84,6 +105,7 @@ const gchar     *puls_smart_data_get_interface_type  (PulsSmartData *self);
 guint64          puls_smart_data_get_capacity_bytes  (PulsSmartData *self);
 gint             puls_smart_data_get_rotation_rpm    (PulsSmartData *self);
 PulsDriveType    puls_smart_data_get_drive_type      (PulsSmartData *self);
+PulsTransportProtocol puls_smart_data_get_transport_protocol (PulsSmartData *self);
 
 void puls_smart_data_set_device_path     (PulsSmartData *self, const gchar *val);
 void puls_smart_data_set_model_name      (PulsSmartData *self, const gchar *val);
@@ -93,6 +115,7 @@ void puls_smart_data_set_interface_type  (PulsSmartData *self, const gchar *val)
 void puls_smart_data_set_capacity_bytes  (PulsSmartData *self, guint64 val);
 void puls_smart_data_set_rotation_rpm    (PulsSmartData *self, gint val);
 void puls_smart_data_set_drive_type      (PulsSmartData *self, PulsDriveType val);
+void puls_smart_data_set_transport_protocol (PulsSmartData *self, PulsTransportProtocol protocol);
 
 guint32          puls_smart_data_get_logical_sector_size (PulsSmartData *self);
 guint32          puls_smart_data_get_physical_sector_size (PulsSmartData *self);
@@ -164,6 +187,11 @@ void            puls_smart_data_set_nvme_health (PulsSmartData *self,
 const gchar *puls_health_status_to_string (PulsHealthStatus status);
 const gchar *puls_drive_type_to_string    (PulsDriveType type);
 const gchar *puls_drive_type_to_icon      (PulsDriveType type);
+gboolean     puls_drive_type_is_ssd       (PulsDriveType type);
+gboolean     puls_drive_type_is_rotational (PulsDriveType type);
+
+const gchar          *puls_transport_protocol_to_string  (PulsTransportProtocol protocol);
+PulsTransportProtocol puls_transport_protocol_from_string (const gchar *str);
 
 gint             puls_smart_data_get_health_percent          (PulsSmartData *self);
 gint             puls_smart_data_get_estimated_lifetime_days (PulsSmartData *self);

@@ -168,6 +168,85 @@ test_structured_logging (void)
     PULS_LOG_DOMAIN_INFO ("puls/test", "Subdomain info: %d", 100);
 }
 
+static void
+test_drive_types_and_transports (void)
+{
+    /* 1. Drive type stringification */
+    g_assert_cmpstr (puls_drive_type_to_string (PULS_DRIVE_TYPE_NVME_SSD), ==, "NVMe SSD");
+    g_assert_cmpstr (puls_drive_type_to_string (PULS_DRIVE_TYPE_SATA_SSD), ==, "SATA SSD");
+    g_assert_cmpstr (puls_drive_type_to_string (PULS_DRIVE_TYPE_SATA_HDD), ==, "SATA HDD");
+    g_assert_cmpstr (puls_drive_type_to_string (PULS_DRIVE_TYPE_SAS_SSD),  ==, "SAS SSD");
+    g_assert_cmpstr (puls_drive_type_to_string (PULS_DRIVE_TYPE_SAS_HDD),  ==, "SAS HDD");
+    g_assert_cmpstr (puls_drive_type_to_string (PULS_DRIVE_TYPE_USB),      ==, "USB");
+    g_assert_cmpstr (puls_drive_type_to_string (PULS_DRIVE_TYPE_SSHD),     ==, "SSHD");
+    g_assert_cmpstr (puls_drive_type_to_string (PULS_DRIVE_TYPE_EMMC),     ==, "eMMC");
+    g_assert_cmpstr (puls_drive_type_to_string (PULS_DRIVE_TYPE_SD_CARD),  ==, "SD Card");
+    g_assert_cmpstr (puls_drive_type_to_string (PULS_DRIVE_TYPE_VIRTUAL),  ==, "Virtual");
+    g_assert_cmpstr (puls_drive_type_to_string (PULS_DRIVE_TYPE_UNKNOWN),  ==, "Unknown");
+
+    /* 2. Drive type icons */
+    g_assert_cmpstr (puls_drive_type_to_icon (PULS_DRIVE_TYPE_NVME_SSD), ==, "drive-harddisk-solidstate-symbolic");
+    g_assert_cmpstr (puls_drive_type_to_icon (PULS_DRIVE_TYPE_SATA_SSD), ==, "drive-harddisk-solidstate-symbolic");
+    g_assert_cmpstr (puls_drive_type_to_icon (PULS_DRIVE_TYPE_SAS_SSD),  ==, "drive-harddisk-solidstate-symbolic");
+    g_assert_cmpstr (puls_drive_type_to_icon (PULS_DRIVE_TYPE_EMMC),     ==, "drive-harddisk-solidstate-symbolic");
+    g_assert_cmpstr (puls_drive_type_to_icon (PULS_DRIVE_TYPE_USB),      ==, "drive-removable-media-symbolic");
+    g_assert_cmpstr (puls_drive_type_to_icon (PULS_DRIVE_TYPE_SD_CARD),  ==, "drive-removable-media-symbolic");
+    g_assert_cmpstr (puls_drive_type_to_icon (PULS_DRIVE_TYPE_SATA_HDD), ==, "drive-harddisk-symbolic");
+    g_assert_cmpstr (puls_drive_type_to_icon (PULS_DRIVE_TYPE_SAS_HDD),  ==, "drive-harddisk-symbolic");
+    g_assert_cmpstr (puls_drive_type_to_icon (PULS_DRIVE_TYPE_SSHD),     ==, "drive-harddisk-symbolic");
+    g_assert_cmpstr (puls_drive_type_to_icon (PULS_DRIVE_TYPE_VIRTUAL),  ==, "drive-multidisk-symbolic");
+
+    /* 3. Classification helpers */
+    g_assert_true (puls_drive_type_is_ssd (PULS_DRIVE_TYPE_NVME_SSD));
+    g_assert_true (puls_drive_type_is_ssd (PULS_DRIVE_TYPE_SATA_SSD));
+    g_assert_true (puls_drive_type_is_ssd (PULS_DRIVE_TYPE_SAS_SSD));
+    g_assert_true (puls_drive_type_is_ssd (PULS_DRIVE_TYPE_EMMC));
+    g_assert_false (puls_drive_type_is_ssd (PULS_DRIVE_TYPE_SATA_HDD));
+    g_assert_false (puls_drive_type_is_ssd (PULS_DRIVE_TYPE_SAS_HDD));
+
+    g_assert_true (puls_drive_type_is_rotational (PULS_DRIVE_TYPE_SATA_HDD));
+    g_assert_true (puls_drive_type_is_rotational (PULS_DRIVE_TYPE_SAS_HDD));
+    g_assert_true (puls_drive_type_is_rotational (PULS_DRIVE_TYPE_SSHD));
+    g_assert_false (puls_drive_type_is_rotational (PULS_DRIVE_TYPE_NVME_SSD));
+    g_assert_false (puls_drive_type_is_rotational (PULS_DRIVE_TYPE_SATA_SSD));
+
+    /* 4. Transport protocol stringification & parsing */
+    g_assert_cmpstr (puls_transport_protocol_to_string (PULS_TRANSPORT_PCIE),    ==, "PCIe");
+    g_assert_cmpstr (puls_transport_protocol_to_string (PULS_TRANSPORT_SATA),    ==, "SATA");
+    g_assert_cmpstr (puls_transport_protocol_to_string (PULS_TRANSPORT_SAS),     ==, "SAS");
+    g_assert_cmpstr (puls_transport_protocol_to_string (PULS_TRANSPORT_USB),     ==, "USB");
+    g_assert_cmpstr (puls_transport_protocol_to_string (PULS_TRANSPORT_MMC),     ==, "MMC");
+    g_assert_cmpstr (puls_transport_protocol_to_string (PULS_TRANSPORT_VIRTUAL), ==, "Virtual");
+    g_assert_cmpstr (puls_transport_protocol_to_string (PULS_TRANSPORT_UNKNOWN), ==, "Unknown");
+
+    g_assert_cmpint (puls_transport_protocol_from_string ("pcie"),    ==, PULS_TRANSPORT_PCIE);
+    g_assert_cmpint (puls_transport_protocol_from_string ("NVMe"),    ==, PULS_TRANSPORT_PCIE);
+    g_assert_cmpint (puls_transport_protocol_from_string ("sata"),    ==, PULS_TRANSPORT_SATA);
+    g_assert_cmpint (puls_transport_protocol_from_string ("ata"),     ==, PULS_TRANSPORT_SATA);
+    g_assert_cmpint (puls_transport_protocol_from_string ("SAS"),     ==, PULS_TRANSPORT_SAS);
+    g_assert_cmpint (puls_transport_protocol_from_string ("SCSI"),    ==, PULS_TRANSPORT_SAS);
+    g_assert_cmpint (puls_transport_protocol_from_string ("usb"),     ==, PULS_TRANSPORT_USB);
+    g_assert_cmpint (puls_transport_protocol_from_string ("mmc"),     ==, PULS_TRANSPORT_MMC);
+    g_assert_cmpint (puls_transport_protocol_from_string ("sd"),      ==, PULS_TRANSPORT_MMC);
+    g_assert_cmpint (puls_transport_protocol_from_string ("virtual"), ==, PULS_TRANSPORT_VIRTUAL);
+    g_assert_cmpint (puls_transport_protocol_from_string ("loop"),    ==, PULS_TRANSPORT_VIRTUAL);
+    g_assert_cmpint (puls_transport_protocol_from_string ("other"),   ==, PULS_TRANSPORT_UNKNOWN);
+    g_assert_cmpint (puls_transport_protocol_from_string (NULL),      ==, PULS_TRANSPORT_UNKNOWN);
+
+    /* 5. PulsSmartData transport protocol getter/setter */
+    g_autoptr(PulsSmartData) data = puls_smart_data_new ();
+    g_assert_cmpint (puls_smart_data_get_transport_protocol (data), ==, PULS_TRANSPORT_UNKNOWN);
+    puls_smart_data_set_transport_protocol (data, PULS_TRANSPORT_PCIE);
+    g_assert_cmpint (puls_smart_data_get_transport_protocol (data), ==, PULS_TRANSPORT_PCIE);
+
+    /* 6. Detection mappings */
+    g_assert_cmpint (puls_detect_drive_type ("/dev/nvme0n1"), ==, PULS_DRIVE_TYPE_NVME_SSD);
+    g_assert_cmpint (puls_detect_transport_protocol ("/dev/nvme0n1"), ==, PULS_TRANSPORT_PCIE);
+    g_assert_cmpint (puls_detect_drive_type ("/dev/loop0"), ==, PULS_DRIVE_TYPE_VIRTUAL);
+    g_assert_cmpint (puls_detect_transport_protocol ("/dev/loop0"), ==, PULS_TRANSPORT_VIRTUAL);
+    g_assert_cmpint (puls_detect_transport_protocol ("/dev/mmcblk0"), ==, PULS_TRANSPORT_MMC);
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -179,6 +258,7 @@ main (int argc, char *argv[])
     g_test_add_func ("/basic/mock-manager", test_mock_manager);
     g_test_add_func ("/basic/gresource-bundle", test_gresource_bundle);
     g_test_add_func ("/basic/structured-logging", test_structured_logging);
+    g_test_add_func ("/basic/drive-types-and-transports", test_drive_types_and_transports);
 
     return g_test_run ();
 }

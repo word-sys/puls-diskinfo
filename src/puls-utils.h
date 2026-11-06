@@ -73,8 +73,9 @@ gboolean puls_detect_smartmontools     (gchar **version_out);
 gboolean puls_device_path_is_valid     (const gchar *path);
 gchar   *puls_get_helper_path         (void);
 
-PulsDriveType puls_detect_drive_type (const gchar *device_path);
-gboolean      puls_is_rotational     (const gchar *device_name);
+PulsDriveType         puls_detect_drive_type          (const gchar *device_path);
+PulsTransportProtocol puls_detect_transport_protocol  (const gchar *device_path);
+gboolean              puls_is_rotational              (const gchar *device_name);
 gchar        *puls_get_transport     (const gchar *device_name);
 gchar        *puls_detect_usb_speed_version (const gchar *device_name);
 

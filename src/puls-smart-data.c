@@ -84,6 +84,7 @@ struct _PulsSmartData {
     guint32       logical_sector_size;
     guint32       physical_sector_size;
     PulsDriveType drive_type;
+    PulsTransportProtocol transport_protocol;
 
     PulsHealthStatus health;
     gboolean         smart_enabled;
@@ -176,6 +177,7 @@ puls_smart_data_init (PulsSmartData *self)
     self->logical_sector_size = 0;
     self->physical_sector_size = 0;
     self->drive_type       = PULS_DRIVE_TYPE_UNKNOWN;
+    self->transport_protocol = PULS_TRANSPORT_UNKNOWN;
     self->health           = PULS_HEALTH_UNKNOWN;
     self->smart_enabled    = FALSE;
     self->temperature      = -1;
@@ -308,6 +310,20 @@ puls_smart_data_set_drive_type (PulsSmartData *self, PulsDriveType val)
 {
     g_return_if_fail (PULS_IS_SMART_DATA (self));
     self->drive_type = val;
+}
+
+PulsTransportProtocol
+puls_smart_data_get_transport_protocol (PulsSmartData *self)
+{
+    g_return_val_if_fail (PULS_IS_SMART_DATA (self), PULS_TRANSPORT_UNKNOWN);
+    return self->transport_protocol;
+}
+
+void
+puls_smart_data_set_transport_protocol (PulsSmartData *self, PulsTransportProtocol protocol)
+{
+    g_return_if_fail (PULS_IS_SMART_DATA (self));
+    self->transport_protocol = protocol;
 }
 
 PulsHealthStatus
@@ -533,11 +549,16 @@ const gchar *
 puls_drive_type_to_string (PulsDriveType type)
 {
     switch (type) {
-    case PULS_DRIVE_TYPE_HDD:      return "HDD";
-    case PULS_DRIVE_TYPE_SATA_SSD: return "SATA SSD";
     case PULS_DRIVE_TYPE_NVME_SSD: return "NVMe SSD";
+    case PULS_DRIVE_TYPE_SATA_SSD: return "SATA SSD";
+    case PULS_DRIVE_TYPE_SATA_HDD: return "SATA HDD";
+    case PULS_DRIVE_TYPE_SAS_SSD:  return "SAS SSD";
+    case PULS_DRIVE_TYPE_SAS_HDD:  return "SAS HDD";
     case PULS_DRIVE_TYPE_USB:      return "USB";
     case PULS_DRIVE_TYPE_SSHD:     return "SSHD";
+    case PULS_DRIVE_TYPE_EMMC:     return "eMMC";
+    case PULS_DRIVE_TYPE_SD_CARD:  return "SD Card";
+    case PULS_DRIVE_TYPE_VIRTUAL:  return "Virtual";
     case PULS_DRIVE_TYPE_UNKNOWN:
     default:                       return "Unknown";
     }
@@ -547,14 +568,78 @@ const gchar *
 puls_drive_type_to_icon (PulsDriveType type)
 {
     switch (type) {
-    case PULS_DRIVE_TYPE_HDD:      return "drive-harddisk-symbolic";
-    case PULS_DRIVE_TYPE_SATA_SSD: return "drive-harddisk-solidstate-symbolic";
-    case PULS_DRIVE_TYPE_NVME_SSD: return "drive-harddisk-solidstate-symbolic";
-    case PULS_DRIVE_TYPE_USB:      return "drive-removable-media-symbolic";
-    case PULS_DRIVE_TYPE_SSHD:     return "drive-harddisk-symbolic";
+    case PULS_DRIVE_TYPE_NVME_SSD:
+    case PULS_DRIVE_TYPE_SATA_SSD:
+    case PULS_DRIVE_TYPE_SAS_SSD:
+    case PULS_DRIVE_TYPE_EMMC:
+        return "drive-harddisk-solidstate-symbolic";
+    case PULS_DRIVE_TYPE_USB:
+    case PULS_DRIVE_TYPE_SD_CARD:
+        return "drive-removable-media-symbolic";
+    case PULS_DRIVE_TYPE_SATA_HDD:
+    case PULS_DRIVE_TYPE_SAS_HDD:
+    case PULS_DRIVE_TYPE_SSHD:
+        return "drive-harddisk-symbolic";
+    case PULS_DRIVE_TYPE_VIRTUAL:
+        return "drive-multidisk-symbolic";
     case PULS_DRIVE_TYPE_UNKNOWN:
-    default:                       return "drive-harddisk-symbolic";
+    default:
+        return "drive-harddisk-symbolic";
     }
+}
+
+gboolean
+puls_drive_type_is_ssd (PulsDriveType type)
+{
+    return (type == PULS_DRIVE_TYPE_NVME_SSD ||
+            type == PULS_DRIVE_TYPE_SATA_SSD ||
+            type == PULS_DRIVE_TYPE_SAS_SSD  ||
+            type == PULS_DRIVE_TYPE_EMMC);
+}
+
+gboolean
+puls_drive_type_is_rotational (PulsDriveType type)
+{
+    return (type == PULS_DRIVE_TYPE_SATA_HDD ||
+            type == PULS_DRIVE_TYPE_SAS_HDD  ||
+            type == PULS_DRIVE_TYPE_SSHD);
+}
+
+const gchar *
+puls_transport_protocol_to_string (PulsTransportProtocol protocol)
+{
+    switch (protocol) {
+    case PULS_TRANSPORT_PCIE:    return "PCIe";
+    case PULS_TRANSPORT_SATA:    return "SATA";
+    case PULS_TRANSPORT_SAS:     return "SAS";
+    case PULS_TRANSPORT_USB:     return "USB";
+    case PULS_TRANSPORT_MMC:     return "MMC";
+    case PULS_TRANSPORT_VIRTUAL: return "Virtual";
+    case PULS_TRANSPORT_UNKNOWN:
+    default:                     return "Unknown";
+    }
+}
+
+PulsTransportProtocol
+puls_transport_protocol_from_string (const gchar *str)
+{
+    if (str == NULL)
+        return PULS_TRANSPORT_UNKNOWN;
+
+    if (g_ascii_strcasecmp (str, "pcie") == 0 || g_ascii_strcasecmp (str, "nvme") == 0)
+        return PULS_TRANSPORT_PCIE;
+    if (g_ascii_strcasecmp (str, "sata") == 0 || g_ascii_strcasecmp (str, "ata") == 0)
+        return PULS_TRANSPORT_SATA;
+    if (g_ascii_strcasecmp (str, "sas") == 0 || g_ascii_strcasecmp (str, "scsi") == 0)
+        return PULS_TRANSPORT_SAS;
+    if (g_ascii_strcasecmp (str, "usb") == 0)
+        return PULS_TRANSPORT_USB;
+    if (g_ascii_strcasecmp (str, "mmc") == 0 || g_ascii_strcasecmp (str, "sd") == 0)
+        return PULS_TRANSPORT_MMC;
+    if (g_ascii_strcasecmp (str, "virtual") == 0 || g_ascii_strcasecmp (str, "loop") == 0)
+        return PULS_TRANSPORT_VIRTUAL;
+
+    return PULS_TRANSPORT_UNKNOWN;
 }
 
 

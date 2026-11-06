@@ -67,6 +67,7 @@ create_mock_nvme_drive (void)
     puls_smart_data_set_form_factor (d, "M.2");
     puls_smart_data_set_capacity_bytes (d, 1000204886016ULL);
     puls_smart_data_set_drive_type (d, PULS_DRIVE_TYPE_NVME_SSD);
+    puls_smart_data_set_transport_protocol (d, PULS_TRANSPORT_PCIE);
     puls_smart_data_set_health (d, PULS_HEALTH_GOOD);
     puls_smart_data_set_health_percent (d, 99);
     puls_smart_data_set_estimated_lifetime_days (d, 3650);
@@ -115,6 +116,7 @@ create_mock_sata_ssd (void)
     puls_smart_data_set_form_factor (d, "2.5-inch");
     puls_smart_data_set_capacity_bytes (d, 500107862016ULL);
     puls_smart_data_set_drive_type (d, PULS_DRIVE_TYPE_SATA_SSD);
+    puls_smart_data_set_transport_protocol (d, PULS_TRANSPORT_SATA);
     puls_smart_data_set_health (d, PULS_HEALTH_CAUTION);
     puls_smart_data_set_health_percent (d, 78);
     puls_smart_data_set_estimated_lifetime_days (d, 950);
@@ -157,6 +159,7 @@ create_mock_hdd (void)
     puls_smart_data_set_rotation_rpm (d, 7200);
     puls_smart_data_set_capacity_bytes (d, 8001563222016ULL);
     puls_smart_data_set_drive_type (d, PULS_DRIVE_TYPE_HDD);
+    puls_smart_data_set_transport_protocol (d, PULS_TRANSPORT_SATA);
     puls_smart_data_set_health (d, PULS_HEALTH_GOOD);
     puls_smart_data_set_health_percent (d, 100);
     puls_smart_data_set_estimated_lifetime_days (d, 2100);
@@ -203,6 +206,7 @@ create_mock_usb_drive (void)
     puls_smart_data_set_form_factor (d, "USB Drive / External");
     puls_smart_data_set_capacity_bytes (d, 1000204886016ULL);
     puls_smart_data_set_drive_type (d, PULS_DRIVE_TYPE_USB);
+    puls_smart_data_set_transport_protocol (d, PULS_TRANSPORT_USB);
     puls_smart_data_set_health (d, PULS_HEALTH_GOOD);
     puls_smart_data_set_health_percent (d, 96);
     puls_smart_data_set_estimated_lifetime_days (d, 2800);

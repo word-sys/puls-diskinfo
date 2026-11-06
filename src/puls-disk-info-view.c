@@ -1391,7 +1391,7 @@ get_wear_level_string (PulsSmartData *data)
     }
 
     PulsDriveType dtype = puls_smart_data_get_drive_type (data);
-    if (dtype == PULS_DRIVE_TYPE_SATA_SSD || dtype == PULS_DRIVE_TYPE_NVME_SSD) {
+    if (puls_drive_type_is_ssd (dtype)) {
         return g_strdup (_(PULS_STR_NA_SSD));
     } else {
         return g_strdup (_(PULS_STR_NA_HDD));

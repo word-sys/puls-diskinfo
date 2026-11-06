@@ -385,17 +385,62 @@ puls_is_rotational (const gchar *device_name)
 gchar *
 puls_get_transport (const gchar *device_name)
 {
+    if (device_name == NULL)
+        return g_strdup ("unknown");
+
     if (g_str_has_prefix (device_name, "nvme"))
         return g_strdup ("nvme");
+
+    if (g_str_has_prefix (device_name, "mmcblk"))
+        return g_strdup ("mmc");
+
+    if (g_str_has_prefix (device_name, "loop") ||
+        g_str_has_prefix (device_name, "ram")  ||
+        g_str_has_prefix (device_name, "zram") ||
+        g_str_has_prefix (device_name, "dm-"))
+        return g_strdup ("virtual");
 
     g_autofree gchar *device_link = g_strdup_printf ("/sys/block/%s/device",
                                                       device_name);
     g_autofree gchar *resolved = g_file_read_link (device_link, NULL);
 
-    if (resolved && strstr (resolved, "usb"))
-        return g_strdup ("usb");
+    if (resolved) {
+        if (strstr (resolved, "usb"))
+            return g_strdup ("usb");
+        if (strstr (resolved, "sas") || strstr (resolved, "expander"))
+            return g_strdup ("sas");
+        if (strstr (resolved, "ata") || strstr (resolved, "sata") || strstr (resolved, "scsi"))
+            return g_strdup ("sata");
+    }
 
-    return g_strdup ("sata");
+    gchar real_path_buf[PATH_MAX];
+    if (realpath (device_link, real_path_buf) != NULL) {
+        if (strstr (real_path_buf, "usb"))
+            return g_strdup ("usb");
+        if (strstr (real_path_buf, "sas"))
+            return g_strdup ("sas");
+    }
+
+    if (g_str_has_prefix (device_name, "sd") || g_str_has_prefix (device_name, "hd"))
+        return g_strdup ("sata");
+
+    return g_strdup ("unknown");
+}
+
+PulsTransportProtocol
+puls_detect_transport_protocol (const gchar *device_path)
+{
+    if (device_path == NULL)
+        return PULS_TRANSPORT_UNKNOWN;
+
+    const gchar *device_name = strrchr (device_path, '/');
+    if (device_name)
+        device_name++;
+    else
+        device_name = device_path;
+
+    g_autofree gchar *transport = puls_get_transport (device_name);
+    return puls_transport_protocol_from_string (transport);
 }
 
 PulsDriveType
@@ -409,6 +454,23 @@ puls_detect_drive_type (const gchar *device_path)
     else
         device_name = device_path;
 
+    if (g_str_has_prefix (device_name, "loop") ||
+        g_str_has_prefix (device_name, "ram")  ||
+        g_str_has_prefix (device_name, "zram") ||
+        g_str_has_prefix (device_name, "dm-"))
+        return PULS_DRIVE_TYPE_VIRTUAL;
+
+    if (g_str_has_prefix (device_name, "mmcblk")) {
+        g_autofree gchar *type_path = g_strdup_printf ("/sys/block/%s/device/type", device_name);
+        g_autofree gchar *type_contents = NULL;
+        if (g_file_get_contents (type_path, &type_contents, NULL, NULL)) {
+            g_strstrip (type_contents);
+            if (g_ascii_strcasecmp (type_contents, "SD") == 0)
+                return PULS_DRIVE_TYPE_SD_CARD;
+        }
+        return PULS_DRIVE_TYPE_EMMC;
+    }
+
     g_autofree gchar *transport = puls_get_transport (device_name);
 
     if (g_strcmp0 (transport, "nvme") == 0)
@@ -417,12 +479,16 @@ puls_detect_drive_type (const gchar *device_path)
     if (g_strcmp0 (transport, "usb") == 0)
         return PULS_DRIVE_TYPE_USB;
 
-    gboolean rotational = puls_is_rotational (device_name);
+    if (g_strcmp0 (transport, "sas") == 0) {
+        gboolean rotational = puls_is_rotational (device_name);
+        return rotational ? PULS_DRIVE_TYPE_SAS_HDD : PULS_DRIVE_TYPE_SAS_SSD;
+    }
 
-    if (rotational)
-        return PULS_DRIVE_TYPE_HDD;
-    else
-        return PULS_DRIVE_TYPE_SATA_SSD;
+    if (g_strcmp0 (transport, "virtual") == 0)
+        return PULS_DRIVE_TYPE_VIRTUAL;
+
+    gboolean rotational = puls_is_rotational (device_name);
+    return rotational ? PULS_DRIVE_TYPE_SATA_HDD : PULS_DRIVE_TYPE_SATA_SSD;
 }
 
 gchar *
