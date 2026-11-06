@@ -364,6 +364,100 @@ test_extended_storage_metrics (void)
     g_assert_cmpint (puls_smart_data_get_sector_format (hdd), ==, PULS_SECTOR_FORMAT_512E);
 }
 
+static void
+test_sysfs_helpers (void)
+{
+    /* 1. Device name sanitization */
+    g_autofree gchar *s1 = puls_sanitize_device_name ("/dev/sda");
+    g_assert_cmpstr (s1, ==, "sda");
+
+    g_autofree gchar *s2 = puls_sanitize_device_name ("nvme0n1");
+    g_assert_cmpstr (s2, ==, "nvme0n1");
+
+    g_autofree gchar *s3 = puls_sanitize_device_name ("/dev/mapper/mpatha");
+    g_assert_cmpstr (s3, ==, "mpatha");
+
+    g_assert_null (puls_sanitize_device_name (NULL));
+    g_assert_null (puls_sanitize_device_name (""));
+    g_assert_null (puls_sanitize_device_name ("."));
+    g_assert_null (puls_sanitize_device_name (".."));
+    g_assert_null (puls_sanitize_device_name ("../sda"));
+    g_assert_null (puls_sanitize_device_name ("sda;rm"));
+
+    /* 2. Sysfs block path builder */
+    g_autofree gchar *p1 = puls_sysfs_get_block_path ("sda", "queue/rotational");
+    g_assert_cmpstr (p1, ==, "/sys/block/sda/queue/rotational");
+
+    g_autofree gchar *p2 = puls_sysfs_get_block_path ("/dev/nvme0n1", "size");
+    g_assert_cmpstr (p2, ==, "/sys/block/nvme0n1/size");
+
+    /* Prevent directory traversal */
+    g_assert_null (puls_sysfs_get_block_path ("sda", "../etc/passwd"));
+    g_assert_null (puls_sysfs_get_block_path (NULL, "size"));
+
+    /* 3. File reading against a temporary mock hierarchy */
+    GError *error = NULL;
+    g_autofree gchar *tmp_dir = g_dir_make_tmp ("puls-sysfs-test-XXXXXX", &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (tmp_dir);
+
+    g_autofree gchar *file_size = g_build_filename (tmp_dir, "size", NULL);
+    g_autofree gchar *file_model = g_build_filename (tmp_dir, "model", NULL);
+    g_autofree gchar *file_temp = g_build_filename (tmp_dir, "temp", NULL);
+    g_autofree gchar *file_large = g_build_filename (tmp_dir, "large", NULL);
+
+    g_file_set_contents (file_size, "2097152000\n", -1, &error);
+    g_assert_no_error (error);
+
+    g_file_set_contents (file_model, "  Samsung SSD 980 PRO \r\n", -1, &error);
+    g_assert_no_error (error);
+
+    g_file_set_contents (file_temp, "-42\n", -1, &error);
+    g_assert_no_error (error);
+
+    gchar large_buf[512];
+    memset (large_buf, 'A', sizeof (large_buf) - 1);
+    large_buf[sizeof (large_buf) - 1] = '\0';
+    g_file_set_contents (file_large, large_buf, -1, &error);
+    g_assert_no_error (error);
+
+    /* Test puls_sysfs_read_string */
+    g_autofree gchar *read_model = puls_sysfs_read_string (file_model, 64);
+    g_assert_cmpstr (read_model, ==, "Samsung SSD 980 PRO");
+
+    g_autofree gchar *capped = puls_sysfs_read_string (file_large, 10);
+    g_assert_nonnull (capped);
+    g_assert_cmpuint (strlen (capped), ==, 10);
+
+    /* Test non-existent & invalid paths */
+    g_autofree gchar *nonexistent_path = g_build_filename (tmp_dir, "does_not_exist", NULL);
+    g_assert_null (puls_sysfs_read_string (nonexistent_path, 64));
+    g_assert_null (puls_sysfs_read_string ("relative/path", 64));
+    g_assert_null (puls_sysfs_read_string (NULL, 64));
+
+    /* Test puls_sysfs_read_uint64 */
+    gboolean ok = FALSE;
+    guint64 sz = puls_sysfs_read_uint64 (file_size, 0, &ok);
+    g_assert_true (ok);
+    g_assert_cmpuint (sz, ==, 2097152000ULL);
+
+    guint64 def_sz = puls_sysfs_read_uint64 (nonexistent_path, 999, &ok);
+    g_assert_false (ok);
+    g_assert_cmpuint (def_sz, ==, 999);
+
+    /* Test puls_sysfs_read_int64 */
+    gint64 temp = puls_sysfs_read_int64 (file_temp, 0, &ok);
+    g_assert_true (ok);
+    g_assert_cmpint (temp, ==, -42);
+
+    /* Cleanup temporary files */
+    unlink (file_size);
+    unlink (file_model);
+    unlink (file_temp);
+    unlink (file_large);
+    rmdir (tmp_dir);
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -377,6 +471,7 @@ main (int argc, char *argv[])
     g_test_add_func ("/basic/structured-logging", test_structured_logging);
     g_test_add_func ("/basic/drive-types-and-transports", test_drive_types_and_transports);
     g_test_add_func ("/basic/extended-storage-metrics", test_extended_storage_metrics);
+    g_test_add_func ("/basic/sysfs-helpers", test_sysfs_helpers);
 
     return g_test_run ();
 }

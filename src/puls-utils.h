@@ -79,6 +79,21 @@ gboolean              puls_is_rotational              (const gchar *device_name)
 gchar        *puls_get_transport     (const gchar *device_name);
 gchar        *puls_detect_usb_speed_version (const gchar *device_name);
 
+/* Hardened Sysfs Helpers */
+#define PULS_SYSFS_DEFAULT_MAX_LEN 4096
+
+gchar   *puls_sanitize_device_name     (const gchar *device_path);
+gchar   *puls_sysfs_get_block_path     (const gchar *device_name, const gchar *subpath);
+gchar   *puls_sysfs_read_string        (const gchar *path, gsize max_len);
+guint64  puls_sysfs_read_uint64        (const gchar *path, guint64 default_val, gboolean *ok);
+gint64   puls_sysfs_read_int64         (const gchar *path, gint64 default_val, gboolean *ok);
+
+gchar   *puls_sysfs_read_device_file   (const gchar *device_name, const gchar *subpath, gsize max_len);
+guint64  puls_sysfs_read_device_uint64 (const gchar *device_name, const gchar *subpath, guint64 default_val);
+gint64   puls_sysfs_read_device_int64  (const gchar *device_name, const gchar *subpath, gint64 default_val);
+
+gchar   *puls_sysfs_resolve_link       (const gchar *path);
+
 gboolean puls_get_partition_usage (const gchar *mount_point,
                                    guint64     *out_used_bytes,
                                    guint64     *out_total_bytes);

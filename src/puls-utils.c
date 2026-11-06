@@ -18,6 +18,9 @@
 #include <mntent.h>
 #include <sys/statvfs.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <sys/stat.h>
 
 static GSubprocess *helper_proc = NULL;
 static GOutputStream *helper_stdin = NULL;
@@ -369,17 +372,183 @@ puls_get_helper_path (void)
     return NULL;
 }
 
+gchar *
+puls_sanitize_device_name (const gchar *device_path)
+{
+    if (device_path == NULL || device_path[0] == '\0')
+        return NULL;
+
+    if (strstr (device_path, ".."))
+        return NULL;
+
+    const gchar *name = strrchr (device_path, '/');
+    if (name)
+        name++;
+    else
+        name = device_path;
+
+    if (name[0] == '\0' || strcmp (name, ".") == 0)
+        return NULL;
+
+    for (const gchar *p = name; *p != '\0'; p++) {
+        if (!g_ascii_isalnum (*p) && *p != '_' && *p != '-' && *p != ':')
+            return NULL;
+    }
+
+    return g_strdup (name);
+}
+
+gchar *
+puls_sysfs_get_block_path (const gchar *device_name, const gchar *subpath)
+{
+    g_autofree gchar *clean_name = puls_sanitize_device_name (device_name);
+    if (clean_name == NULL)
+        return NULL;
+
+    if (subpath == NULL || subpath[0] == '\0')
+        return g_strdup_printf ("/sys/block/%s", clean_name);
+
+    if (strstr (subpath, ".."))
+        return NULL;
+
+    while (subpath[0] == '/')
+        subpath++;
+
+    return g_strdup_printf ("/sys/block/%s/%s", clean_name, subpath);
+}
+
+gchar *
+puls_sysfs_read_string (const gchar *path, gsize max_len)
+{
+    if (path == NULL || path[0] != '/')
+        return NULL;
+
+    if (max_len == 0 || max_len > 65536)
+        max_len = PULS_SYSFS_DEFAULT_MAX_LEN;
+
+    int fd = open (path, O_RDONLY | O_NOCTTY | O_CLOEXEC);
+    if (fd < 0)
+        return NULL;
+
+    gchar *buf = g_malloc (max_len + 1);
+    gsize total_read = 0;
+
+    while (total_read < max_len) {
+        ssize_t n = read (fd, buf + total_read, max_len - total_read);
+        if (n < 0) {
+            if (errno == EINTR)
+                continue;
+            close (fd);
+            g_free (buf);
+            return NULL;
+        }
+        if (n == 0)
+            break;
+        total_read += (gsize)n;
+    }
+
+    close (fd);
+    buf[total_read] = '\0';
+
+    g_strstrip (buf);
+    return buf;
+}
+
+guint64
+puls_sysfs_read_uint64 (const gchar *path, guint64 default_val, gboolean *ok)
+{
+    g_autofree gchar *str = puls_sysfs_read_string (path, 128);
+    if (str == NULL || str[0] == '\0') {
+        if (ok)
+            *ok = FALSE;
+        return default_val;
+    }
+
+    gchar *endptr = NULL;
+    errno = 0;
+    guint64 val = g_ascii_strtoull (str, &endptr, 0);
+    if (endptr == str || errno == ERANGE) {
+        if (ok)
+            *ok = FALSE;
+        return default_val;
+    }
+
+    if (ok)
+        *ok = TRUE;
+    return val;
+}
+
+gint64
+puls_sysfs_read_int64 (const gchar *path, gint64 default_val, gboolean *ok)
+{
+    g_autofree gchar *str = puls_sysfs_read_string (path, 128);
+    if (str == NULL || str[0] == '\0') {
+        if (ok)
+            *ok = FALSE;
+        return default_val;
+    }
+
+    gchar *endptr = NULL;
+    errno = 0;
+    gint64 val = g_ascii_strtoll (str, &endptr, 0);
+    if (endptr == str || errno == ERANGE) {
+        if (ok)
+            *ok = FALSE;
+        return default_val;
+    }
+
+    if (ok)
+        *ok = TRUE;
+    return val;
+}
+
+gchar *
+puls_sysfs_read_device_file (const gchar *device_name, const gchar *subpath, gsize max_len)
+{
+    g_autofree gchar *path = puls_sysfs_get_block_path (device_name, subpath);
+    if (path == NULL)
+        return NULL;
+
+    return puls_sysfs_read_string (path, max_len);
+}
+
+guint64
+puls_sysfs_read_device_uint64 (const gchar *device_name, const gchar *subpath, guint64 default_val)
+{
+    g_autofree gchar *path = puls_sysfs_get_block_path (device_name, subpath);
+    if (path == NULL)
+        return default_val;
+
+    return puls_sysfs_read_uint64 (path, default_val, NULL);
+}
+
+gint64
+puls_sysfs_read_device_int64 (const gchar *device_name, const gchar *subpath, gint64 default_val)
+{
+    g_autofree gchar *path = puls_sysfs_get_block_path (device_name, subpath);
+    if (path == NULL)
+        return default_val;
+
+    return puls_sysfs_read_int64 (path, default_val, NULL);
+}
+
+gchar *
+puls_sysfs_resolve_link (const gchar *path)
+{
+    if (path == NULL || path[0] != '/')
+        return NULL;
+
+    gchar real_buf[PATH_MAX];
+    if (realpath (path, real_buf) != NULL)
+        return g_strdup (real_buf);
+
+    return g_file_read_link (path, NULL);
+}
+
 gboolean
 puls_is_rotational (const gchar *device_name)
 {
-    g_autofree gchar *path = g_strdup_printf ("/sys/block/%s/queue/rotational",
-                                               device_name);
-    g_autofree gchar *contents = NULL;
-
-    if (!g_file_get_contents (path, &contents, NULL, NULL))
-        return TRUE;
-
-    return g_ascii_strtoull (g_strstrip (contents), NULL, 10) != 0;
+    return puls_sysfs_read_device_uint64 (device_name, "queue/rotational", 1) != 0;
 }
 
 gchar *

@@ -223,24 +223,18 @@ puls_smart_data_fill_sysfs_fallbacks (PulsSmartData *data)
 
     const gchar *model = puls_smart_data_get_model_name (data);
     if (model == NULL || strlen (model) == 0 || g_strcmp0 (model, "Unknown") == 0) {
-        g_autofree gchar *vendor_path = g_strdup_printf ("/sys/block/%s/device/vendor", base);
-        g_autofree gchar *model_path = g_strdup_printf ("/sys/block/%s/device/model", base);
-        g_autofree gchar *name_path = g_strdup_printf ("/sys/block/%s/device/name", base);
-        g_autofree gchar *vendor_contents = NULL;
-        g_autofree gchar *model_contents = NULL;
-        g_autofree gchar *name_contents = NULL;
+        g_autofree gchar *model_contents = puls_sysfs_read_device_file (base, "device/model", 128);
+        g_autofree gchar *vendor_contents = puls_sysfs_read_device_file (base, "device/vendor", 128);
+        g_autofree gchar *name_contents = puls_sysfs_read_device_file (base, "device/name", 128);
 
-        if (g_file_get_contents (model_path, &model_contents, NULL, NULL)) {
-            g_strstrip (model_contents);
-            if (g_file_get_contents (vendor_path, &vendor_contents, NULL, NULL)) {
-                g_strstrip (vendor_contents);
+        if (model_contents) {
+            if (vendor_contents) {
                 g_autofree gchar *full_model = g_strdup_printf ("%s %s", vendor_contents, model_contents);
                 puls_smart_data_set_model_name (data, full_model);
             } else {
                 puls_smart_data_set_model_name (data, model_contents);
             }
-        } else if (g_file_get_contents (name_path, &name_contents, NULL, NULL)) {
-            g_strstrip (name_contents);
+        } else if (name_contents) {
             puls_smart_data_set_model_name (data, name_contents);
         } else {
             puls_smart_data_set_model_name (data, "Generic Storage Device");
@@ -249,16 +243,12 @@ puls_smart_data_fill_sysfs_fallbacks (PulsSmartData *data)
 
     const gchar *serial = puls_smart_data_get_serial_number (data);
     if (serial == NULL || strlen (serial) == 0 || g_strcmp0 (serial, "Unknown") == 0) {
-        g_autofree gchar *serial_path = g_strdup_printf ("/sys/block/%s/device/serial", base);
-        g_autofree gchar *cid_path = g_strdup_printf ("/sys/block/%s/device/cid", base);
-        g_autofree gchar *serial_contents = NULL;
-        g_autofree gchar *cid_contents = NULL;
+        g_autofree gchar *serial_contents = puls_sysfs_read_device_file (base, "device/serial", 128);
+        g_autofree gchar *cid_contents = puls_sysfs_read_device_file (base, "device/cid", 128);
 
-        if (g_file_get_contents (serial_path, &serial_contents, NULL, NULL)) {
-            g_strstrip (serial_contents);
+        if (serial_contents) {
             puls_smart_data_set_serial_number (data, serial_contents);
-        } else if (g_file_get_contents (cid_path, &cid_contents, NULL, NULL)) {
-            g_strstrip (cid_contents);
+        } else if (cid_contents) {
             puls_smart_data_set_serial_number (data, cid_contents);
         } else if (dtype == PULS_DRIVE_TYPE_USB) {
             g_autofree gchar *device_link = g_strdup_printf ("/sys/block/%s/device", base);
@@ -297,30 +287,17 @@ puls_smart_data_fill_sysfs_fallbacks (PulsSmartData *data)
 
     const gchar *fw = puls_smart_data_get_firmware_version (data);
     if (fw == NULL || strlen (fw) == 0 || g_strcmp0 (fw, "Unknown") == 0) {
-        g_autofree gchar *rev_path = g_strdup_printf ("/sys/block/%s/device/rev", base);
-        g_autofree gchar *fw_rev_path = g_strdup_printf ("/sys/block/%s/device/firmware_rev", base);
-        g_autofree gchar *fw_contents = NULL;
-
-        if (g_file_get_contents (rev_path, &fw_contents, NULL, NULL)) {
-            g_strstrip (fw_contents);
-            puls_smart_data_set_firmware_version (data, fw_contents);
-        } else if (g_file_get_contents (fw_rev_path, &fw_contents, NULL, NULL)) {
-            g_strstrip (fw_contents);
-            puls_smart_data_set_firmware_version (data, fw_contents);
-        } else {
-            puls_smart_data_set_firmware_version (data, "N/A");
-        }
+        g_autofree gchar *fw_contents = puls_sysfs_read_device_file (base, "device/rev", 64);
+        if (fw_contents == NULL)
+            fw_contents = puls_sysfs_read_device_file (base, "device/firmware_rev", 64);
+        puls_smart_data_set_firmware_version (data, fw_contents ? fw_contents : "N/A");
     }
 
     guint64 cap = puls_smart_data_get_capacity_bytes (data);
     if (cap == 0) {
-        g_autofree gchar *size_path = g_strdup_printf ("/sys/block/%s/size", base);
-        g_autofree gchar *size_contents = NULL;
-        if (g_file_get_contents (size_path, &size_contents, NULL, NULL)) {
-            g_strstrip (size_contents);
-            guint64 sectors = g_ascii_strtoull (size_contents, NULL, 10);
+        guint64 sectors = puls_sysfs_read_device_uint64 (base, "size", 0);
+        if (sectors > 0)
             puls_smart_data_set_capacity_bytes (data, sectors * 512ULL);
-        }
     }
 
     const gchar *iface = puls_smart_data_get_interface_type (data);
@@ -414,22 +391,16 @@ puls_smart_data_fill_sysfs_fallbacks (PulsSmartData *data)
 
     guint32 lbs = puls_smart_data_get_logical_sector_size (data);
     if (lbs == 0) {
-        g_autofree gchar *lbs_path = g_strdup_printf ("/sys/block/%s/queue/logical_block_size", base);
-        g_autofree gchar *lbs_contents = NULL;
-        if (g_file_get_contents (lbs_path, &lbs_contents, NULL, NULL)) {
-            g_strstrip (lbs_contents);
-            puls_smart_data_set_logical_sector_size (data, (guint32)g_ascii_strtoull (lbs_contents, NULL, 10));
-        }
+        guint64 val = puls_sysfs_read_device_uint64 (base, "queue/logical_block_size", 0);
+        if (val > 0)
+            puls_smart_data_set_logical_sector_size (data, (guint32)val);
     }
 
     guint32 pbs = puls_smart_data_get_physical_sector_size (data);
     if (pbs == 0) {
-        g_autofree gchar *pbs_path = g_strdup_printf ("/sys/block/%s/queue/physical_block_size", base);
-        g_autofree gchar *pbs_contents = NULL;
-        if (g_file_get_contents (pbs_path, &pbs_contents, NULL, NULL)) {
-            g_strstrip (pbs_contents);
-            puls_smart_data_set_physical_sector_size (data, (guint32)g_ascii_strtoull (pbs_contents, NULL, 10));
-        }
+        guint64 val = puls_sysfs_read_device_uint64 (base, "queue/physical_block_size", 0);
+        if (val > 0)
+            puls_smart_data_set_physical_sector_size (data, (guint32)val);
     }
 
     const gchar *ff = puls_smart_data_get_form_factor (data);
