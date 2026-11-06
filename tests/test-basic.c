@@ -247,6 +247,123 @@ test_drive_types_and_transports (void)
     g_assert_cmpint (puls_detect_transport_protocol ("/dev/mmcblk0"), ==, PULS_TRANSPORT_MMC);
 }
 
+static void
+test_extended_storage_metrics (void)
+{
+    /* 1. PCIe generation stringifier & parser */
+    g_assert_cmpstr (puls_pcie_generation_to_string (PULS_PCIE_GEN_1), ==, "PCIe 1.0");
+    g_assert_cmpstr (puls_pcie_generation_to_string (PULS_PCIE_GEN_2), ==, "PCIe 2.0");
+    g_assert_cmpstr (puls_pcie_generation_to_string (PULS_PCIE_GEN_3), ==, "PCIe 3.0");
+    g_assert_cmpstr (puls_pcie_generation_to_string (PULS_PCIE_GEN_4), ==, "PCIe 4.0");
+    g_assert_cmpstr (puls_pcie_generation_to_string (PULS_PCIE_GEN_5), ==, "PCIe 5.0");
+    g_assert_cmpstr (puls_pcie_generation_to_string (PULS_PCIE_GEN_6), ==, "PCIe 6.0");
+    g_assert_cmpstr (puls_pcie_generation_to_string (PULS_PCIE_GEN_UNKNOWN), ==, "Unknown");
+
+    g_assert_cmpint (puls_pcie_generation_from_string ("PCIe 4.0"), ==, PULS_PCIE_GEN_4);
+    g_assert_cmpint (puls_pcie_generation_from_string ("Gen3"),     ==, PULS_PCIE_GEN_3);
+    g_assert_cmpint (puls_pcie_generation_from_string ("gen5"),     ==, PULS_PCIE_GEN_5);
+    g_assert_cmpint (puls_pcie_generation_from_string (NULL),       ==, PULS_PCIE_GEN_UNKNOWN);
+
+    /* 2. Sector format stringifier & detector */
+    g_assert_cmpstr (puls_sector_format_to_string (PULS_SECTOR_FORMAT_512N), ==, "512n");
+    g_assert_cmpstr (puls_sector_format_to_string (PULS_SECTOR_FORMAT_512E), ==, "512e");
+    g_assert_cmpstr (puls_sector_format_to_string (PULS_SECTOR_FORMAT_4KN),  ==, "4Kn");
+    g_assert_cmpstr (puls_sector_format_to_string (PULS_SECTOR_FORMAT_OTHER), ==, "Custom");
+    g_assert_cmpstr (puls_sector_format_to_string (PULS_SECTOR_FORMAT_UNKNOWN), ==, "Unknown");
+
+    g_assert_cmpint (puls_sector_format_detect (512, 512),   ==, PULS_SECTOR_FORMAT_512N);
+    g_assert_cmpint (puls_sector_format_detect (512, 4096),  ==, PULS_SECTOR_FORMAT_512E);
+    g_assert_cmpint (puls_sector_format_detect (4096, 4096), ==, PULS_SECTOR_FORMAT_4KN);
+    g_assert_cmpint (puls_sector_format_detect (0, 0),       ==, PULS_SECTOR_FORMAT_UNKNOWN);
+
+    /* 3. PulsSmartData extended metrics getters & setters */
+    g_autoptr(PulsSmartData) data = puls_smart_data_new ();
+
+    puls_smart_data_set_pcie_current_gen (data, PULS_PCIE_GEN_4);
+    puls_smart_data_set_pcie_current_width (data, 4);
+    puls_smart_data_set_pcie_max_gen (data, PULS_PCIE_GEN_5);
+    puls_smart_data_set_pcie_max_width (data, 16);
+    g_assert_cmpint (puls_smart_data_get_pcie_current_gen (data), ==, PULS_PCIE_GEN_4);
+    g_assert_cmpuint (puls_smart_data_get_pcie_current_width (data), ==, 4);
+    g_assert_cmpint (puls_smart_data_get_pcie_max_gen (data), ==, PULS_PCIE_GEN_5);
+    g_assert_cmpuint (puls_smart_data_get_pcie_max_width (data), ==, 16);
+
+    puls_smart_data_set_protocol_version (data, "NVMe 2.0");
+    g_assert_cmpstr (puls_smart_data_get_protocol_version (data), ==, "NVMe 2.0");
+
+    puls_smart_data_set_tbw_rating_bytes (data, 1200000000000000ULL);
+    g_assert_cmpuint (puls_smart_data_get_tbw_rating_bytes (data), ==, 1200000000000000ULL);
+
+    puls_smart_data_set_wear_level_percent (data, 5);
+    g_assert_cmpint (puls_smart_data_get_wear_level_percent (data), ==, 5);
+
+    /* Sector format computed automatically from logical & physical sizes */
+    puls_smart_data_set_logical_sector_size (data, 512);
+    puls_smart_data_set_physical_sector_size (data, 4096);
+    g_assert_cmpint (puls_smart_data_get_sector_format (data), ==, PULS_SECTOR_FORMAT_512E);
+
+    /* Sector format explicit override */
+    puls_smart_data_set_sector_format (data, PULS_SECTOR_FORMAT_4KN);
+    g_assert_cmpint (puls_smart_data_get_sector_format (data), ==, PULS_SECTOR_FORMAT_4KN);
+
+    /* 4. Thermal sensor lifecycle & array management */
+    PulsThermalSensor *sensor = puls_thermal_sensor_new ("Controller", 62, 85, 100);
+    g_assert_nonnull (sensor);
+    g_assert_cmpstr (sensor->name, ==, "Controller");
+    g_assert_cmpint (sensor->temperature, ==, 62);
+    g_assert_cmpint (sensor->warning_temp, ==, 85);
+    g_assert_cmpint (sensor->critical_temp, ==, 100);
+
+    PulsThermalSensor *sensor_copy = puls_thermal_sensor_copy (sensor);
+    g_assert_nonnull (sensor_copy);
+    g_assert_cmpstr (sensor_copy->name, ==, "Controller");
+    puls_thermal_sensor_free (sensor_copy);
+
+    puls_smart_data_add_thermal_sensor (data, sensor);
+    puls_thermal_sensor_free (sensor);
+
+    PulsThermalSensor sensor2 = { (gchar *)"NAND Flash", 40, 70, 80 };
+    puls_smart_data_add_thermal_sensor (data, &sensor2);
+
+    GArray *sensors = puls_smart_data_get_thermal_sensors (data);
+    g_assert_nonnull (sensors);
+    g_assert_cmpuint (sensors->len, ==, 2);
+
+    PulsThermalSensor *item0 = &g_array_index (sensors, PulsThermalSensor, 0);
+    g_assert_cmpstr (item0->name, ==, "Controller");
+    g_assert_cmpint (item0->temperature, ==, 62);
+
+    PulsThermalSensor *item1 = &g_array_index (sensors, PulsThermalSensor, 1);
+    g_assert_cmpstr (item1->name, ==, "NAND Flash");
+    g_assert_cmpint (item1->temperature, ==, 40);
+
+    puls_smart_data_clear_thermal_sensors (data);
+    g_assert_cmpuint (sensors->len, ==, 0);
+
+    /* 5. Mock drives metrics validation */
+    g_autoptr(PulsDiskManager) manager = puls_disk_manager_new ();
+    puls_disk_manager_set_mock_mode (manager, TRUE);
+    puls_disk_manager_scan (manager);
+
+    PulsSmartData *nvme = puls_disk_manager_get_smart_data (manager, "/dev/nvme0n1");
+    g_assert_nonnull (nvme);
+    g_assert_cmpint (puls_smart_data_get_pcie_current_gen (nvme), ==, PULS_PCIE_GEN_4);
+    g_assert_cmpuint (puls_smart_data_get_pcie_current_width (nvme), ==, 4);
+    g_assert_cmpstr (puls_smart_data_get_protocol_version (nvme), ==, "NVMe 1.4");
+    g_assert_cmpuint (puls_smart_data_get_tbw_rating_bytes (nvme), ==, 600000000000000ULL);
+    g_assert_cmpint (puls_smart_data_get_wear_level_percent (nvme), ==, 1);
+    g_assert_cmpuint (puls_smart_data_get_thermal_sensors (nvme)->len, ==, 3);
+
+    PulsSmartData *sata = puls_disk_manager_get_smart_data (manager, "/dev/sda");
+    g_assert_nonnull (sata);
+    g_assert_cmpint (puls_smart_data_get_sector_format (sata), ==, PULS_SECTOR_FORMAT_512N);
+    g_assert_cmpint (puls_smart_data_get_wear_level_percent (sata), ==, 22);
+
+    PulsSmartData *hdd = puls_disk_manager_get_smart_data (manager, "/dev/sdb");
+    g_assert_nonnull (hdd);
+    g_assert_cmpint (puls_smart_data_get_sector_format (hdd), ==, PULS_SECTOR_FORMAT_512E);
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -259,6 +376,7 @@ main (int argc, char *argv[])
     g_test_add_func ("/basic/gresource-bundle", test_gresource_bundle);
     g_test_add_func ("/basic/structured-logging", test_structured_logging);
     g_test_add_func ("/basic/drive-types-and-transports", test_drive_types_and_transports);
+    g_test_add_func ("/basic/extended-storage-metrics", test_extended_storage_metrics);
 
     return g_test_run ();
 }

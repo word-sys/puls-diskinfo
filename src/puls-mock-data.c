@@ -78,8 +78,23 @@ create_mock_nvme_drive (void)
     puls_smart_data_set_total_bytes_written (d, 15482000000000ULL);
     puls_smart_data_set_logical_sector_size (d, 512);
     puls_smart_data_set_physical_sector_size (d, 512);
+    puls_smart_data_set_sector_format (d, PULS_SECTOR_FORMAT_512N);
+    puls_smart_data_set_pcie_current_gen (d, PULS_PCIE_GEN_4);
+    puls_smart_data_set_pcie_current_width (d, 4);
+    puls_smart_data_set_pcie_max_gen (d, PULS_PCIE_GEN_4);
+    puls_smart_data_set_pcie_max_width (d, 4);
+    puls_smart_data_set_protocol_version (d, "NVMe 1.4");
+    puls_smart_data_set_tbw_rating_bytes (d, 600000000000000ULL);
+    puls_smart_data_set_wear_level_percent (d, 1);
     puls_smart_data_set_supports_trim (d, TRUE);
     puls_smart_data_set_supports_ncq (d, TRUE);
+
+    PulsThermalSensor s1 = { (gchar *)"Composite", 38, 70, 80 };
+    PulsThermalSensor s2 = { (gchar *)"Sensor 1 (NAND)", 42, 75, 85 };
+    PulsThermalSensor s3 = { (gchar *)"Sensor 2 (Controller)", 55, 90, 105 };
+    puls_smart_data_add_thermal_sensor (d, &s1);
+    puls_smart_data_add_thermal_sensor (d, &s2);
+    puls_smart_data_add_thermal_sensor (d, &s3);
 
     PulsNvmeHealth nvme = { 0 };
     nvme.critical_warning = 0;
@@ -127,8 +142,15 @@ create_mock_sata_ssd (void)
     puls_smart_data_set_total_bytes_written (d, 45200000000000ULL);
     puls_smart_data_set_logical_sector_size (d, 512);
     puls_smart_data_set_physical_sector_size (d, 512);
+    puls_smart_data_set_sector_format (d, PULS_SECTOR_FORMAT_512N);
+    puls_smart_data_set_protocol_version (d, "ACS-3 Revision 5");
+    puls_smart_data_set_tbw_rating_bytes (d, 180000000000000ULL);
+    puls_smart_data_set_wear_level_percent (d, 22);
     puls_smart_data_set_supports_trim (d, TRUE);
     puls_smart_data_set_supports_ncq (d, TRUE);
+
+    PulsThermalSensor s_sata = { (gchar *)"Drive Temperature", 41, 70, 80 };
+    puls_smart_data_add_thermal_sensor (d, &s_sata);
     puls_smart_data_set_supports_devsleep (d, TRUE);
     puls_smart_data_set_supports_write_cache (d, TRUE);
 
@@ -170,10 +192,15 @@ create_mock_hdd (void)
     puls_smart_data_set_total_bytes_written (d, 24500000000000ULL);
     puls_smart_data_set_logical_sector_size (d, 512);
     puls_smart_data_set_physical_sector_size (d, 4096);
+    puls_smart_data_set_sector_format (d, PULS_SECTOR_FORMAT_512E);
+    puls_smart_data_set_protocol_version (d, "ACS-4 Revision 10");
     puls_smart_data_set_buffer_size_kb (d, 262144);
     puls_smart_data_set_supports_ncq (d, TRUE);
     puls_smart_data_set_supports_write_cache (d, TRUE);
     puls_smart_data_set_supports_trim (d, FALSE);
+
+    PulsThermalSensor s_hdd = { (gchar *)"Internal Temperature", 33, 60, 70 };
+    puls_smart_data_add_thermal_sensor (d, &s_hdd);
 
     add_attribute (d, 0x01, "Raw Read Error Rate", 82, 64, 6, 154320110);
     add_attribute (d, 0x03, "Spin-Up Time", 94, 94, 0, 5400);
@@ -217,6 +244,13 @@ create_mock_usb_drive (void)
     puls_smart_data_set_total_bytes_written (d, 8200000000000ULL);
     puls_smart_data_set_logical_sector_size (d, 512);
     puls_smart_data_set_physical_sector_size (d, 512);
+    puls_smart_data_set_sector_format (d, PULS_SECTOR_FORMAT_512N);
+    puls_smart_data_set_protocol_version (d, "USB 3.2 Gen 2 / UASP");
+    puls_smart_data_set_tbw_rating_bytes (d, 500000000000000ULL);
+    puls_smart_data_set_wear_level_percent (d, 4);
+
+    PulsThermalSensor s_usb = { (gchar *)"Enclosure Temperature", 44, 70, 80 };
+    puls_smart_data_add_thermal_sensor (d, &s_usb);
 
     return d;
 }

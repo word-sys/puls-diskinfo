@@ -67,6 +67,37 @@ puls_nvme_health_free (PulsNvmeHealth *health)
     g_free (health);
 }
 
+PulsThermalSensor *
+puls_thermal_sensor_new (const gchar *name, gint temperature, gint warning_temp, gint critical_temp)
+{
+    PulsThermalSensor *s = g_new0 (PulsThermalSensor, 1);
+    s->name = g_strdup (name);
+    s->temperature = temperature;
+    s->warning_temp = warning_temp;
+    s->critical_temp = critical_temp;
+    return s;
+}
+
+PulsThermalSensor *
+puls_thermal_sensor_copy (const PulsThermalSensor *sensor)
+{
+    if (sensor == NULL)
+        return NULL;
+    return puls_thermal_sensor_new (sensor->name,
+                                    sensor->temperature,
+                                    sensor->warning_temp,
+                                    sensor->critical_temp);
+}
+
+void
+puls_thermal_sensor_free (PulsThermalSensor *sensor)
+{
+    if (sensor == NULL)
+        return;
+    g_free (sensor->name);
+    g_free (sensor);
+}
+
 
 struct _PulsSmartData {
     GObject parent_instance;
@@ -119,6 +150,16 @@ struct _PulsSmartData {
     gint            aam_level;        /* -1 = not set */
     gint            spin_up_time_ms;  /* -1 = not set */
     guint64         error_count_total;
+
+    PulsPcieGeneration pcie_current_gen;
+    guint8             pcie_current_width;
+    PulsPcieGeneration pcie_max_gen;
+    guint8             pcie_max_width;
+    gchar             *protocol_version;
+    PulsSectorFormat   sector_format;
+    guint64            tbw_rating_bytes;
+    gint               wear_level_percent;
+    GArray            *thermal_sensors;
 };
 
 G_DEFINE_TYPE (PulsSmartData, puls_smart_data, G_TYPE_OBJECT)
@@ -150,6 +191,16 @@ puls_smart_data_finalize (GObject *object)
     puls_nvme_health_free (self->nvme_health);
     g_free (self->self_test_status_str);
     g_free (self->self_test_type_str);
+    g_free (self->protocol_version);
+
+    if (self->thermal_sensors) {
+        for (guint i = 0; i < self->thermal_sensors->len; i++) {
+            PulsThermalSensor *s = &g_array_index (self->thermal_sensors,
+                                                   PulsThermalSensor, i);
+            g_free (s->name);
+        }
+        g_array_free (self->thermal_sensors, TRUE);
+    }
 
     G_OBJECT_CLASS (puls_smart_data_parent_class)->finalize (object);
 }
@@ -204,6 +255,15 @@ puls_smart_data_init (PulsSmartData *self)
     self->aam_level                = -1;
     self->spin_up_time_ms          = -1;
     self->error_count_total        = 0;
+    self->pcie_current_gen         = PULS_PCIE_GEN_UNKNOWN;
+    self->pcie_current_width       = 0;
+    self->pcie_max_gen             = PULS_PCIE_GEN_UNKNOWN;
+    self->pcie_max_width           = 0;
+    self->protocol_version         = NULL;
+    self->sector_format            = PULS_SECTOR_FORMAT_UNKNOWN;
+    self->tbw_rating_bytes         = 0;
+    self->wear_level_percent       = -1;
+    self->thermal_sensors          = g_array_new (FALSE, TRUE, sizeof (PulsThermalSensor));
 }
 
 
@@ -739,4 +799,224 @@ puls_smart_data_set_error_count_total (PulsSmartData *self, guint64 val)
 {
     g_return_if_fail (PULS_IS_SMART_DATA (self));
     self->error_count_total = val;
+}
+
+PulsSectorFormat
+puls_smart_data_get_sector_format (PulsSmartData *self)
+{
+    g_return_val_if_fail (PULS_IS_SMART_DATA (self), PULS_SECTOR_FORMAT_UNKNOWN);
+    if (self->sector_format != PULS_SECTOR_FORMAT_UNKNOWN)
+        return self->sector_format;
+
+    return puls_sector_format_detect (self->logical_sector_size, self->physical_sector_size);
+}
+
+void
+puls_smart_data_set_sector_format (PulsSmartData *self, PulsSectorFormat format)
+{
+    g_return_if_fail (PULS_IS_SMART_DATA (self));
+    self->sector_format = format;
+}
+
+PulsPcieGeneration
+puls_smart_data_get_pcie_current_gen (PulsSmartData *self)
+{
+    g_return_val_if_fail (PULS_IS_SMART_DATA (self), PULS_PCIE_GEN_UNKNOWN);
+    return self->pcie_current_gen;
+}
+
+void
+puls_smart_data_set_pcie_current_gen (PulsSmartData *self, PulsPcieGeneration gen)
+{
+    g_return_if_fail (PULS_IS_SMART_DATA (self));
+    self->pcie_current_gen = gen;
+}
+
+guint8
+puls_smart_data_get_pcie_current_width (PulsSmartData *self)
+{
+    g_return_val_if_fail (PULS_IS_SMART_DATA (self), 0);
+    return self->pcie_current_width;
+}
+
+void
+puls_smart_data_set_pcie_current_width (PulsSmartData *self, guint8 width)
+{
+    g_return_if_fail (PULS_IS_SMART_DATA (self));
+    self->pcie_current_width = width;
+}
+
+PulsPcieGeneration
+puls_smart_data_get_pcie_max_gen (PulsSmartData *self)
+{
+    g_return_val_if_fail (PULS_IS_SMART_DATA (self), PULS_PCIE_GEN_UNKNOWN);
+    return self->pcie_max_gen;
+}
+
+void
+puls_smart_data_set_pcie_max_gen (PulsSmartData *self, PulsPcieGeneration gen)
+{
+    g_return_if_fail (PULS_IS_SMART_DATA (self));
+    self->pcie_max_gen = gen;
+}
+
+guint8
+puls_smart_data_get_pcie_max_width (PulsSmartData *self)
+{
+    g_return_val_if_fail (PULS_IS_SMART_DATA (self), 0);
+    return self->pcie_max_width;
+}
+
+void
+puls_smart_data_set_pcie_max_width (PulsSmartData *self, guint8 width)
+{
+    g_return_if_fail (PULS_IS_SMART_DATA (self));
+    self->pcie_max_width = width;
+}
+
+const gchar *
+puls_smart_data_get_protocol_version (PulsSmartData *self)
+{
+    g_return_val_if_fail (PULS_IS_SMART_DATA (self), NULL);
+    return self->protocol_version;
+}
+
+void
+puls_smart_data_set_protocol_version (PulsSmartData *self, const gchar *val)
+{
+    g_return_if_fail (PULS_IS_SMART_DATA (self));
+    g_free (self->protocol_version);
+    self->protocol_version = g_strdup (val);
+}
+
+guint64
+puls_smart_data_get_tbw_rating_bytes (PulsSmartData *self)
+{
+    g_return_val_if_fail (PULS_IS_SMART_DATA (self), 0);
+    return self->tbw_rating_bytes;
+}
+
+void
+puls_smart_data_set_tbw_rating_bytes (PulsSmartData *self, guint64 val)
+{
+    g_return_if_fail (PULS_IS_SMART_DATA (self));
+    self->tbw_rating_bytes = val;
+}
+
+gint
+puls_smart_data_get_wear_level_percent (PulsSmartData *self)
+{
+    g_return_val_if_fail (PULS_IS_SMART_DATA (self), -1);
+    return self->wear_level_percent;
+}
+
+void
+puls_smart_data_set_wear_level_percent (PulsSmartData *self, gint val)
+{
+    g_return_if_fail (PULS_IS_SMART_DATA (self));
+    self->wear_level_percent = val;
+}
+
+GArray *
+puls_smart_data_get_thermal_sensors (PulsSmartData *self)
+{
+    g_return_val_if_fail (PULS_IS_SMART_DATA (self), NULL);
+    return self->thermal_sensors;
+}
+
+void
+puls_smart_data_add_thermal_sensor (PulsSmartData *self, const PulsThermalSensor *sensor)
+{
+    g_return_if_fail (PULS_IS_SMART_DATA (self));
+    g_return_if_fail (sensor != NULL);
+
+    PulsThermalSensor copy;
+    copy.name = g_strdup (sensor->name);
+    copy.temperature = sensor->temperature;
+    copy.warning_temp = sensor->warning_temp;
+    copy.critical_temp = sensor->critical_temp;
+
+    g_array_append_val (self->thermal_sensors, copy);
+}
+
+void
+puls_smart_data_clear_thermal_sensors (PulsSmartData *self)
+{
+    g_return_if_fail (PULS_IS_SMART_DATA (self));
+    if (self->thermal_sensors == NULL)
+        return;
+
+    for (guint i = 0; i < self->thermal_sensors->len; i++) {
+        PulsThermalSensor *s = &g_array_index (self->thermal_sensors, PulsThermalSensor, i);
+        g_free (s->name);
+    }
+    g_array_set_size (self->thermal_sensors, 0);
+}
+
+const gchar *
+puls_pcie_generation_to_string (PulsPcieGeneration gen)
+{
+    switch (gen) {
+    case PULS_PCIE_GEN_1: return "PCIe 1.0";
+    case PULS_PCIE_GEN_2: return "PCIe 2.0";
+    case PULS_PCIE_GEN_3: return "PCIe 3.0";
+    case PULS_PCIE_GEN_4: return "PCIe 4.0";
+    case PULS_PCIE_GEN_5: return "PCIe 5.0";
+    case PULS_PCIE_GEN_6: return "PCIe 6.0";
+    case PULS_PCIE_GEN_UNKNOWN:
+    default:              return "Unknown";
+    }
+}
+
+PulsPcieGeneration
+puls_pcie_generation_from_string (const gchar *str)
+{
+    if (str == NULL)
+        return PULS_PCIE_GEN_UNKNOWN;
+
+    if (strstr (str, "6.0") || strstr (str, "Gen6") || strstr (str, "gen6"))
+        return PULS_PCIE_GEN_6;
+    if (strstr (str, "5.0") || strstr (str, "Gen5") || strstr (str, "gen5"))
+        return PULS_PCIE_GEN_5;
+    if (strstr (str, "4.0") || strstr (str, "Gen4") || strstr (str, "gen4"))
+        return PULS_PCIE_GEN_4;
+    if (strstr (str, "3.0") || strstr (str, "Gen3") || strstr (str, "gen3"))
+        return PULS_PCIE_GEN_3;
+    if (strstr (str, "2.0") || strstr (str, "Gen2") || strstr (str, "gen2"))
+        return PULS_PCIE_GEN_2;
+    if (strstr (str, "1.0") || strstr (str, "Gen1") || strstr (str, "gen1"))
+        return PULS_PCIE_GEN_1;
+
+    return PULS_PCIE_GEN_UNKNOWN;
+}
+
+const gchar *
+puls_sector_format_to_string (PulsSectorFormat format)
+{
+    switch (format) {
+    case PULS_SECTOR_FORMAT_512N: return "512n";
+    case PULS_SECTOR_FORMAT_512E: return "512e";
+    case PULS_SECTOR_FORMAT_4KN:  return "4Kn";
+    case PULS_SECTOR_FORMAT_OTHER: return "Custom";
+    case PULS_SECTOR_FORMAT_UNKNOWN:
+    default:                      return "Unknown";
+    }
+}
+
+PulsSectorFormat
+puls_sector_format_detect (guint32 logical, guint32 physical)
+{
+    if (logical == 0)
+        return PULS_SECTOR_FORMAT_UNKNOWN;
+    if (physical == 0)
+        physical = logical;
+
+    if (logical == 512 && physical == 512)
+        return PULS_SECTOR_FORMAT_512N;
+    if (logical == 512 && physical == 4096)
+        return PULS_SECTOR_FORMAT_512E;
+    if (logical == 4096 && physical == 4096)
+        return PULS_SECTOR_FORMAT_4KN;
+
+    return PULS_SECTOR_FORMAT_OTHER;
 }

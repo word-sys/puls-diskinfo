@@ -55,6 +55,38 @@ typedef enum {
 
 #define PULS_TRANSPORT_NVME PULS_TRANSPORT_PCIE
 
+typedef enum {
+    PULS_PCIE_GEN_UNKNOWN = 0,
+    PULS_PCIE_GEN_1       = 1,
+    PULS_PCIE_GEN_2       = 2,
+    PULS_PCIE_GEN_3       = 3,
+    PULS_PCIE_GEN_4       = 4,
+    PULS_PCIE_GEN_5       = 5,
+    PULS_PCIE_GEN_6       = 6
+} PulsPcieGeneration;
+
+typedef enum {
+    PULS_SECTOR_FORMAT_UNKNOWN = 0,
+    PULS_SECTOR_FORMAT_512N,
+    PULS_SECTOR_FORMAT_512E,
+    PULS_SECTOR_FORMAT_4KN,
+    PULS_SECTOR_FORMAT_OTHER
+} PulsSectorFormat;
+
+typedef struct {
+    gchar *name;
+    gint   temperature;
+    gint   warning_temp;
+    gint   critical_temp;
+} PulsThermalSensor;
+
+PulsThermalSensor *puls_thermal_sensor_new  (const gchar *name,
+                                             gint temperature,
+                                             gint warning_temp,
+                                             gint critical_temp);
+PulsThermalSensor *puls_thermal_sensor_copy (const PulsThermalSensor *sensor);
+void               puls_thermal_sensor_free (PulsThermalSensor *sensor);
+
 typedef struct {
     guint8   id;
     gchar   *name;
@@ -120,10 +152,33 @@ void puls_smart_data_set_transport_protocol (PulsSmartData *self, PulsTransportP
 guint32          puls_smart_data_get_logical_sector_size (PulsSmartData *self);
 guint32          puls_smart_data_get_physical_sector_size (PulsSmartData *self);
 const gchar     *puls_smart_data_get_form_factor (PulsSmartData *self);
+PulsSectorFormat puls_smart_data_get_sector_format (PulsSmartData *self);
 
 void puls_smart_data_set_logical_sector_size (PulsSmartData *self, guint32 val);
 void puls_smart_data_set_physical_sector_size (PulsSmartData *self, guint32 val);
 void puls_smart_data_set_form_factor (PulsSmartData *self, const gchar *val);
+void puls_smart_data_set_sector_format (PulsSmartData *self, PulsSectorFormat format);
+
+PulsPcieGeneration puls_smart_data_get_pcie_current_gen (PulsSmartData *self);
+guint8             puls_smart_data_get_pcie_current_width (PulsSmartData *self);
+PulsPcieGeneration puls_smart_data_get_pcie_max_gen     (PulsSmartData *self);
+guint8             puls_smart_data_get_pcie_max_width   (PulsSmartData *self);
+const gchar       *puls_smart_data_get_protocol_version (PulsSmartData *self);
+guint64            puls_smart_data_get_tbw_rating_bytes (PulsSmartData *self);
+gint               puls_smart_data_get_wear_level_percent (PulsSmartData *self);
+
+void puls_smart_data_set_pcie_current_gen   (PulsSmartData *self, PulsPcieGeneration gen);
+void puls_smart_data_set_pcie_current_width (PulsSmartData *self, guint8 width);
+void puls_smart_data_set_pcie_max_gen       (PulsSmartData *self, PulsPcieGeneration gen);
+void puls_smart_data_set_pcie_max_width     (PulsSmartData *self, guint8 width);
+void puls_smart_data_set_protocol_version   (PulsSmartData *self, const gchar *val);
+void puls_smart_data_set_tbw_rating_bytes   (PulsSmartData *self, guint64 val);
+void puls_smart_data_set_wear_level_percent (PulsSmartData *self, gint val);
+
+GArray *puls_smart_data_get_thermal_sensors  (PulsSmartData *self);
+void    puls_smart_data_add_thermal_sensor   (PulsSmartData *self,
+                                              const PulsThermalSensor *sensor);
+void    puls_smart_data_clear_thermal_sensors (PulsSmartData *self);
 
 
 PulsHealthStatus puls_smart_data_get_health          (PulsSmartData *self);
@@ -192,6 +247,12 @@ gboolean     puls_drive_type_is_rotational (PulsDriveType type);
 
 const gchar          *puls_transport_protocol_to_string  (PulsTransportProtocol protocol);
 PulsTransportProtocol puls_transport_protocol_from_string (const gchar *str);
+
+const gchar          *puls_pcie_generation_to_string     (PulsPcieGeneration gen);
+PulsPcieGeneration    puls_pcie_generation_from_string   (const gchar *str);
+
+const gchar          *puls_sector_format_to_string       (PulsSectorFormat format);
+PulsSectorFormat      puls_sector_format_detect          (guint32 logical, guint32 physical);
 
 gint             puls_smart_data_get_health_percent          (PulsSmartData *self);
 gint             puls_smart_data_get_estimated_lifetime_days (PulsSmartData *self);
