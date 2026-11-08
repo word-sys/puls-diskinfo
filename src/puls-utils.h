@@ -94,6 +94,13 @@ gint64   puls_sysfs_read_device_int64  (const gchar *device_name, const gchar *s
 
 gchar   *puls_sysfs_resolve_link       (const gchar *path);
 
+/* Direct Unprivileged hwmon Temperature Readers */
+gchar  *puls_sysfs_find_hwmon_dir              (const gchar *device_name);
+gint    puls_sysfs_read_hwmon_temp             (const gchar *device_name);
+GList  *puls_sysfs_read_hwmon_sensors          (const gchar *device_name);
+gint    puls_sysfs_read_hwmon_temp_from_dir    (const gchar *hwmon_dir);
+GList  *puls_sysfs_read_hwmon_sensors_from_dir (const gchar *hwmon_dir);
+
 gboolean puls_get_partition_usage (const gchar *mount_point,
                                    guint64     *out_used_bytes,
                                    guint64     *out_total_bytes);

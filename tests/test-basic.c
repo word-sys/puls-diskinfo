@@ -458,6 +458,88 @@ test_sysfs_helpers (void)
     rmdir (tmp_dir);
 }
 
+static void
+test_hwmon_temperature (void)
+{
+    /* 1. Test with mock hwmon directory */
+    GError *error = NULL;
+    g_autofree gchar *tmp_dir = g_dir_make_tmp ("puls-hwmon-test-XXXXXX", &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (tmp_dir);
+
+    g_autofree gchar *t1_in = g_build_filename (tmp_dir, "temp1_input", NULL);
+    g_autofree gchar *t1_lbl = g_build_filename (tmp_dir, "temp1_label", NULL);
+    g_autofree gchar *t1_max = g_build_filename (tmp_dir, "temp1_max", NULL);
+    g_autofree gchar *t1_crit = g_build_filename (tmp_dir, "temp1_crit", NULL);
+    g_autofree gchar *t2_in = g_build_filename (tmp_dir, "temp2_input", NULL);
+    g_autofree gchar *t2_lbl = g_build_filename (tmp_dir, "temp2_label", NULL);
+    g_autofree gchar *t2_crit = g_build_filename (tmp_dir, "temp2_crit", NULL);
+
+    g_file_set_contents (t1_in, "41850\n", -1, &error);
+    g_assert_no_error (error);
+    g_file_set_contents (t1_lbl, "Composite\n", -1, &error);
+    g_assert_no_error (error);
+    g_file_set_contents (t1_max, "70000\n", -1, &error);
+    g_assert_no_error (error);
+    g_file_set_contents (t1_crit, "80000\n", -1, &error);
+    g_assert_no_error (error);
+
+    g_file_set_contents (t2_in, "48500\n", -1, &error);
+    g_assert_no_error (error);
+    g_file_set_contents (t2_lbl, "Sensor 1\n", -1, &error);
+    g_assert_no_error (error);
+    g_file_set_contents (t2_crit, "90000\n", -1, &error);
+    g_assert_no_error (error);
+
+    /* Direct reading from directory */
+    gint temp = puls_sysfs_read_hwmon_temp_from_dir (tmp_dir);
+    g_assert_cmpint (temp, ==, 42);
+
+    GList *sensors = puls_sysfs_read_hwmon_sensors_from_dir (tmp_dir);
+    g_assert_nonnull (sensors);
+    g_assert_cmpuint (g_list_length (sensors), ==, 2);
+
+    PulsThermalSensor *s1 = sensors->data;
+    g_assert_cmpstr (s1->name, ==, "Composite");
+    g_assert_cmpint (s1->temperature, ==, 42);
+    g_assert_cmpint (s1->warning_temp, ==, 70);
+    g_assert_cmpint (s1->critical_temp, ==, 80);
+
+    PulsThermalSensor *s2 = sensors->next->data;
+    g_assert_cmpstr (s2->name, ==, "Sensor 1");
+    g_assert_cmpint (s2->temperature, ==, 49);
+    g_assert_cmpint (s2->warning_temp, ==, -1);
+    g_assert_cmpint (s2->critical_temp, ==, 90);
+
+    g_list_free_full (sensors, (GDestroyNotify)puls_thermal_sensor_free);
+
+    unlink (t1_in);
+    unlink (t1_lbl);
+    unlink (t1_max);
+    unlink (t1_crit);
+    unlink (t2_in);
+    unlink (t2_lbl);
+    unlink (t2_crit);
+    rmdir (tmp_dir);
+
+    /* 2. Test live hardware if available */
+    if (g_file_test ("/sys/block/nvme0n1", G_FILE_TEST_EXISTS)) {
+        gint live_temp = puls_sysfs_read_hwmon_temp ("nvme0n1");
+        if (live_temp >= 0) {
+            g_assert_cmpint (live_temp, >=, 0);
+            g_assert_cmpint (live_temp, <=, 120);
+
+            /* Also test with /dev/ path prefix */
+            gint path_temp = puls_sysfs_read_hwmon_temp ("/dev/nvme0n1");
+            g_assert_cmpint (path_temp, ==, live_temp);
+
+            GList *live_sensors = puls_sysfs_read_hwmon_sensors ("nvme0n1");
+            g_assert_nonnull (live_sensors);
+            g_list_free_full (live_sensors, (GDestroyNotify)puls_thermal_sensor_free);
+        }
+    }
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -472,6 +554,7 @@ main (int argc, char *argv[])
     g_test_add_func ("/basic/drive-types-and-transports", test_drive_types_and_transports);
     g_test_add_func ("/basic/extended-storage-metrics", test_extended_storage_metrics);
     g_test_add_func ("/basic/sysfs-helpers", test_sysfs_helpers);
+    g_test_add_func ("/basic/hwmon-temperature", test_hwmon_temperature);
 
     return g_test_run ();
 }

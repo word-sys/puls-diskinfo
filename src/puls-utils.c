@@ -545,6 +545,199 @@ puls_sysfs_resolve_link (const gchar *path)
     return g_file_read_link (path, NULL);
 }
 
+static gboolean
+check_dir_has_temp_input (const gchar *dir_path)
+{
+    if (dir_path == NULL)
+        return FALSE;
+
+    g_autofree gchar *t1 = g_build_filename (dir_path, "temp1_input", NULL);
+    if (g_file_test (t1, G_FILE_TEST_EXISTS))
+        return TRUE;
+
+    g_autofree gchar *t0 = g_build_filename (dir_path, "temp0_input", NULL);
+    if (g_file_test (t0, G_FILE_TEST_EXISTS))
+        return TRUE;
+
+    return FALSE;
+}
+
+gchar *
+puls_sysfs_find_hwmon_dir (const gchar *device_name)
+{
+    g_autofree gchar *clean_name = puls_sanitize_device_name (device_name);
+    if (clean_name == NULL)
+        return NULL;
+
+    g_autofree gchar *dev_link = g_strdup_printf ("/sys/block/%s/device", clean_name);
+    g_autofree gchar *real_dev = puls_sysfs_resolve_link (dev_link);
+
+    const gchar *candidates[4];
+    g_autofree gchar *parent_dev = NULL;
+    guint cand_count = 0;
+
+    candidates[cand_count++] = dev_link;
+    if (real_dev) {
+        candidates[cand_count++] = real_dev;
+        parent_dev = g_path_get_dirname (real_dev);
+        if (parent_dev && strcmp (parent_dev, "/") != 0 && strcmp (parent_dev, "/sys") != 0) {
+            candidates[cand_count++] = parent_dev;
+        }
+    }
+
+    for (guint c = 0; c < cand_count; c++) {
+        const gchar *base_dir = candidates[c];
+        if (!g_file_test (base_dir, G_FILE_TEST_IS_DIR))
+            continue;
+
+        GDir *dir = g_dir_open (base_dir, 0, NULL);
+        if (!dir)
+            continue;
+
+        const gchar *entry;
+        while ((entry = g_dir_read_name (dir)) != NULL) {
+            if (g_str_has_prefix (entry, "hwmon")) {
+                g_autofree gchar *hwmon_path = g_build_filename (base_dir, entry, NULL);
+                if (check_dir_has_temp_input (hwmon_path)) {
+                    g_dir_close (dir);
+                    return g_steal_pointer (&hwmon_path);
+                }
+
+                if (g_file_test (hwmon_path, G_FILE_TEST_IS_DIR)) {
+                    GDir *sub = g_dir_open (hwmon_path, 0, NULL);
+                    if (sub) {
+                        const gchar *sub_entry;
+                        while ((sub_entry = g_dir_read_name (sub)) != NULL) {
+                            if (g_str_has_prefix (sub_entry, "hwmon")) {
+                                g_autofree gchar *sub_hwmon = g_build_filename (hwmon_path, sub_entry, NULL);
+                                if (check_dir_has_temp_input (sub_hwmon)) {
+                                    g_dir_close (sub);
+                                    g_dir_close (dir);
+                                    return g_steal_pointer (&sub_hwmon);
+                                }
+                            }
+                        }
+                        g_dir_close (sub);
+                    }
+                }
+            }
+        }
+        g_dir_close (dir);
+    }
+
+    if (real_dev) {
+        GDir *class_dir = g_dir_open ("/sys/class/hwmon", 0, NULL);
+        if (class_dir) {
+            const gchar *hw_name;
+            while ((hw_name = g_dir_read_name (class_dir)) != NULL) {
+                g_autofree gchar *hw_path = g_build_filename ("/sys/class/hwmon", hw_name, NULL);
+                g_autofree gchar *hw_dev_link = g_build_filename (hw_path, "device", NULL);
+                g_autofree gchar *hw_real_dev = puls_sysfs_resolve_link (hw_dev_link);
+
+                if (hw_real_dev) {
+                    if (g_strcmp0 (hw_real_dev, real_dev) == 0 ||
+                        (parent_dev && g_strcmp0 (hw_real_dev, parent_dev) == 0) ||
+                        g_str_has_prefix (real_dev, hw_real_dev) ||
+                        g_str_has_prefix (hw_real_dev, real_dev)) {
+                        if (check_dir_has_temp_input (hw_path)) {
+                            g_dir_close (class_dir);
+                            return g_steal_pointer (&hw_path);
+                        }
+                    }
+                }
+            }
+            g_dir_close (class_dir);
+        }
+    }
+
+    return NULL;
+}
+
+GList *
+puls_sysfs_read_hwmon_sensors_from_dir (const gchar *hwmon_dir)
+{
+    if (hwmon_dir == NULL)
+        return NULL;
+
+    GList *sensors = NULL;
+
+    for (guint n = 0; n <= 16; n++) {
+        g_autofree gchar *input_file = g_strdup_printf ("temp%u_input", n);
+        g_autofree gchar *input_path = g_build_filename (hwmon_dir, input_file, NULL);
+
+        gboolean ok = FALSE;
+        gint64 milli = puls_sysfs_read_int64 (input_path, -1, &ok);
+        if (!ok || milli < -50000 || milli > 200000)
+            continue;
+
+        gint temp_c = (gint)((milli + (milli >= 0 ? 500 : -500)) / 1000);
+
+        g_autofree gchar *label_file = g_strdup_printf ("temp%u_label", n);
+        g_autofree gchar *label_path = g_build_filename (hwmon_dir, label_file, NULL);
+        g_autofree gchar *label_str = puls_sysfs_read_string (label_path, 64);
+
+        if (label_str == NULL || label_str[0] == '\0') {
+            g_free (label_str);
+            if (n == 0 || n == 1)
+                label_str = g_strdup ("Composite");
+            else
+                label_str = g_strdup_printf ("Sensor %u", n);
+        }
+
+        gint warn_c = -1;
+        g_autofree gchar *max_file = g_strdup_printf ("temp%u_max", n);
+        g_autofree gchar *max_path = g_build_filename (hwmon_dir, max_file, NULL);
+        gint64 warn_milli = puls_sysfs_read_int64 (max_path, -1, &ok);
+        if (ok && warn_milli > 0)
+            warn_c = (gint)((warn_milli + 500) / 1000);
+
+        gint crit_c = -1;
+        g_autofree gchar *crit_file = g_strdup_printf ("temp%u_crit", n);
+        g_autofree gchar *crit_path = g_build_filename (hwmon_dir, crit_file, NULL);
+        gint64 crit_milli = puls_sysfs_read_int64 (crit_path, -1, &ok);
+        if (ok && crit_milli > 0)
+            crit_c = (gint)((crit_milli + 500) / 1000);
+
+        PulsThermalSensor *sensor = puls_thermal_sensor_new (label_str, temp_c, warn_c, crit_c);
+        sensors = g_list_append (sensors, sensor);
+    }
+
+    return sensors;
+}
+
+gint
+puls_sysfs_read_hwmon_temp_from_dir (const gchar *hwmon_dir)
+{
+    GList *sensors = puls_sysfs_read_hwmon_sensors_from_dir (hwmon_dir);
+    if (sensors == NULL)
+        return -1;
+
+    PulsThermalSensor *first = sensors->data;
+    gint temp = first->temperature;
+    g_list_free_full (sensors, (GDestroyNotify)puls_thermal_sensor_free);
+    return temp;
+}
+
+gint
+puls_sysfs_read_hwmon_temp (const gchar *device_name)
+{
+    g_autofree gchar *dir = puls_sysfs_find_hwmon_dir (device_name);
+    if (dir == NULL)
+        return -1;
+
+    return puls_sysfs_read_hwmon_temp_from_dir (dir);
+}
+
+GList *
+puls_sysfs_read_hwmon_sensors (const gchar *device_name)
+{
+    g_autofree gchar *dir = puls_sysfs_find_hwmon_dir (device_name);
+    if (dir == NULL)
+        return NULL;
+
+    return puls_sysfs_read_hwmon_sensors_from_dir (dir);
+}
+
 gboolean
 puls_is_rotational (const gchar *device_name)
 {

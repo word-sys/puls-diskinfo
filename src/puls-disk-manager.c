@@ -423,6 +423,24 @@ puls_smart_data_fill_sysfs_fallbacks (PulsSmartData *data)
             puls_smart_data_set_form_factor (data, "Unknown");
         }
     }
+
+    if (puls_smart_data_get_temperature (data) < 0) {
+        gint hwmon_temp = puls_sysfs_read_hwmon_temp (base);
+        if (hwmon_temp >= 0) {
+            puls_smart_data_set_temperature (data, hwmon_temp);
+            PULS_LOG_DEBUG ("Drive %s: populated temperature %d °C via sysfs hwmon", base, hwmon_temp);
+        }
+    }
+
+    GArray *curr_sensors = puls_smart_data_get_thermal_sensors (data);
+    if (curr_sensors == NULL || curr_sensors->len == 0) {
+        GList *hwmon_sensors = puls_sysfs_read_hwmon_sensors (base);
+        for (GList *l = hwmon_sensors; l != NULL; l = l->next) {
+            PulsThermalSensor *s = l->data;
+            puls_smart_data_add_thermal_sensor (data, s);
+        }
+        g_list_free_full (hwmon_sensors, (GDestroyNotify)puls_thermal_sensor_free);
+    }
 }
 
 void
