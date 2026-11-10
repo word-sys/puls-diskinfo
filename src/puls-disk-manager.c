@@ -389,18 +389,25 @@ puls_smart_data_fill_sysfs_fallbacks (PulsSmartData *data)
         }
     }
 
-    guint32 lbs = puls_smart_data_get_logical_sector_size (data);
-    if (lbs == 0) {
-        guint64 val = puls_sysfs_read_device_uint64 (base, "queue/logical_block_size", 0);
-        if (val > 0)
-            puls_smart_data_set_logical_sector_size (data, (guint32)val);
-    }
+    PulsQueueAttributes q_attrs;
+    if (puls_sysfs_read_queue_attributes (base, &q_attrs)) {
+        if (puls_smart_data_get_logical_sector_size (data) == 0 && q_attrs.logical_block_size > 0)
+            puls_smart_data_set_logical_sector_size (data, q_attrs.logical_block_size);
 
-    guint32 pbs = puls_smart_data_get_physical_sector_size (data);
-    if (pbs == 0) {
-        guint64 val = puls_sysfs_read_device_uint64 (base, "queue/physical_block_size", 0);
-        if (val > 0)
-            puls_smart_data_set_physical_sector_size (data, (guint32)val);
+        if (puls_smart_data_get_physical_sector_size (data) == 0 && q_attrs.physical_block_size > 0)
+            puls_smart_data_set_physical_sector_size (data, q_attrs.physical_block_size);
+
+        if (puls_smart_data_get_discard_granularity (data) == 0 && q_attrs.discard_granularity > 0)
+            puls_smart_data_set_discard_granularity (data, q_attrs.discard_granularity);
+
+        if (puls_smart_data_get_discard_max_bytes (data) == 0 && q_attrs.discard_max_bytes > 0)
+            puls_smart_data_set_discard_max_bytes (data, q_attrs.discard_max_bytes);
+
+        if (!puls_smart_data_get_supports_trim (data) && q_attrs.supports_discard)
+            puls_smart_data_set_supports_trim (data, TRUE);
+
+        if (!puls_smart_data_get_supports_write_cache (data) && q_attrs.write_cache_enabled)
+            puls_smart_data_set_supports_write_cache (data, TRUE);
     }
 
     const gchar *ff = puls_smart_data_get_form_factor (data);

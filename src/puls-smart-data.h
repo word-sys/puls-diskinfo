@@ -207,6 +207,8 @@ gboolean puls_smart_data_get_supports_apm  (PulsSmartData *self);
 gboolean puls_smart_data_get_supports_aam  (PulsSmartData *self);
 gboolean puls_smart_data_get_supports_devsleep (PulsSmartData *self);
 gboolean puls_smart_data_get_supports_write_cache (PulsSmartData *self);
+guint64  puls_smart_data_get_discard_granularity  (PulsSmartData *self);
+guint64  puls_smart_data_get_discard_max_bytes    (PulsSmartData *self);
 
 void puls_smart_data_set_supports_trim (PulsSmartData *self, gboolean val);
 void puls_smart_data_set_supports_ncq  (PulsSmartData *self, gboolean val);
@@ -214,6 +216,8 @@ void puls_smart_data_set_supports_apm  (PulsSmartData *self, gboolean val);
 void puls_smart_data_set_supports_aam  (PulsSmartData *self, gboolean val);
 void puls_smart_data_set_supports_devsleep (PulsSmartData *self, gboolean val);
 void puls_smart_data_set_supports_write_cache (PulsSmartData *self, gboolean val);
+void puls_smart_data_set_discard_granularity  (PulsSmartData *self, guint64 val);
+void puls_smart_data_set_discard_max_bytes    (PulsSmartData *self, guint64 val);
 
 const gchar     *puls_smart_data_get_standard     (PulsSmartData *self);
 const gchar     *puls_smart_data_get_transfer_mode (PulsSmartData *self);

@@ -132,6 +132,8 @@ struct _PulsSmartData {
     gboolean supports_aam;
     gboolean supports_devsleep;
     gboolean supports_write_cache;
+    guint64  discard_granularity;
+    guint64  discard_max_bytes;
 
     GArray *ata_attributes;
 
@@ -242,6 +244,8 @@ puls_smart_data_init (PulsSmartData *self)
     self->supports_aam  = FALSE;
     self->supports_devsleep = FALSE;
     self->supports_write_cache = FALSE;
+    self->discard_granularity  = 0;
+    self->discard_max_bytes    = 0;
     self->ata_attributes = g_array_new (FALSE, TRUE, sizeof (PulsSmartAttribute));
     self->nvme_health    = NULL;
     self->self_test_in_progress = FALSE;
@@ -473,6 +477,38 @@ IMPL_BOOL_ACCESSOR (supports_devsleep)
 IMPL_BOOL_ACCESSOR (supports_write_cache)
 
 #undef IMPL_BOOL_ACCESSOR
+
+guint64
+puls_smart_data_get_discard_granularity (PulsSmartData *self)
+{
+    g_return_val_if_fail (PULS_IS_SMART_DATA (self), 0);
+    return self->discard_granularity;
+}
+
+void
+puls_smart_data_set_discard_granularity (PulsSmartData *self, guint64 val)
+{
+    g_return_if_fail (PULS_IS_SMART_DATA (self));
+    self->discard_granularity = val;
+    if (val > 0 && self->discard_max_bytes > 0)
+        self->supports_trim = TRUE;
+}
+
+guint64
+puls_smart_data_get_discard_max_bytes (PulsSmartData *self)
+{
+    g_return_val_if_fail (PULS_IS_SMART_DATA (self), 0);
+    return self->discard_max_bytes;
+}
+
+void
+puls_smart_data_set_discard_max_bytes (PulsSmartData *self, guint64 val)
+{
+    g_return_if_fail (PULS_IS_SMART_DATA (self));
+    self->discard_max_bytes = val;
+    if (val > 0 && self->discard_granularity > 0)
+        self->supports_trim = TRUE;
+}
 
 
 GArray *

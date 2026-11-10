@@ -86,6 +86,8 @@ create_mock_nvme_drive (void)
     puls_smart_data_set_protocol_version (d, "NVMe 1.4");
     puls_smart_data_set_tbw_rating_bytes (d, 600000000000000ULL);
     puls_smart_data_set_wear_level_percent (d, 1);
+    puls_smart_data_set_discard_granularity (d, 512);
+    puls_smart_data_set_discard_max_bytes (d, 2199023255040ULL);
     puls_smart_data_set_supports_trim (d, TRUE);
     puls_smart_data_set_supports_ncq (d, TRUE);
 
@@ -146,6 +148,8 @@ create_mock_sata_ssd (void)
     puls_smart_data_set_protocol_version (d, "ACS-3 Revision 5");
     puls_smart_data_set_tbw_rating_bytes (d, 180000000000000ULL);
     puls_smart_data_set_wear_level_percent (d, 22);
+    puls_smart_data_set_discard_granularity (d, 512);
+    puls_smart_data_set_discard_max_bytes (d, 2147450880ULL);
     puls_smart_data_set_supports_trim (d, TRUE);
     puls_smart_data_set_supports_ncq (d, TRUE);
 
@@ -197,6 +201,8 @@ create_mock_hdd (void)
     puls_smart_data_set_buffer_size_kb (d, 262144);
     puls_smart_data_set_supports_ncq (d, TRUE);
     puls_smart_data_set_supports_write_cache (d, TRUE);
+    puls_smart_data_set_discard_granularity (d, 0);
+    puls_smart_data_set_discard_max_bytes (d, 0);
     puls_smart_data_set_supports_trim (d, FALSE);
 
     PulsThermalSensor s_hdd = { (gchar *)"Internal Temperature", 33, 60, 70 };

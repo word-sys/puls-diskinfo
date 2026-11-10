@@ -540,6 +540,152 @@ test_hwmon_temperature (void)
     }
 }
 
+static void
+test_queue_attributes_trim (void)
+{
+    /* 1. PulsSmartData discard accessors & auto-trim trigger */
+    g_autoptr(PulsSmartData) d = puls_smart_data_new ();
+    g_assert_cmpuint (puls_smart_data_get_discard_granularity (d), ==, 0);
+    g_assert_cmpuint (puls_smart_data_get_discard_max_bytes (d), ==, 0);
+    g_assert_false (puls_smart_data_get_supports_trim (d));
+
+    puls_smart_data_set_discard_granularity (d, 512);
+    puls_smart_data_set_discard_max_bytes (d, 2199023255040ULL);
+    g_assert_cmpuint (puls_smart_data_get_discard_granularity (d), ==, 512);
+    g_assert_cmpuint (puls_smart_data_get_discard_max_bytes (d), ==, 2199023255040ULL);
+    g_assert_true (puls_smart_data_get_supports_trim (d));
+
+    /* 2. Mock queue directory test */
+    GError *error = NULL;
+    g_autofree gchar *tmp_dir = g_dir_make_tmp ("puls-queue-mock-XXXXXX", &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (tmp_dir);
+
+    g_autofree gchar *p_disc_gran = g_build_filename (tmp_dir, "discard_granularity", NULL);
+    g_autofree gchar *p_disc_max  = g_build_filename (tmp_dir, "discard_max_bytes", NULL);
+    g_autofree gchar *p_disc_hw   = g_build_filename (tmp_dir, "discard_max_hw_bytes", NULL);
+    g_autofree gchar *p_rot       = g_build_filename (tmp_dir, "rotational", NULL);
+    g_autofree gchar *p_lbs       = g_build_filename (tmp_dir, "logical_block_size", NULL);
+    g_autofree gchar *p_pbs       = g_build_filename (tmp_dir, "physical_block_size", NULL);
+    g_autofree gchar *p_opt_io    = g_build_filename (tmp_dir, "optimal_io_size", NULL);
+    g_autofree gchar *p_min_io    = g_build_filename (tmp_dir, "minimum_io_size", NULL);
+    g_autofree gchar *p_wcache    = g_build_filename (tmp_dir, "write_cache", NULL);
+    g_autofree gchar *p_max_seg   = g_build_filename (tmp_dir, "max_segments", NULL);
+    g_autofree gchar *p_max_sec   = g_build_filename (tmp_dir, "max_sectors_kb", NULL);
+
+    g_file_set_contents (p_disc_gran, "512\n", -1, &error);
+    g_assert_no_error (error);
+    g_file_set_contents (p_disc_max, "2199023255040\n", -1, &error);
+    g_assert_no_error (error);
+    g_file_set_contents (p_disc_hw, "2199023255040\n", -1, &error);
+    g_assert_no_error (error);
+    g_file_set_contents (p_rot, "0\n", -1, &error);
+    g_assert_no_error (error);
+    g_file_set_contents (p_lbs, "512\n", -1, &error);
+    g_assert_no_error (error);
+    g_file_set_contents (p_pbs, "4096\n", -1, &error);
+    g_assert_no_error (error);
+    g_file_set_contents (p_opt_io, "131072\n", -1, &error);
+    g_assert_no_error (error);
+    g_file_set_contents (p_min_io, "4096\n", -1, &error);
+    g_assert_no_error (error);
+    g_file_set_contents (p_wcache, "write back\n", -1, &error);
+    g_assert_no_error (error);
+    g_file_set_contents (p_max_seg, "128\n", -1, &error);
+    g_assert_no_error (error);
+    g_file_set_contents (p_max_sec, "1280\n", -1, &error);
+    g_assert_no_error (error);
+
+    PulsQueueAttributes attrs;
+    gboolean read_ok = puls_sysfs_read_queue_attributes_from_dir (tmp_dir, &attrs);
+    g_assert_true (read_ok);
+    g_assert_cmpuint (attrs.discard_granularity, ==, 512);
+    g_assert_cmpuint (attrs.discard_max_bytes, ==, 2199023255040ULL);
+    g_assert_cmpuint (attrs.discard_max_hw_bytes, ==, 2199023255040ULL);
+    g_assert_true (attrs.supports_discard);
+    g_assert_false (attrs.rotational);
+    g_assert_cmpuint (attrs.logical_block_size, ==, 512);
+    g_assert_cmpuint (attrs.physical_block_size, ==, 4096);
+    g_assert_cmpuint (attrs.optimal_io_size, ==, 131072);
+    g_assert_cmpuint (attrs.minimum_io_size, ==, 4096);
+    g_assert_cmpstr (attrs.write_cache, ==, "write back");
+    g_assert_true (attrs.write_cache_enabled);
+    g_assert_cmpuint (attrs.max_segments, ==, 128);
+    g_assert_cmpuint (attrs.max_sectors_kb, ==, 1280);
+
+    /* Test 512e sector format detection */
+    g_assert_cmpint (puls_sector_format_detect (attrs.logical_block_size, attrs.physical_block_size),
+                     ==, PULS_SECTOR_FORMAT_512E);
+
+    /* Test rotational / no-discard modification */
+    g_file_set_contents (p_rot, "1\n", -1, &error);
+    g_assert_no_error (error);
+    g_file_set_contents (p_disc_max, "0\n", -1, &error);
+    g_assert_no_error (error);
+    g_file_set_contents (p_wcache, "none\n", -1, &error);
+    g_assert_no_error (error);
+
+    read_ok = puls_sysfs_read_queue_attributes_from_dir (tmp_dir, &attrs);
+    g_assert_true (read_ok);
+    g_assert_true (attrs.rotational);
+    g_assert_false (attrs.supports_discard);
+    g_assert_false (attrs.write_cache_enabled);
+
+    /* Cleanup mock files */
+    unlink (p_disc_gran);
+    unlink (p_disc_max);
+    unlink (p_disc_hw);
+    unlink (p_rot);
+    unlink (p_lbs);
+    unlink (p_pbs);
+    unlink (p_opt_io);
+    unlink (p_min_io);
+    unlink (p_wcache);
+    unlink (p_max_seg);
+    unlink (p_max_sec);
+    rmdir (tmp_dir);
+
+    /* 3. Edge cases and invalid inputs */
+    memset (&attrs, 0, sizeof (attrs));
+    g_assert_false (puls_sysfs_read_queue_attributes_from_dir (NULL, &attrs));
+    g_assert_false (puls_sysfs_read_queue_attributes_from_dir ("/path/does/not/exist", &attrs));
+    g_assert_false (puls_sysfs_read_queue_attributes (NULL, &attrs));
+    g_assert_false (puls_sysfs_read_queue_attributes ("../invalid", &attrs));
+    g_assert_cmpuint (puls_sysfs_read_queue_uint64 ("nonexistent_dev_xyz", "discard_max_bytes", 777), ==, 777);
+    g_assert_null (puls_sysfs_read_queue_string ("nonexistent_dev_xyz", "write_cache", 32));
+    g_assert_false (puls_sysfs_detect_trim_support ("nonexistent_dev_xyz"));
+
+    /* 4. Live hardware testing */
+    if (g_file_test ("/sys/block/nvme0n1/queue", G_FILE_TEST_IS_DIR)) {
+        PulsQueueAttributes nvme_attrs;
+        gboolean nvme_ok = puls_sysfs_read_queue_attributes ("nvme0n1", &nvme_attrs);
+        g_assert_true (nvme_ok);
+        g_assert_cmpuint (nvme_attrs.logical_block_size, >=, 512);
+        g_assert_cmpuint (nvme_attrs.physical_block_size, >=, 512);
+        g_assert_false (nvme_attrs.rotational);
+        g_assert_true (nvme_attrs.supports_discard);
+        g_assert_true (puls_sysfs_detect_trim_support ("nvme0n1"));
+        g_assert_true (puls_sysfs_detect_trim_support ("/dev/nvme0n1"));
+
+        /* With device path */
+        PulsQueueAttributes dev_attrs;
+        g_assert_true (puls_sysfs_read_queue_attributes ("/dev/nvme0n1", &dev_attrs));
+        g_assert_cmpuint (dev_attrs.logical_block_size, ==, nvme_attrs.logical_block_size);
+        g_assert_cmpuint (dev_attrs.discard_granularity, ==, nvme_attrs.discard_granularity);
+
+        /* Granular reader */
+        guint64 r_rot = puls_sysfs_read_queue_uint64 ("nvme0n1", "rotational", 999);
+        g_assert_cmpuint (r_rot, ==, 0);
+    }
+
+    if (g_file_test ("/sys/block/loop0/queue", G_FILE_TEST_IS_DIR)) {
+        PulsQueueAttributes loop_attrs;
+        gboolean loop_ok = puls_sysfs_read_queue_attributes ("loop0", &loop_attrs);
+        g_assert_true (loop_ok);
+        g_assert_cmpuint (loop_attrs.logical_block_size, >=, 512);
+    }
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -555,6 +701,7 @@ main (int argc, char *argv[])
     g_test_add_func ("/basic/extended-storage-metrics", test_extended_storage_metrics);
     g_test_add_func ("/basic/sysfs-helpers", test_sysfs_helpers);
     g_test_add_func ("/basic/hwmon-temperature", test_hwmon_temperature);
+    g_test_add_func ("/basic/queue-attributes-trim", test_queue_attributes_trim);
 
     return g_test_run ();
 }

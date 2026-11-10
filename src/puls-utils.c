@@ -741,7 +741,104 @@ puls_sysfs_read_hwmon_sensors (const gchar *device_name)
 gboolean
 puls_is_rotational (const gchar *device_name)
 {
-    return puls_sysfs_read_device_uint64 (device_name, "queue/rotational", 1) != 0;
+    return puls_sysfs_read_queue_uint64 (device_name, "rotational", 1) != 0;
+}
+
+guint64
+puls_sysfs_read_queue_uint64 (const gchar *device_name,
+                              const gchar *attribute,
+                              guint64      default_val)
+{
+    if (attribute == NULL || attribute[0] == '\0')
+        return default_val;
+
+    g_autofree gchar *subpath = g_strdup_printf ("queue/%s", attribute);
+    return puls_sysfs_read_device_uint64 (device_name, subpath, default_val);
+}
+
+gchar *
+puls_sysfs_read_queue_string (const gchar *device_name,
+                              const gchar *attribute,
+                              gsize        max_len)
+{
+    if (attribute == NULL || attribute[0] == '\0')
+        return NULL;
+
+    g_autofree gchar *subpath = g_strdup_printf ("queue/%s", attribute);
+    return puls_sysfs_read_device_file (device_name, subpath, max_len);
+}
+
+gboolean
+puls_sysfs_read_queue_attributes_from_dir (const gchar         *queue_dir,
+                                           PulsQueueAttributes *out_attrs)
+{
+    if (queue_dir == NULL || out_attrs == NULL)
+        return FALSE;
+
+    if (!g_file_test (queue_dir, G_FILE_TEST_IS_DIR))
+        return FALSE;
+
+    memset (out_attrs, 0, sizeof (*out_attrs));
+
+    g_autofree gchar *p_disc_gran = g_build_filename (queue_dir, "discard_granularity", NULL);
+    g_autofree gchar *p_disc_max  = g_build_filename (queue_dir, "discard_max_bytes", NULL);
+    g_autofree gchar *p_disc_hw   = g_build_filename (queue_dir, "discard_max_hw_bytes", NULL);
+    g_autofree gchar *p_rot       = g_build_filename (queue_dir, "rotational", NULL);
+    g_autofree gchar *p_lbs       = g_build_filename (queue_dir, "logical_block_size", NULL);
+    g_autofree gchar *p_pbs       = g_build_filename (queue_dir, "physical_block_size", NULL);
+    g_autofree gchar *p_opt_io    = g_build_filename (queue_dir, "optimal_io_size", NULL);
+    g_autofree gchar *p_min_io    = g_build_filename (queue_dir, "minimum_io_size", NULL);
+    g_autofree gchar *p_wcache    = g_build_filename (queue_dir, "write_cache", NULL);
+    g_autofree gchar *p_max_seg   = g_build_filename (queue_dir, "max_segments", NULL);
+    g_autofree gchar *p_max_sec   = g_build_filename (queue_dir, "max_sectors_kb", NULL);
+
+    out_attrs->discard_granularity  = puls_sysfs_read_uint64 (p_disc_gran, 0, NULL);
+    out_attrs->discard_max_bytes    = puls_sysfs_read_uint64 (p_disc_max, 0, NULL);
+    out_attrs->discard_max_hw_bytes = puls_sysfs_read_uint64 (p_disc_hw, 0, NULL);
+    out_attrs->supports_discard     = (out_attrs->discard_max_bytes > 0 &&
+                                       out_attrs->discard_granularity > 0);
+
+    out_attrs->rotational           = (puls_sysfs_read_uint64 (p_rot, 0, NULL) != 0);
+    out_attrs->logical_block_size   = (guint32)puls_sysfs_read_uint64 (p_lbs, 512, NULL);
+    out_attrs->physical_block_size  = (guint32)puls_sysfs_read_uint64 (p_pbs, 512, NULL);
+    out_attrs->optimal_io_size      = puls_sysfs_read_uint64 (p_opt_io, 0, NULL);
+    out_attrs->minimum_io_size      = puls_sysfs_read_uint64 (p_min_io, 0, NULL);
+    out_attrs->max_segments         = (guint32)puls_sysfs_read_uint64 (p_max_seg, 0, NULL);
+    out_attrs->max_sectors_kb       = puls_sysfs_read_uint64 (p_max_sec, 0, NULL);
+
+    g_autofree gchar *wc_str = puls_sysfs_read_string (p_wcache, sizeof (out_attrs->write_cache) - 1);
+    if (wc_str != NULL && wc_str[0] != '\0') {
+        g_strlcpy (out_attrs->write_cache, wc_str, sizeof (out_attrs->write_cache));
+        out_attrs->write_cache_enabled = (g_strcmp0 (wc_str, "none") != 0);
+    } else {
+        out_attrs->write_cache[0] = '\0';
+        out_attrs->write_cache_enabled = FALSE;
+    }
+
+    return TRUE;
+}
+
+gboolean
+puls_sysfs_read_queue_attributes (const gchar         *device_name,
+                                  PulsQueueAttributes *out_attrs)
+{
+    if (device_name == NULL || out_attrs == NULL)
+        return FALSE;
+
+    g_autofree gchar *clean_name = puls_sanitize_device_name (device_name);
+    if (clean_name == NULL)
+        return FALSE;
+
+    g_autofree gchar *queue_dir = g_strdup_printf ("/sys/block/%s/queue", clean_name);
+    return puls_sysfs_read_queue_attributes_from_dir (queue_dir, out_attrs);
+}
+
+gboolean
+puls_sysfs_detect_trim_support (const gchar *device_name)
+{
+    guint64 max_bytes = puls_sysfs_read_queue_uint64 (device_name, "discard_max_bytes", 0);
+    guint64 gran = puls_sysfs_read_queue_uint64 (device_name, "discard_granularity", 0);
+    return (max_bytes > 0 && gran > 0);
 }
 
 gchar *

@@ -101,6 +101,35 @@ GList  *puls_sysfs_read_hwmon_sensors          (const gchar *device_name);
 gint    puls_sysfs_read_hwmon_temp_from_dir    (const gchar *hwmon_dir);
 GList  *puls_sysfs_read_hwmon_sensors_from_dir (const gchar *hwmon_dir);
 
+/* Queue Attributes and TRIM / Discard Detection */
+typedef struct {
+    guint64  discard_granularity;   /* bytes (0 if unsupported) */
+    guint64  discard_max_bytes;     /* bytes (0 if unsupported) */
+    guint64  discard_max_hw_bytes;  /* bytes (0 if unsupported) */
+    gboolean supports_discard;      /* TRUE if discard_max_bytes > 0 && discard_granularity > 0 */
+    gboolean rotational;            /* TRUE = HDD/rotational, FALSE = SSD/non-rotational */
+    guint32  logical_block_size;    /* bytes (e.g. 512, 4096) */
+    guint32  physical_block_size;   /* bytes (e.g. 512, 4096) */
+    guint64  optimal_io_size;       /* bytes */
+    guint64  minimum_io_size;       /* bytes */
+    gchar    write_cache[32];       /* "write back", "write through", "none" */
+    gboolean write_cache_enabled;   /* TRUE if write caching is enabled */
+    guint32  max_segments;          /* max segments in request */
+    guint64  max_sectors_kb;        /* max sectors in KB */
+} PulsQueueAttributes;
+
+guint64  puls_sysfs_read_queue_uint64               (const gchar *device_name,
+                                                     const gchar *attribute,
+                                                     guint64      default_val);
+gchar   *puls_sysfs_read_queue_string               (const gchar *device_name,
+                                                     const gchar *attribute,
+                                                     gsize        max_len);
+gboolean puls_sysfs_read_queue_attributes          (const gchar         *device_name,
+                                                     PulsQueueAttributes *out_attrs);
+gboolean puls_sysfs_read_queue_attributes_from_dir (const gchar         *queue_dir,
+                                                     PulsQueueAttributes *out_attrs);
+gboolean puls_sysfs_detect_trim_support            (const gchar *device_name);
+
 gboolean puls_get_partition_usage (const gchar *mount_point,
                                    guint64     *out_used_bytes,
                                    guint64     *out_total_bytes);
