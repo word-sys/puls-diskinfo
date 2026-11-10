@@ -76,6 +76,10 @@ run_headless_scan (gboolean json_output)
             json_builder_add_string_value (builder, puls_smart_data_get_serial_number (data) ? puls_smart_data_get_serial_number (data) : "Unknown");
             json_builder_set_member_name (builder, "firmware");
             json_builder_add_string_value (builder, puls_smart_data_get_firmware_version (data) ? puls_smart_data_get_firmware_version (data) : "Unknown");
+            json_builder_set_member_name (builder, "interface");
+            json_builder_add_string_value (builder, puls_smart_data_get_interface_type (data) ? puls_smart_data_get_interface_type (data) : "Unknown");
+            json_builder_set_member_name (builder, "transfer_mode");
+            json_builder_add_string_value (builder, puls_smart_data_get_transfer_mode (data) ? puls_smart_data_get_transfer_mode (data) : "Unknown");
             json_builder_set_member_name (builder, "capacity_bytes");
             json_builder_add_int_value (builder, (gint64)puls_smart_data_get_capacity_bytes (data));
             json_builder_set_member_name (builder, "temperature_c");
@@ -130,6 +134,12 @@ run_headless_scan (gboolean json_output)
         g_print ("  Model:         %s\n", puls_smart_data_get_model_name (data) ? puls_smart_data_get_model_name (data) : "Unknown");
         g_print ("  Serial:        %s\n", puls_smart_data_get_serial_number (data) ? puls_smart_data_get_serial_number (data) : "Unknown");
         g_print ("  Firmware:      %s\n", puls_smart_data_get_firmware_version (data) ? puls_smart_data_get_firmware_version (data) : "Unknown");
+        const gchar *iface = puls_smart_data_get_interface_type (data);
+        const gchar *tmode = puls_smart_data_get_transfer_mode (data);
+        if (iface && iface[0] != '\0')
+            g_print ("  Interface:     %s\n", iface);
+        if (tmode && tmode[0] != '\0')
+            g_print ("  Transfer Mode: %s\n", tmode);
         g_print ("  Capacity:      %s\n", cap_str);
         g_print ("  Health Status: %s (%d%%)\n", hs_str, puls_smart_data_get_health_percent (data));
         g_print ("  Temperature:   %s\n", temp_str);

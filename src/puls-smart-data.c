@@ -1005,22 +1005,95 @@ puls_pcie_generation_to_string (PulsPcieGeneration gen)
 }
 
 PulsPcieGeneration
+puls_pcie_speed_to_generation (const gchar *speed_str)
+{
+    if (speed_str == NULL)
+        return PULS_PCIE_GEN_UNKNOWN;
+
+    if (strstr (speed_str, "64.0 GT/s") || strstr (speed_str, "64 GT/s"))
+        return PULS_PCIE_GEN_6;
+    if (strstr (speed_str, "32.0 GT/s") || strstr (speed_str, "32 GT/s"))
+        return PULS_PCIE_GEN_5;
+    if (strstr (speed_str, "16.0 GT/s") || strstr (speed_str, "16 GT/s"))
+        return PULS_PCIE_GEN_4;
+    if (strstr (speed_str, "8.0 GT/s")  || strstr (speed_str, "8 GT/s"))
+        return PULS_PCIE_GEN_3;
+    if (strstr (speed_str, "2.5 GT/s"))
+        return PULS_PCIE_GEN_1;
+
+    const gchar *p5;
+    if (strstr (speed_str, "5.0 GT/s") ||
+        ((p5 = strstr (speed_str, "5 GT/s")) != NULL && (p5 == speed_str || *(p5 - 1) != '.')))
+        return PULS_PCIE_GEN_2;
+
+    return puls_pcie_generation_from_string (speed_str);
+}
+
+const gchar *
+puls_pcie_generation_to_max_speed_str (PulsPcieGeneration gen)
+{
+    switch (gen) {
+    case PULS_PCIE_GEN_1: return "2.5 GT/s";
+    case PULS_PCIE_GEN_2: return "5.0 GT/s";
+    case PULS_PCIE_GEN_3: return "8.0 GT/s";
+    case PULS_PCIE_GEN_4: return "16.0 GT/s";
+    case PULS_PCIE_GEN_5: return "32.0 GT/s";
+    case PULS_PCIE_GEN_6: return "64.0 GT/s";
+    case PULS_PCIE_GEN_UNKNOWN:
+    default:              return "Unknown";
+    }
+}
+
+PulsPcieGeneration
 puls_pcie_generation_from_string (const gchar *str)
 {
     if (str == NULL)
         return PULS_PCIE_GEN_UNKNOWN;
 
-    if (strstr (str, "6.0") || strstr (str, "Gen6") || strstr (str, "gen6"))
+    /* Check speed GT/s representation first (2.5 GT/s must precede 5 GT/s) */
+    if (strstr (str, "64.0 GT/s") || strstr (str, "64 GT/s"))
         return PULS_PCIE_GEN_6;
-    if (strstr (str, "5.0") || strstr (str, "Gen5") || strstr (str, "gen5"))
+    if (strstr (str, "32.0 GT/s") || strstr (str, "32 GT/s"))
         return PULS_PCIE_GEN_5;
-    if (strstr (str, "4.0") || strstr (str, "Gen4") || strstr (str, "gen4"))
+    if (strstr (str, "16.0 GT/s") || strstr (str, "16 GT/s"))
         return PULS_PCIE_GEN_4;
-    if (strstr (str, "3.0") || strstr (str, "Gen3") || strstr (str, "gen3"))
+    if (strstr (str, "8.0 GT/s")  || strstr (str, "8 GT/s"))
         return PULS_PCIE_GEN_3;
-    if (strstr (str, "2.0") || strstr (str, "Gen2") || strstr (str, "gen2"))
+    if (strstr (str, "2.5 GT/s"))
+        return PULS_PCIE_GEN_1;
+
+    const gchar *p5;
+    if (strstr (str, "5.0 GT/s") ||
+        ((p5 = strstr (str, "5 GT/s")) != NULL && (p5 == str || *(p5 - 1) != '.')))
         return PULS_PCIE_GEN_2;
-    if (strstr (str, "1.0") || strstr (str, "Gen1") || strstr (str, "gen1"))
+
+    /* Check explicit PCIe / Gen tags */
+    if (strstr (str, "PCIe 6.0") || strstr (str, "Gen6") || strstr (str, "gen6"))
+        return PULS_PCIE_GEN_6;
+    if (strstr (str, "PCIe 5.0") || strstr (str, "Gen5") || strstr (str, "gen5"))
+        return PULS_PCIE_GEN_5;
+    if (strstr (str, "PCIe 4.0") || strstr (str, "Gen4") || strstr (str, "gen4"))
+        return PULS_PCIE_GEN_4;
+    if (strstr (str, "PCIe 3.0") || strstr (str, "Gen3") || strstr (str, "gen3"))
+        return PULS_PCIE_GEN_3;
+    if (strstr (str, "PCIe 2.0") || strstr (str, "Gen2") || strstr (str, "gen2"))
+        return PULS_PCIE_GEN_2;
+    if (strstr (str, "PCIe 1.0") || strstr (str, "Gen1") || strstr (str, "gen1"))
+        return PULS_PCIE_GEN_1;
+
+    /* Loose matching for version numbers without leading digits */
+    const gchar *p;
+    if ((p = strstr (str, "6.0")) != NULL && (p == str || !g_ascii_isdigit (*(p - 1))))
+        return PULS_PCIE_GEN_6;
+    if ((p = strstr (str, "5.0")) != NULL && (p == str || !g_ascii_isdigit (*(p - 1))))
+        return PULS_PCIE_GEN_5;
+    if ((p = strstr (str, "4.0")) != NULL && (p == str || !g_ascii_isdigit (*(p - 1))))
+        return PULS_PCIE_GEN_4;
+    if ((p = strstr (str, "3.0")) != NULL && (p == str || !g_ascii_isdigit (*(p - 1))))
+        return PULS_PCIE_GEN_3;
+    if ((p = strstr (str, "2.0")) != NULL && (p == str || !g_ascii_isdigit (*(p - 1))))
+        return PULS_PCIE_GEN_2;
+    if ((p = strstr (str, "1.0")) != NULL && (p == str || !g_ascii_isdigit (*(p - 1))))
         return PULS_PCIE_GEN_1;
 
     return PULS_PCIE_GEN_UNKNOWN;

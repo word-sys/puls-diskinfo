@@ -312,60 +312,29 @@ puls_smart_data_fill_sysfs_fallbacks (PulsSmartData *data)
                 puls_smart_data_set_transfer_mode (data, usb_mode);
             }
         }
-    } else if (dtype == PULS_DRIVE_TYPE_NVME_SSD) {
+    } else if (dtype == PULS_DRIVE_TYPE_NVME_SSD || transport == PULS_TRANSPORT_PCIE) {
         if (iface == NULL || strlen (iface) == 0 || g_strcmp0 (iface, "Unknown") == 0) {
             puls_smart_data_set_interface_type (data, "NVMe");
         }
-        const gchar *tmode = puls_smart_data_get_transfer_mode (data);
-        if (tmode == NULL || strlen (tmode) == 0) {
-            g_autofree gchar *curr_speed_path = g_strdup_printf ("/sys/block/%s/device/device/current_link_speed", base);
-            g_autofree gchar *curr_width_path = g_strdup_printf ("/sys/block/%s/device/device/current_link_width", base);
-            g_autofree gchar *max_speed_path = g_strdup_printf ("/sys/block/%s/device/device/max_link_speed", base);
-            g_autofree gchar *max_width_path = g_strdup_printf ("/sys/block/%s/device/device/max_link_width", base);
+        PulsPcieLinkInfo pcie_info = { 0 };
+        if (puls_sysfs_read_pcie_link (base, &pcie_info)) {
+            if (puls_smart_data_get_pcie_current_gen (data) == PULS_PCIE_GEN_UNKNOWN && pcie_info.current_gen != PULS_PCIE_GEN_UNKNOWN)
+                puls_smart_data_set_pcie_current_gen (data, pcie_info.current_gen);
 
-            g_autofree gchar *curr_speed = NULL;
-            g_autofree gchar *curr_width = NULL;
-            g_autofree gchar *max_speed = NULL;
-            g_autofree gchar *max_width = NULL;
+            if (puls_smart_data_get_pcie_current_width (data) == 0 && pcie_info.current_width > 0)
+                puls_smart_data_set_pcie_current_width (data, pcie_info.current_width);
 
-            g_file_get_contents (curr_speed_path, &curr_speed, NULL, NULL);
-            g_file_get_contents (curr_width_path, &curr_width, NULL, NULL);
-            g_file_get_contents (max_speed_path, &max_speed, NULL, NULL);
-            g_file_get_contents (max_width_path, &max_width, NULL, NULL);
+            if (puls_smart_data_get_pcie_max_gen (data) == PULS_PCIE_GEN_UNKNOWN && pcie_info.max_gen != PULS_PCIE_GEN_UNKNOWN)
+                puls_smart_data_set_pcie_max_gen (data, pcie_info.max_gen);
 
-            if (curr_speed && curr_width) {
-                g_strstrip (curr_speed);
-                g_strstrip (curr_width);
-                
-                const gchar *curr_pcie = "PCIe";
-                if (strstr (curr_speed, "2.5 GT/s")) curr_pcie = "PCIe 1.0";
-                else if (strstr (curr_speed, "5.0 GT/s")) curr_pcie = "PCIe 2.0";
-                else if (strstr (curr_speed, "8.0 GT/s")) curr_pcie = "PCIe 3.0";
-                else if (strstr (curr_speed, "16.0 GT/s")) curr_pcie = "PCIe 4.0";
-                else if (strstr (curr_speed, "32.0 GT/s")) curr_pcie = "PCIe 5.0";
-                else if (strstr (curr_speed, "64.0 GT/s")) curr_pcie = "PCIe 6.0";
+            if (puls_smart_data_get_pcie_max_width (data) == 0 && pcie_info.max_width > 0)
+                puls_smart_data_set_pcie_max_width (data, pcie_info.max_width);
 
-                g_autofree gchar *curr_full = g_strdup_printf ("%s x%s", curr_pcie, curr_width);
+            const gchar *tmode = puls_smart_data_get_transfer_mode (data);
+            if ((tmode == NULL || strlen (tmode) == 0) && pcie_info.description != NULL)
+                puls_smart_data_set_transfer_mode (data, pcie_info.description);
 
-                if (max_speed && max_width) {
-                    g_strstrip (max_speed);
-                    g_strstrip (max_width);
-
-                    const gchar *max_pcie = "PCIe";
-                    if (strstr (max_speed, "2.5 GT/s")) max_pcie = "PCIe 1.0";
-                    else if (strstr (max_speed, "5.0 GT/s")) max_pcie = "PCIe 2.0";
-                    else if (strstr (max_speed, "8.0 GT/s")) max_pcie = "PCIe 3.0";
-                    else if (strstr (max_speed, "16.0 GT/s")) max_pcie = "PCIe 4.0";
-                    else if (strstr (max_speed, "32.0 GT/s")) max_pcie = "PCIe 5.0";
-                    else if (strstr (max_speed, "64.0 GT/s")) max_pcie = "PCIe 6.0";
-
-                    g_autofree gchar *max_full = g_strdup_printf ("%s x%s", max_pcie, max_width);
-                    g_autofree gchar *full_mode = g_strdup_printf ("%s | %s", curr_full, max_full);
-                    puls_smart_data_set_transfer_mode (data, full_mode);
-                } else {
-                    puls_smart_data_set_transfer_mode (data, curr_full);
-                }
-            }
+            puls_pcie_link_info_clear (&pcie_info);
         }
     } else if (dtype == PULS_DRIVE_TYPE_HDD || dtype == PULS_DRIVE_TYPE_SATA_SSD) {
         if (iface == NULL || strlen (iface) == 0 || g_strcmp0 (iface, "Unknown") == 0) {

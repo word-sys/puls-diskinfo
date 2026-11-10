@@ -841,6 +841,159 @@ puls_sysfs_detect_trim_support (const gchar *device_name)
     return (max_bytes > 0 && gran > 0);
 }
 
+void
+puls_pcie_link_info_clear (PulsPcieLinkInfo *info)
+{
+    if (info == NULL)
+        return;
+    g_free (info->device_dir);
+    g_free (info->description);
+    memset (info, 0, sizeof (*info));
+}
+
+gchar *
+puls_format_pcie_link (PulsPcieGeneration current_gen,
+                       guint8             current_width,
+                       PulsPcieGeneration max_gen,
+                       guint8             max_width)
+{
+    if (current_gen == PULS_PCIE_GEN_UNKNOWN && max_gen == PULS_PCIE_GEN_UNKNOWN)
+        return NULL;
+
+    const gchar *curr_str = puls_pcie_generation_to_string (current_gen);
+    const gchar *max_str  = puls_pcie_generation_to_string (max_gen);
+
+    if (current_gen != PULS_PCIE_GEN_UNKNOWN && max_gen != PULS_PCIE_GEN_UNKNOWN && max_width > 0) {
+        return g_strdup_printf ("%s x%u (Current: %s x%u | Max: %s x%u)",
+                                curr_str, current_width,
+                                curr_str, current_width,
+                                max_str, max_width);
+    }
+
+    if (current_gen != PULS_PCIE_GEN_UNKNOWN) {
+        if (current_width > 0)
+            return g_strdup_printf ("%s x%u", curr_str, current_width);
+        return g_strdup (curr_str);
+    }
+
+    if (max_width > 0)
+        return g_strdup_printf ("Max: %s x%u", max_str, max_width);
+    return g_strdup_printf ("Max: %s", max_str);
+}
+
+gchar *
+puls_sysfs_find_pcie_dir (const gchar *device_name)
+{
+    g_autofree gchar *clean_name = puls_sanitize_device_name (device_name);
+    if (clean_name == NULL)
+        return NULL;
+
+    /* Candidate 1: /sys/block/<clean_name>/device/device (standard for NVMe controllers) */
+    g_autofree gchar *p1 = g_strdup_printf ("/sys/block/%s/device/device", clean_name);
+    g_autofree gchar *f1 = g_build_filename (p1, "current_link_speed", NULL);
+    if (g_file_test (f1, G_FILE_TEST_EXISTS))
+        return puls_sysfs_resolve_link (p1);
+
+    /* Candidate 2: /sys/block/<clean_name>/device (direct PCI block device) */
+    g_autofree gchar *p2 = g_strdup_printf ("/sys/block/%s/device", clean_name);
+    g_autofree gchar *f2 = g_build_filename (p2, "current_link_speed", NULL);
+    if (g_file_test (f2, G_FILE_TEST_EXISTS))
+        return puls_sysfs_resolve_link (p2);
+
+    /* Candidate 3: Resolve /sys/block/<clean_name>/device and walk up parents */
+    g_autofree gchar *real_dev = puls_sysfs_resolve_link (p2);
+    if (real_dev) {
+        gchar *curr = g_strdup (real_dev);
+        for (gint i = 0; i < 6; i++) {
+            g_autofree gchar *test_speed = g_build_filename (curr, "current_link_speed", NULL);
+            if (g_file_test (test_speed, G_FILE_TEST_EXISTS))
+                return curr;
+
+            gchar *parent = g_path_get_dirname (curr);
+            g_free (curr);
+            curr = parent;
+            if (curr == NULL || g_strcmp0 (curr, "/") == 0 || g_strcmp0 (curr, "/sys") == 0 || g_strcmp0 (curr, ".") == 0) {
+                g_free (curr);
+                break;
+            }
+        }
+    }
+
+    return NULL;
+}
+
+gboolean
+puls_sysfs_read_pcie_link_from_dir (const gchar      *pci_dir,
+                                    PulsPcieLinkInfo *out_info)
+{
+    if (pci_dir == NULL || out_info == NULL)
+        return FALSE;
+
+    if (!g_file_test (pci_dir, G_FILE_TEST_IS_DIR))
+        return FALSE;
+
+    puls_pcie_link_info_clear (out_info);
+
+    g_autofree gchar *p_curr_spd = g_build_filename (pci_dir, "current_link_speed", NULL);
+    g_autofree gchar *p_curr_w   = g_build_filename (pci_dir, "current_link_width", NULL);
+    g_autofree gchar *p_max_spd  = g_build_filename (pci_dir, "max_link_speed", NULL);
+    g_autofree gchar *p_max_w    = g_build_filename (pci_dir, "max_link_width", NULL);
+
+    g_autofree gchar *curr_spd_str = puls_sysfs_read_string (p_curr_spd, sizeof (out_info->current_speed_raw) - 1);
+    g_autofree gchar *max_spd_str  = puls_sysfs_read_string (p_max_spd, sizeof (out_info->max_speed_raw) - 1);
+
+    if (curr_spd_str) {
+        g_strlcpy (out_info->current_speed_raw, curr_spd_str, sizeof (out_info->current_speed_raw));
+        out_info->current_gen = puls_pcie_speed_to_generation (curr_spd_str);
+    }
+
+    if (max_spd_str) {
+        g_strlcpy (out_info->max_speed_raw, max_spd_str, sizeof (out_info->max_speed_raw));
+        out_info->max_gen = puls_pcie_speed_to_generation (max_spd_str);
+    }
+
+    out_info->current_width = (guint8)puls_sysfs_read_uint64 (p_curr_w, 0, NULL);
+    out_info->max_width     = (guint8)puls_sysfs_read_uint64 (p_max_w, 0, NULL);
+
+    if (out_info->current_gen == PULS_PCIE_GEN_UNKNOWN && out_info->current_width == 0 &&
+        out_info->max_gen == PULS_PCIE_GEN_UNKNOWN && out_info->max_width == 0) {
+        return FALSE;
+    }
+
+    if (out_info->max_gen > PULS_PCIE_GEN_UNKNOWN &&
+        out_info->current_gen > PULS_PCIE_GEN_UNKNOWN &&
+        out_info->current_gen < out_info->max_gen) {
+        out_info->is_downgraded = TRUE;
+    }
+
+    if (out_info->max_width > 0 &&
+        out_info->current_width > 0 &&
+        out_info->current_width < out_info->max_width) {
+        out_info->is_downgraded = TRUE;
+    }
+
+    out_info->device_dir = g_strdup (pci_dir);
+    out_info->description = puls_format_pcie_link (out_info->current_gen,
+                                                   out_info->current_width,
+                                                   out_info->max_gen,
+                                                   out_info->max_width);
+    return TRUE;
+}
+
+gboolean
+puls_sysfs_read_pcie_link (const gchar      *device_name,
+                           PulsPcieLinkInfo *out_info)
+{
+    if (device_name == NULL || out_info == NULL)
+        return FALSE;
+
+    g_autofree gchar *pci_dir = puls_sysfs_find_pcie_dir (device_name);
+    if (pci_dir == NULL)
+        return FALSE;
+
+    return puls_sysfs_read_pcie_link_from_dir (pci_dir, out_info);
+}
+
 gchar *
 puls_get_transport (const gchar *device_name)
 {

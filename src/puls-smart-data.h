@@ -254,6 +254,8 @@ PulsTransportProtocol puls_transport_protocol_from_string (const gchar *str);
 
 const gchar          *puls_pcie_generation_to_string     (PulsPcieGeneration gen);
 PulsPcieGeneration    puls_pcie_generation_from_string   (const gchar *str);
+PulsPcieGeneration    puls_pcie_speed_to_generation      (const gchar *speed_str);
+const gchar          *puls_pcie_generation_to_max_speed_str (PulsPcieGeneration gen);
 
 const gchar          *puls_sector_format_to_string       (PulsSectorFormat format);
 PulsSectorFormat      puls_sector_format_detect          (guint32 logical, guint32 physical);

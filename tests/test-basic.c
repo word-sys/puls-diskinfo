@@ -529,9 +529,11 @@ test_hwmon_temperature (void)
             g_assert_cmpint (live_temp, >=, 0);
             g_assert_cmpint (live_temp, <=, 120);
 
-            /* Also test with /dev/ path prefix */
+            /* Also test with /dev/ path prefix (allow ±2 °C for live thermal sensor jitter) */
             gint path_temp = puls_sysfs_read_hwmon_temp ("/dev/nvme0n1");
-            g_assert_cmpint (path_temp, ==, live_temp);
+            g_assert_cmpint (path_temp, >=, 0);
+            g_assert_cmpint (path_temp, <=, 120);
+            g_assert_cmpint (abs (path_temp - live_temp), <=, 2);
 
             GList *live_sensors = puls_sysfs_read_hwmon_sensors ("nvme0n1");
             g_assert_nonnull (live_sensors);
@@ -686,6 +688,128 @@ test_queue_attributes_trim (void)
     }
 }
 
+static void
+test_pcie_link_inspector (void)
+{
+    /* 1. PCIe GT/s speed to generation translation */
+    g_assert_cmpint (puls_pcie_speed_to_generation ("16.0 GT/s PCIe"), ==, PULS_PCIE_GEN_4);
+    g_assert_cmpint (puls_pcie_speed_to_generation ("16.0 GT/s"),      ==, PULS_PCIE_GEN_4);
+    g_assert_cmpint (puls_pcie_speed_to_generation ("16 GT/s"),        ==, PULS_PCIE_GEN_4);
+    g_assert_cmpint (puls_pcie_speed_to_generation ("2.5 GT/s"),       ==, PULS_PCIE_GEN_1);
+    g_assert_cmpint (puls_pcie_speed_to_generation ("5.0 GT/s"),       ==, PULS_PCIE_GEN_2);
+    g_assert_cmpint (puls_pcie_speed_to_generation ("8.0 GT/s"),       ==, PULS_PCIE_GEN_3);
+    g_assert_cmpint (puls_pcie_speed_to_generation ("32.0 GT/s"),      ==, PULS_PCIE_GEN_5);
+    g_assert_cmpint (puls_pcie_speed_to_generation ("64.0 GT/s"),      ==, PULS_PCIE_GEN_6);
+    g_assert_cmpint (puls_pcie_speed_to_generation (NULL),             ==, PULS_PCIE_GEN_UNKNOWN);
+    g_assert_cmpint (puls_pcie_speed_to_generation ("invalid"),        ==, PULS_PCIE_GEN_UNKNOWN);
+
+    /* 2. Generation to max speed string */
+    g_assert_cmpstr (puls_pcie_generation_to_max_speed_str (PULS_PCIE_GEN_1), ==, "2.5 GT/s");
+    g_assert_cmpstr (puls_pcie_generation_to_max_speed_str (PULS_PCIE_GEN_2), ==, "5.0 GT/s");
+    g_assert_cmpstr (puls_pcie_generation_to_max_speed_str (PULS_PCIE_GEN_3), ==, "8.0 GT/s");
+    g_assert_cmpstr (puls_pcie_generation_to_max_speed_str (PULS_PCIE_GEN_4), ==, "16.0 GT/s");
+    g_assert_cmpstr (puls_pcie_generation_to_max_speed_str (PULS_PCIE_GEN_5), ==, "32.0 GT/s");
+    g_assert_cmpstr (puls_pcie_generation_to_max_speed_str (PULS_PCIE_GEN_6), ==, "64.0 GT/s");
+    g_assert_cmpstr (puls_pcie_generation_to_max_speed_str (PULS_PCIE_GEN_UNKNOWN), ==, "Unknown");
+
+    /* 3. PCIe link description formatting */
+    g_autofree gchar *f1 = puls_format_pcie_link (PULS_PCIE_GEN_4, 4, PULS_PCIE_GEN_4, 4);
+    g_assert_cmpstr (f1, ==, "PCIe 4.0 x4 (Current: PCIe 4.0 x4 | Max: PCIe 4.0 x4)");
+
+    g_autofree gchar *f2 = puls_format_pcie_link (PULS_PCIE_GEN_3, 2, PULS_PCIE_GEN_4, 4);
+    g_assert_cmpstr (f2, ==, "PCIe 3.0 x2 (Current: PCIe 3.0 x2 | Max: PCIe 4.0 x4)");
+
+    g_autofree gchar *f3 = puls_format_pcie_link (PULS_PCIE_GEN_4, 4, PULS_PCIE_GEN_UNKNOWN, 0);
+    g_assert_cmpstr (f3, ==, "PCIe 4.0 x4");
+
+    g_assert_null (puls_format_pcie_link (PULS_PCIE_GEN_UNKNOWN, 0, PULS_PCIE_GEN_UNKNOWN, 0));
+
+    /* 4. Mock sysfs PCIe hierarchy */
+    GError *error = NULL;
+    g_autofree gchar *tmp_dir = g_dir_make_tmp ("puls-pcie-mock-XXXXXX", &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (tmp_dir);
+
+    g_autofree gchar *p_curr_spd = g_build_filename (tmp_dir, "current_link_speed", NULL);
+    g_autofree gchar *p_curr_w   = g_build_filename (tmp_dir, "current_link_width", NULL);
+    g_autofree gchar *p_max_spd  = g_build_filename (tmp_dir, "max_link_speed", NULL);
+    g_autofree gchar *p_max_w    = g_build_filename (tmp_dir, "max_link_width", NULL);
+
+    g_file_set_contents (p_curr_spd, "16.0 GT/s PCIe\n", -1, &error);
+    g_assert_no_error (error);
+    g_file_set_contents (p_curr_w, "4\n", -1, &error);
+    g_assert_no_error (error);
+    g_file_set_contents (p_max_spd, "16.0 GT/s PCIe\n", -1, &error);
+    g_assert_no_error (error);
+    g_file_set_contents (p_max_w, "4\n", -1, &error);
+    g_assert_no_error (error);
+
+    PulsPcieLinkInfo link_info = { 0 };
+    gboolean read_ok = puls_sysfs_read_pcie_link_from_dir (tmp_dir, &link_info);
+    g_assert_true (read_ok);
+    g_assert_cmpint (link_info.current_gen, ==, PULS_PCIE_GEN_4);
+    g_assert_cmpuint (link_info.current_width, ==, 4);
+    g_assert_cmpint (link_info.max_gen, ==, PULS_PCIE_GEN_4);
+    g_assert_cmpuint (link_info.max_width, ==, 4);
+    g_assert_false (link_info.is_downgraded);
+    g_assert_cmpstr (link_info.description, ==, "PCIe 4.0 x4 (Current: PCIe 4.0 x4 | Max: PCIe 4.0 x4)");
+    puls_pcie_link_info_clear (&link_info);
+
+    /* Test degraded link state */
+    g_file_set_contents (p_curr_spd, "8.0 GT/s PCIe\n", -1, &error);
+    g_assert_no_error (error);
+    g_file_set_contents (p_curr_w, "2\n", -1, &error);
+    g_assert_no_error (error);
+
+    read_ok = puls_sysfs_read_pcie_link_from_dir (tmp_dir, &link_info);
+    g_assert_true (read_ok);
+    g_assert_cmpint (link_info.current_gen, ==, PULS_PCIE_GEN_3);
+    g_assert_cmpuint (link_info.current_width, ==, 2);
+    g_assert_cmpint (link_info.max_gen, ==, PULS_PCIE_GEN_4);
+    g_assert_cmpuint (link_info.max_width, ==, 4);
+    g_assert_true (link_info.is_downgraded);
+    g_assert_cmpstr (link_info.description, ==, "PCIe 3.0 x2 (Current: PCIe 3.0 x2 | Max: PCIe 4.0 x4)");
+    puls_pcie_link_info_clear (&link_info);
+
+    /* Cleanup mock files */
+    unlink (p_curr_spd);
+    unlink (p_curr_w);
+    unlink (p_max_spd);
+    unlink (p_max_w);
+    rmdir (tmp_dir);
+
+    /* 5. Edge cases & invalid inputs */
+    PulsPcieLinkInfo empty_info = { 0 };
+    g_assert_false (puls_sysfs_read_pcie_link_from_dir (NULL, &empty_info));
+    g_assert_false (puls_sysfs_read_pcie_link_from_dir ("/path/does/not/exist", &empty_info));
+    g_assert_false (puls_sysfs_read_pcie_link (NULL, &empty_info));
+    g_assert_false (puls_sysfs_read_pcie_link ("../invalid", &empty_info));
+    g_assert_null (puls_sysfs_find_pcie_dir (NULL));
+    g_assert_null (puls_sysfs_find_pcie_dir ("nonexistent_device_xyz"));
+
+    /* 6. Live hardware detection if nvme0n1 is available */
+    if (g_file_test ("/sys/block/nvme0n1/device/device/current_link_speed", G_FILE_TEST_EXISTS)) {
+        g_autofree gchar *pci_dir = puls_sysfs_find_pcie_dir ("nvme0n1");
+        g_assert_nonnull (pci_dir);
+
+        PulsPcieLinkInfo live_info = { 0 };
+        gboolean live_ok = puls_sysfs_read_pcie_link ("nvme0n1", &live_info);
+        g_assert_true (live_ok);
+        g_assert_cmpint (live_info.current_gen, >=, PULS_PCIE_GEN_1);
+        g_assert_cmpuint (live_info.current_width, >=, 1);
+        g_assert_nonnull (live_info.description);
+
+        /* Test path alias */
+        PulsPcieLinkInfo dev_info = { 0 };
+        g_assert_true (puls_sysfs_read_pcie_link ("/dev/nvme0n1", &dev_info));
+        g_assert_cmpint (dev_info.current_gen, ==, live_info.current_gen);
+        g_assert_cmpuint (dev_info.current_width, ==, live_info.current_width);
+
+        puls_pcie_link_info_clear (&live_info);
+        puls_pcie_link_info_clear (&dev_info);
+    }
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -702,6 +826,7 @@ main (int argc, char *argv[])
     g_test_add_func ("/basic/sysfs-helpers", test_sysfs_helpers);
     g_test_add_func ("/basic/hwmon-temperature", test_hwmon_temperature);
     g_test_add_func ("/basic/queue-attributes-trim", test_queue_attributes_trim);
+    g_test_add_func ("/basic/pcie-link-inspector", test_pcie_link_inspector);
 
     return g_test_run ();
 }

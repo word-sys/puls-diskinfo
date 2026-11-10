@@ -130,6 +130,30 @@ gboolean puls_sysfs_read_queue_attributes_from_dir (const gchar         *queue_d
                                                      PulsQueueAttributes *out_attrs);
 gboolean puls_sysfs_detect_trim_support            (const gchar *device_name);
 
+/* PCIe Link Speed and Width Inspector */
+typedef struct {
+    gchar              *device_dir;
+    PulsPcieGeneration  current_gen;
+    guint8              current_width;
+    gchar               current_speed_raw[32];
+    PulsPcieGeneration  max_gen;
+    guint8              max_width;
+    gchar               max_speed_raw[32];
+    gboolean            is_downgraded;
+    gchar              *description;
+} PulsPcieLinkInfo;
+
+void     puls_pcie_link_info_clear          (PulsPcieLinkInfo *info);
+gchar   *puls_format_pcie_link              (PulsPcieGeneration current_gen,
+                                             guint8             current_width,
+                                             PulsPcieGeneration max_gen,
+                                             guint8             max_width);
+gchar   *puls_sysfs_find_pcie_dir           (const gchar *device_name);
+gboolean puls_sysfs_read_pcie_link_from_dir (const gchar      *pci_dir,
+                                             PulsPcieLinkInfo *out_info);
+gboolean puls_sysfs_read_pcie_link          (const gchar      *device_name,
+                                             PulsPcieLinkInfo *out_info);
+
 gboolean puls_get_partition_usage (const gchar *mount_point,
                                    guint64     *out_used_bytes,
                                    guint64     *out_total_bytes);
