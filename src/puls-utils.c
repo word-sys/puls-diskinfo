@@ -1328,76 +1328,264 @@ puls_partition_info_free (PulsPartitionInfo *info)
 }
 
 static gboolean
-is_dm_slave_of (const gchar *mnt_fsname, const gchar *parent_device_path)
+device_name_is_partition_of (const gchar *child_name, const gchar *parent_name)
 {
-    if (mnt_fsname == NULL || parent_device_path == NULL)
+    if (child_name == NULL || parent_name == NULL)
+        return FALSE;
+    if (g_strcmp0 (child_name, parent_name) == 0)
+        return TRUE;
+    if (!g_str_has_prefix (child_name, parent_name))
         return FALSE;
 
-    const gchar *parent_name = strrchr (parent_device_path, '/');
-    parent_name = parent_name ? parent_name + 1 : parent_device_path;
-
-    gchar *resolved = realpath (mnt_fsname, NULL);
-    if (resolved == NULL)
+    const gchar *suffix = child_name + strlen (parent_name);
+    if (*suffix == '\0')
         return FALSE;
 
-    gboolean is_slave = FALSE;
-    const gchar *dm_name = strrchr (resolved, '/');
-    if (dm_name) {
-        dm_name = dm_name + 1;
-        if (g_str_has_prefix (dm_name, "dm-")) {
-            g_autofree gchar *slaves_dir = g_build_filename ("/sys/class/block", dm_name, "slaves", NULL);
-            GDir *dir = g_dir_open (slaves_dir, 0, NULL);
-            if (dir) {
-                const gchar *entry;
-                while ((entry = g_dir_read_name (dir)) != NULL) {
-                    if (g_str_has_prefix (entry, parent_name)) {
-                        is_slave = TRUE;
-                        break;
-                    }
-                }
-                g_dir_close (dir);
+    gboolean parent_ends_with_digit = g_ascii_isdigit (parent_name[strlen (parent_name) - 1]);
+    if (parent_ends_with_digit) {
+        /* When parent ends with a digit (e.g. nvme0n1, mmcblk0, loop0),
+         * partition names must begin with 'p' followed by digits (e.g. nvme0n1p1). */
+        if (suffix[0] == 'p' && g_ascii_isdigit (suffix[1])) {
+            for (gsize i = 1; suffix[i] != '\0'; i++) {
+                if (!g_ascii_isdigit (suffix[i]))
+                    return FALSE;
+            }
+            return TRUE;
+        }
+        return FALSE;
+    } else {
+        /* When parent ends with a letter (e.g. sda, vda, hda),
+         * partition names are digits directly (e.g. sda1, sda12)
+         * or in some rare cases 'p' + digits (e.g. nbda1 or nbdap1). */
+        if (g_ascii_isdigit (suffix[0])) {
+            for (gsize i = 0; suffix[i] != '\0'; i++) {
+                if (!g_ascii_isdigit (suffix[i]))
+                    return FALSE;
+            }
+            return TRUE;
+        }
+        if (suffix[0] == 'p' && g_ascii_isdigit (suffix[1])) {
+            for (gsize i = 1; suffix[i] != '\0'; i++) {
+                if (!g_ascii_isdigit (suffix[i]))
+                    return FALSE;
+            }
+            return TRUE;
+        }
+        return FALSE;
+    }
+}
+
+static void
+collect_holders_recursive (const gchar *block_name, GHashTable *holders_set, gint depth)
+{
+    if (depth <= 0 || block_name == NULL || holders_set == NULL)
+        return;
+
+    g_autofree gchar *holders_dir = g_build_filename ("/sys/class/block", block_name, "holders", NULL);
+    GDir *dir = g_dir_open (holders_dir, 0, NULL);
+    if (!dir)
+        return;
+
+    const gchar *entry;
+    while ((entry = g_dir_read_name (dir)) != NULL) {
+        if (!g_hash_table_contains (holders_set, entry)) {
+            g_hash_table_add (holders_set, g_strdup (entry));
+            collect_holders_recursive (entry, holders_set, depth - 1);
+        }
+    }
+    g_dir_close (dir);
+}
+
+static GHashTable *
+puls_collect_holders_for_device (const gchar *parent_name)
+{
+    GHashTable *holders_set = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+    if (parent_name == NULL || *parent_name == '\0')
+        return holders_set;
+
+    /* Check parent device holders: /sys/class/block/<parent_name>/holders */
+    collect_holders_recursive (parent_name, holders_set, 8);
+
+    /* Check partition holders: /sys/class/block/<partition>/holders */
+    GDir *dir = g_dir_open ("/sys/class/block", 0, NULL);
+    if (dir) {
+        const gchar *entry;
+        while ((entry = g_dir_read_name (dir)) != NULL) {
+            if (device_name_is_partition_of (entry, parent_name)) {
+                collect_holders_recursive (entry, holders_set, 8);
+            }
+        }
+        g_dir_close (dir);
+    }
+
+    return holders_set;
+}
+
+static gboolean
+check_dm_slaves_recursive (const gchar *dm_name, const gchar *parent_name, gint depth)
+{
+    if (depth <= 0 || dm_name == NULL || parent_name == NULL)
+        return FALSE;
+
+    g_autofree gchar *slaves_dir = g_build_filename ("/sys/class/block", dm_name, "slaves", NULL);
+    GDir *dir = g_dir_open (slaves_dir, 0, NULL);
+    if (!dir)
+        return FALSE;
+
+    gboolean found = FALSE;
+    const gchar *entry;
+    while ((entry = g_dir_read_name (dir)) != NULL) {
+        if (device_name_is_partition_of (entry, parent_name)) {
+            found = TRUE;
+            break;
+        }
+        if (g_str_has_prefix (entry, "dm-")) {
+            if (check_dm_slaves_recursive (entry, parent_name, depth - 1)) {
+                found = TRUE;
+                break;
             }
         }
     }
-    free (resolved);
-    return is_slave;
+    g_dir_close (dir);
+    return found;
+}
+
+static gboolean
+is_mock_mapper_for_device (const gchar *mnt_fsname, const gchar *parent_name)
+{
+    if (mnt_fsname == NULL || parent_name == NULL)
+        return FALSE;
+
+    const gchar *p = strstr (mnt_fsname, parent_name);
+    if (p == NULL)
+        return FALSE;
+
+    gsize parent_len = strlen (parent_name);
+    const gchar *after = p + parent_len;
+
+    gboolean parent_ends_digit = g_ascii_isdigit (parent_name[parent_len - 1]);
+    gsize part_suffix_len = 0;
+
+    if (parent_ends_digit) {
+        if (after[0] == 'p' && g_ascii_isdigit (after[1])) {
+            part_suffix_len = 1;
+            while (g_ascii_isdigit (after[part_suffix_len]))
+                part_suffix_len++;
+        }
+    } else {
+        while (g_ascii_isdigit (after[part_suffix_len]))
+            part_suffix_len++;
+    }
+
+    if (part_suffix_len > 0) {
+        gchar term = after[part_suffix_len];
+        if (term == '\0' || term == '_' || term == '-' || term == '.' || term == '/')
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+static gboolean
+puls_is_partition_or_dm_of (const gchar  *mnt_fsname,
+                            const gchar  *parent_device_path,
+                            const gchar  *parent_name,
+                            GHashTable   *holders_set)
+{
+    if (mnt_fsname == NULL || parent_device_path == NULL || parent_name == NULL)
+        return FALSE;
+
+    /* Direct match with parent device path */
+    if (g_strcmp0 (mnt_fsname, parent_device_path) == 0)
+        return TRUE;
+
+    /* Extract leaf device name from mount fsname (e.g. /dev/sda1 -> sda1) */
+    const gchar *fs_name = strrchr (mnt_fsname, '/');
+    fs_name = fs_name ? fs_name + 1 : mnt_fsname;
+
+    /* Direct partition matching */
+    if (device_name_is_partition_of (fs_name, parent_name))
+        return TRUE;
+
+    /* Check holders collected from sysfs */
+    if (holders_set != NULL && g_hash_table_contains (holders_set, fs_name))
+        return TRUE;
+
+    /* If fs_name is dm-X, check its slaves */
+    if (g_str_has_prefix (fs_name, "dm-") && check_dm_slaves_recursive (fs_name, parent_name, 8))
+        return TRUE;
+
+    /* Resolve realpath (handles /dev/mapper/..., /dev/disk/by-uuid/..., etc.) */
+    gchar *resolved = realpath (mnt_fsname, NULL);
+    if (resolved != NULL) {
+        const gchar *res_name = strrchr (resolved, '/');
+        res_name = res_name ? res_name + 1 : resolved;
+
+        gboolean match = FALSE;
+        if (device_name_is_partition_of (res_name, parent_name))
+            match = TRUE;
+        else if (holders_set != NULL && g_hash_table_contains (holders_set, res_name))
+            match = TRUE;
+        else if (g_str_has_prefix (res_name, "dm-") && check_dm_slaves_recursive (res_name, parent_name, 8))
+            match = TRUE;
+
+        free (resolved);
+        if (match)
+            return TRUE;
+    }
+
+    /* Fallback for mock mounts / synthetic mapper device names */
+    if (is_mock_mapper_for_device (mnt_fsname, parent_name))
+        return TRUE;
+
+    return FALSE;
 }
 
 GList *
-puls_get_disk_partitions (const gchar *device_path)
+puls_get_disk_partitions_from_mounts (const gchar *device_path,
+                                     const gchar *mounts_file)
 {
-    if (device_path == NULL)
+    if (device_path == NULL || mounts_file == NULL || *device_path == '\0' || *mounts_file == '\0')
         return NULL;
 
-    GList *list = NULL;
-    FILE *f = setmntent ("/proc/mounts", "r");
+    const gchar *parent_name = strrchr (device_path, '/');
+    parent_name = parent_name ? parent_name + 1 : device_path;
+    if (*parent_name == '\0')
+        return NULL;
+
+    FILE *f = setmntent (mounts_file, "r");
     if (f == NULL)
         return NULL;
 
+    GHashTable *holders_set = puls_collect_holders_for_device (parent_name);
+    GList *list = NULL;
     struct mntent *mnt;
-    while ((mnt = getmntent (f)) != NULL) {
-        gboolean is_part = FALSE;
-        if (g_strcmp0 (mnt->mnt_fsname, device_path) == 0) {
-            is_part = TRUE;
-        } else if (g_str_has_prefix (mnt->mnt_fsname, device_path)) {
-            const gchar *suffix = mnt->mnt_fsname + strlen (device_path);
-            if (g_ascii_isdigit (suffix[0])) {
-                is_part = TRUE;
-            } else if (suffix[0] == 'p' && g_ascii_isdigit (suffix[1])) {
-                is_part = TRUE;
-            }
-        } else if (is_dm_slave_of (mnt->mnt_fsname, device_path)) {
-            is_part = TRUE;
-        }
 
-        if (is_part) {
+    while ((mnt = getmntent (f)) != NULL) {
+        if (mnt->mnt_fsname == NULL || mnt->mnt_dir == NULL)
+            continue;
+
+        if (puls_is_partition_or_dm_of (mnt->mnt_fsname, device_path, parent_name, holders_set)) {
+            /* Avoid duplicate (device_path, mount_point) entries */
+            gboolean exists = FALSE;
+            for (GList *l = list; l != NULL; l = l->next) {
+                PulsPartitionInfo *existing = l->data;
+                if (g_strcmp0 (existing->device_path, mnt->mnt_fsname) == 0 &&
+                    g_strcmp0 (existing->mount_point, mnt->mnt_dir) == 0) {
+                    exists = TRUE;
+                    break;
+                }
+            }
+            if (exists)
+                continue;
+
             PulsPartitionInfo *info = g_new0 (PulsPartitionInfo, 1);
             info->device_path = g_strdup (mnt->mnt_fsname);
             info->mount_point = g_strdup (mnt->mnt_dir);
-            info->fs_type = g_strdup (mnt->mnt_type);
+            info->fs_type = g_strdup (mnt->mnt_type ? mnt->mnt_type : "unknown");
 
             struct statvfs vfs;
-            if (statvfs (mnt->mnt_dir, &vfs) == 0) {
+            if (statvfs (mnt->mnt_dir, &vfs) == 0 && vfs.f_blocks > 0) {
                 info->total_bytes = (guint64)vfs.f_blocks * vfs.f_frsize;
                 info->available_bytes = (guint64)vfs.f_bavail * vfs.f_frsize;
             } else {
@@ -1409,8 +1597,15 @@ puls_get_disk_partitions (const gchar *device_path)
         }
     }
 
+    g_hash_table_destroy (holders_set);
     endmntent (f);
     return list;
+}
+
+GList *
+puls_get_disk_partitions (const gchar *device_path)
+{
+    return puls_get_disk_partitions_from_mounts (device_path, "/proc/mounts");
 }
 
 GList *

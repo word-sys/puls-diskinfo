@@ -37,6 +37,8 @@ typedef struct {
 
 void   puls_partition_info_free (PulsPartitionInfo *info);
 GList *puls_get_disk_partitions     (const gchar *device_path);
+GList *puls_get_disk_partitions_from_mounts (const gchar *device_path,
+                                             const gchar *mounts_file);
 GList *puls_get_all_disk_partitions (const gchar *device_path);
 
 

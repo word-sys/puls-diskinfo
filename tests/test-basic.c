@@ -966,6 +966,130 @@ test_usb_speed_and_bridge_inspector (void)
     g_assert_null (puls_detect_usb_speed_version ("nonexistent_dev_xyz"));
 }
 
+static void
+test_partition_mount_mapper (void)
+{
+    /* 1. Edge cases and invalid arguments */
+    g_assert_null (puls_get_disk_partitions_from_mounts (NULL, "/proc/mounts"));
+    g_assert_null (puls_get_disk_partitions_from_mounts ("/dev/sda", NULL));
+    g_assert_null (puls_get_disk_partitions_from_mounts ("", "/proc/mounts"));
+    g_assert_null (puls_get_disk_partitions_from_mounts ("/dev/sda", ""));
+    g_assert_null (puls_get_disk_partitions_from_mounts ("/dev/sda", "/nonexistent/test/path/mounts"));
+    g_assert_null (puls_get_disk_partitions (NULL));
+    g_assert_null (puls_get_disk_partitions (""));
+
+    /* 2. Create mock /proc/mounts file with multi-disk and multi-partition data */
+    gchar *tmp_mounts = g_build_filename (g_get_tmp_dir (), "puls_mock_mounts_XXXXXX", NULL);
+    int fd = g_mkstemp (tmp_mounts);
+    g_assert_cmpint (fd, !=, -1);
+
+    const gchar *mock_content =
+        "/dev/sda1 /boot ext4 rw,relatime 0 0\n"
+        "/dev/sda2 / ext4 rw,relatime 0 0\n"
+        "/dev/mapper/sda3_crypt /home ext4 rw,relatime 0 0\n"
+        "/dev/sda1 /boot ext4 rw,relatime 0 0\n" /* Duplicate entry to verify deduplication */
+        "/dev/nvme0n1p1 /boot/efi vfat rw,relatime 0 0\n"
+        "/dev/nvme0n1p2 /var ext4 rw,relatime 0 0\n"
+        "/dev/mapper/nvme0n1p3_crypt /opt btrfs rw,relatime 0 0\n"
+        "/dev/sdb1 /mnt/backup xfs rw,relatime 0 0\n"
+        "/dev/sdc1 /mnt/usb vfat rw,relatime 0 0\n"
+        "proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0\n"
+        "sysfs /sys sysfs rw,nosuid,nodev,noexec,relatime 0 0\n"
+        "tmpfs /tmp tmpfs rw,nosuid,nodev 0 0\n";
+
+    ssize_t written = write (fd, mock_content, strlen (mock_content));
+    g_assert_cmpint (written, ==, (ssize_t)strlen (mock_content));
+    close (fd);
+
+    /* 3. Query SATA disk partitions (/dev/sda) */
+    GList *sda_parts = puls_get_disk_partitions_from_mounts ("/dev/sda", tmp_mounts);
+    g_assert_nonnull (sda_parts);
+    g_assert_cmpuint (g_list_length (sda_parts), ==, 3);
+
+    PulsPartitionInfo *p1 = g_list_nth_data (sda_parts, 0);
+    g_assert_nonnull (p1);
+    g_assert_cmpstr (p1->device_path, ==, "/dev/sda1");
+    g_assert_cmpstr (p1->mount_point, ==, "/boot");
+    g_assert_cmpstr (p1->fs_type, ==, "ext4");
+
+    PulsPartitionInfo *p2 = g_list_nth_data (sda_parts, 1);
+    g_assert_nonnull (p2);
+    g_assert_cmpstr (p2->device_path, ==, "/dev/sda2");
+    g_assert_cmpstr (p2->mount_point, ==, "/");
+    g_assert_cmpstr (p2->fs_type, ==, "ext4");
+
+    PulsPartitionInfo *p3 = g_list_nth_data (sda_parts, 2);
+    g_assert_nonnull (p3);
+    g_assert_cmpstr (p3->device_path, ==, "/dev/mapper/sda3_crypt");
+    g_assert_cmpstr (p3->mount_point, ==, "/home");
+    g_assert_cmpstr (p3->fs_type, ==, "ext4");
+
+    g_list_free_full (sda_parts, (GDestroyNotify)puls_partition_info_free);
+
+    /* 4. Query bare disk name ("sda") */
+    GList *sda_bare = puls_get_disk_partitions_from_mounts ("sda", tmp_mounts);
+    g_assert_nonnull (sda_bare);
+    g_assert_cmpuint (g_list_length (sda_bare), ==, 3);
+    g_list_free_full (sda_bare, (GDestroyNotify)puls_partition_info_free);
+
+    /* 5. Query NVMe disk partitions (/dev/nvme0n1) */
+    GList *nvme_parts = puls_get_disk_partitions_from_mounts ("/dev/nvme0n1", tmp_mounts);
+    g_assert_nonnull (nvme_parts);
+    g_assert_cmpuint (g_list_length (nvme_parts), ==, 3);
+
+    PulsPartitionInfo *np1 = g_list_nth_data (nvme_parts, 0);
+    g_assert_nonnull (np1);
+    g_assert_cmpstr (np1->device_path, ==, "/dev/nvme0n1p1");
+    g_assert_cmpstr (np1->mount_point, ==, "/boot/efi");
+    g_assert_cmpstr (np1->fs_type, ==, "vfat");
+
+    PulsPartitionInfo *np2 = g_list_nth_data (nvme_parts, 1);
+    g_assert_nonnull (np2);
+    g_assert_cmpstr (np2->device_path, ==, "/dev/nvme0n1p2");
+    g_assert_cmpstr (np2->mount_point, ==, "/var");
+    g_assert_cmpstr (np2->fs_type, ==, "ext4");
+
+    PulsPartitionInfo *np3 = g_list_nth_data (nvme_parts, 2);
+    g_assert_nonnull (np3);
+    g_assert_cmpstr (np3->device_path, ==, "/dev/mapper/nvme0n1p3_crypt");
+    g_assert_cmpstr (np3->mount_point, ==, "/opt");
+    g_assert_cmpstr (np3->fs_type, ==, "btrfs");
+
+    g_list_free_full (nvme_parts, (GDestroyNotify)puls_partition_info_free);
+
+    /* 6. Query secondary disk (/dev/sdb) */
+    GList *sdb_parts = puls_get_disk_partitions_from_mounts ("/dev/sdb", tmp_mounts);
+    g_assert_nonnull (sdb_parts);
+    g_assert_cmpuint (g_list_length (sdb_parts), ==, 1);
+
+    PulsPartitionInfo *sdbp = sdb_parts->data;
+    g_assert_cmpstr (sdbp->device_path, ==, "/dev/sdb1");
+    g_assert_cmpstr (sdbp->mount_point, ==, "/mnt/backup");
+    g_assert_cmpstr (sdbp->fs_type, ==, "xfs");
+
+    g_list_free_full (sdb_parts, (GDestroyNotify)puls_partition_info_free);
+
+    /* 7. Query disk with no mounted partitions (/dev/sde) */
+    GList *sde_parts = puls_get_disk_partitions_from_mounts ("/dev/sde", tmp_mounts);
+    g_assert_null (sde_parts);
+
+    /* Clean up mock mounts file */
+    unlink (tmp_mounts);
+    g_free (tmp_mounts);
+
+    /* 8. Live /proc/mounts smoke test on the host system */
+    GList *live_parts = puls_get_disk_partitions ("/dev/nvme0n1");
+    if (live_parts != NULL) {
+        for (GList *l = live_parts; l != NULL; l = l->next) {
+            PulsPartitionInfo *lp = l->data;
+            g_assert_nonnull (lp->device_path);
+            g_assert_nonnull (lp->mount_point);
+            g_assert_nonnull (lp->fs_type);
+        }
+        g_list_free_full (live_parts, (GDestroyNotify)puls_partition_info_free);
+    }
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -984,6 +1108,7 @@ main (int argc, char *argv[])
     g_test_add_func ("/basic/queue-attributes-trim", test_queue_attributes_trim);
     g_test_add_func ("/basic/pcie-link-inspector", test_pcie_link_inspector);
     g_test_add_func ("/basic/usb-speed-and-bridge", test_usb_speed_and_bridge_inspector);
+    g_test_add_func ("/basic/partition-mount-mapper", test_partition_mount_mapper);
 
     return g_test_run ();
 }
