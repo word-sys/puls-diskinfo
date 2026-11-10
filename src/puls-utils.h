@@ -154,6 +154,32 @@ gboolean puls_sysfs_read_pcie_link_from_dir (const gchar      *pci_dir,
 gboolean puls_sysfs_read_pcie_link          (const gchar      *device_name,
                                              PulsPcieLinkInfo *out_info);
 
+/* USB Speed and Bridge Controller Inspector */
+typedef struct {
+    gchar       *device_dir;       /* USB device directory in sysfs */
+    PulsUsbSpeed speed;            /* enum classification */
+    guint64      speed_mbps;       /* speed in Mbps (e.g. 480, 5000, 10000, 20000, 40000) */
+    gchar       *version;          /* USB spec version (e.g. "3.10", "2.00") */
+    gchar       *vendor_id;        /* 4-digit hex vendor ID (e.g. "174c") */
+    gchar       *product_id;       /* 4-digit hex product ID (e.g. "2362") */
+    gchar       *manufacturer;     /* Manufacturer descriptor string */
+    gchar       *product;          /* Product descriptor string */
+    gchar       *serial;           /* USB serial number string */
+    gchar       *bridge_chip;      /* Identified bridge IC (e.g. "ASMedia ASM2362 NVMe-USB Bridge") */
+    gchar       *display_string;   /* Combined badge & bridge string (e.g. "USB 3.1 (10G) | ASMedia ASM2362") */
+} PulsUsbBridgeInfo;
+
+void     puls_usb_bridge_info_clear               (PulsUsbBridgeInfo *info);
+gchar   *puls_identify_usb_bridge_chip            (const gchar *vendor_id,
+                                                   const gchar *product_id,
+                                                   const gchar *manufacturer,
+                                                   const gchar *product);
+gchar   *puls_sysfs_find_usb_device_dir           (const gchar *device_name);
+gboolean puls_sysfs_read_usb_bridge_info_from_dir (const gchar       *usb_dir,
+                                                   PulsUsbBridgeInfo *out_info);
+gboolean puls_sysfs_read_usb_bridge_info          (const gchar       *device_name,
+                                                   PulsUsbBridgeInfo *out_info);
+
 gboolean puls_get_partition_usage (const gchar *mount_point,
                                    guint64     *out_used_bytes,
                                    guint64     *out_total_bytes);

@@ -1103,70 +1103,216 @@ puls_detect_drive_type (const gchar *device_path)
     return rotational ? PULS_DRIVE_TYPE_SATA_HDD : PULS_DRIVE_TYPE_SATA_SSD;
 }
 
-gchar *
-puls_detect_usb_speed_version (const gchar *device_name)
+void
+puls_usb_bridge_info_clear (PulsUsbBridgeInfo *info)
 {
-    g_autofree gchar *device_link = g_strdup_printf ("/sys/block/%s/device", device_name);
-    gchar real_path_buf[PATH_MAX];
-    if (realpath (device_link, real_path_buf) == NULL) {
+    if (info == NULL)
+        return;
+    g_free (info->device_dir);
+    g_free (info->version);
+    g_free (info->vendor_id);
+    g_free (info->product_id);
+    g_free (info->manufacturer);
+    g_free (info->product);
+    g_free (info->serial);
+    g_free (info->bridge_chip);
+    g_free (info->display_string);
+    memset (info, 0, sizeof (*info));
+}
+
+gchar *
+puls_identify_usb_bridge_chip (const gchar *vendor_id,
+                               const gchar *product_id,
+                               const gchar *manufacturer,
+                               const gchar *product)
+{
+    if (vendor_id == NULL)
         return NULL;
+
+    g_autofree gchar *vid = g_ascii_strdown (vendor_id, -1);
+    g_autofree gchar *pid = product_id ? g_ascii_strdown (product_id, -1) : NULL;
+
+    /* ASMedia (174c) */
+    if (g_strcmp0 (vid, "174c") == 0) {
+        if (pid) {
+            if (g_strcmp0 (pid, "55aa") == 0) return g_strdup ("ASMedia ASM1051/1053 SATA Bridge");
+            if (g_strcmp0 (pid, "1153") == 0) return g_strdup ("ASMedia ASM1153E SATA 6Gb/s Bridge");
+            if (g_strcmp0 (pid, "2362") == 0) return g_strdup ("ASMedia ASM2362 NVMe-USB Bridge");
+            if (g_strcmp0 (pid, "2364") == 0) return g_strdup ("ASMedia ASM2364 NVMe-USB Bridge");
+            if (g_strcmp0 (pid, "2464") == 0) return g_strdup ("ASMedia ASM2464PD USB4/TB to PCIe Bridge");
+        }
+        return g_strdup ("ASMedia USB Storage Bridge");
     }
 
-    gchar *current_dir = g_strdup (real_path_buf);
-    gchar *speed_str = NULL;
-    gchar *version_str = NULL;
+    /* Realtek (0bda) */
+    if (g_strcmp0 (vid, "0bda") == 0) {
+        if (pid) {
+            if (g_strcmp0 (pid, "9210") == 0) return g_strdup ("Realtek RTL9210/RTL9210B NVMe/SATA Bridge");
+            if (g_strcmp0 (pid, "9201") == 0) return g_strdup ("Realtek RTL9201 Storage Bridge");
+        }
+        return g_strdup ("Realtek USB Storage Bridge");
+    }
 
+    /* JMicron (152d) */
+    if (g_strcmp0 (vid, "152d") == 0) {
+        if (pid) {
+            if (g_strcmp0 (pid, "0567") == 0) return g_strdup ("JMicron JMS567 SATA 6Gb/s Bridge");
+            if (g_strcmp0 (pid, "0578") == 0) return g_strdup ("JMicron JMS578 SATA 6Gb/s Bridge");
+            if (g_strcmp0 (pid, "0583") == 0) return g_strdup ("JMicron JMS583 NVMe-USB Bridge");
+            if (g_strcmp0 (pid, "0580") == 0) return g_strdup ("JMicron JMS580 Type-C to SATA Bridge");
+        }
+        return g_strdup ("JMicron USB Storage Bridge");
+    }
+
+    /* Genesys Logic (05e3) */
+    if (g_strcmp0 (vid, "05e3") == 0) {
+        if (pid) {
+            if (g_strcmp0 (pid, "0749") == 0) return g_strdup ("Genesys Logic GL3321 USB-SATA Bridge");
+            if (g_strcmp0 (pid, "0751") == 0) return g_strdup ("Genesys Logic GL3324 NVMe Bridge");
+        }
+        return g_strdup ("Genesys Logic USB Storage Bridge");
+    }
+
+    /* VIA Labs (2109) */
+    if (g_strcmp0 (vid, "2109") == 0) {
+        if (pid) {
+            if (g_strcmp0 (pid, "0715") == 0 || g_strcmp0 (pid, "0716") == 0)
+                return g_strdup ("VIA VL715/VL716 SATA/NVMe Bridge");
+        }
+        return g_strdup ("VIA Labs USB Storage Bridge");
+    }
+
+    /* Innostor (1f75) */
+    if (g_strcmp0 (vid, "1f75") == 0)
+        return g_strdup ("Innostor IS916/IS917 Flash Controller");
+
+    /* Phison (13fe) */
+    if (g_strcmp0 (vid, "13fe") == 0)
+        return g_strdup ("Phison USB Storage Controller");
+
+    /* Fallback on product descriptor strings */
+    if (product) {
+        if (strstr (product, "RTL9210")) return g_strdup ("Realtek RTL9210 NVMe/SATA Bridge");
+        if (strstr (product, "JMS583"))  return g_strdup ("JMicron JMS583 NVMe Bridge");
+        if (strstr (product, "ASM2362")) return g_strdup ("ASMedia ASM2362 NVMe Bridge");
+        if (strstr (product, "ASM2364")) return g_strdup ("ASMedia ASM2364 NVMe Bridge");
+        if (manufacturer && strlen (manufacturer) > 0)
+            return g_strdup_printf ("%s %s", manufacturer, product);
+        return g_strdup (product);
+    }
+
+    return NULL;
+}
+
+gchar *
+puls_sysfs_find_usb_device_dir (const gchar *device_name)
+{
+    g_autofree gchar *clean_name = puls_sanitize_device_name (device_name);
+    if (clean_name == NULL)
+        return NULL;
+
+    g_autofree gchar *dev_link = g_strdup_printf ("/sys/block/%s/device", clean_name);
+    g_autofree gchar *real_path = puls_sysfs_resolve_link (dev_link);
+    if (real_path == NULL)
+        return NULL;
+
+    gchar *current_dir = g_strdup (real_path);
     for (gint i = 0; i < 12; i++) {
         g_autofree gchar *speed_path = g_build_filename (current_dir, "speed", NULL);
-        g_autofree gchar *version_path = g_build_filename (current_dir, "version", NULL);
+        g_autofree gchar *id_vendor_path = g_build_filename (current_dir, "idVendor", NULL);
 
-        if (g_file_test (speed_path, G_FILE_TEST_EXISTS) && g_file_test (version_path, G_FILE_TEST_EXISTS)) {
-            g_file_get_contents (speed_path, &speed_str, NULL, NULL);
-            g_file_get_contents (version_path, &version_str, NULL, NULL);
-            break;
-        }
+        if (g_file_test (speed_path, G_FILE_TEST_EXISTS) && g_file_test (id_vendor_path, G_FILE_TEST_EXISTS))
+            return current_dir;
 
         gchar *parent_dir = g_path_get_dirname (current_dir);
         g_free (current_dir);
         current_dir = parent_dir;
 
-        if (g_strcmp0 (current_dir, "/") == 0 || g_strcmp0 (current_dir, "/sys") == 0 || g_strcmp0 (current_dir, ".") == 0) {
+        if (current_dir == NULL || g_strcmp0 (current_dir, "/") == 0 ||
+            g_strcmp0 (current_dir, "/sys") == 0 || g_strcmp0 (current_dir, ".") == 0) {
+            g_free (current_dir);
             break;
         }
     }
 
-    g_free (current_dir);
+    return NULL;
+}
 
-    if (speed_str && version_str) {
-        g_strstrip (speed_str);
-        g_strstrip (version_str);
+gboolean
+puls_sysfs_read_usb_bridge_info_from_dir (const gchar       *usb_dir,
+                                          PulsUsbBridgeInfo *out_info)
+{
+    if (usb_dir == NULL || out_info == NULL)
+        return FALSE;
 
-        gint speed_val = (gint)g_ascii_strtoll (speed_str, NULL, 10);
-        const gchar *gen = "USB";
+    if (!g_file_test (usb_dir, G_FILE_TEST_IS_DIR))
+        return FALSE;
 
-        if (speed_val == 480) {
-            gen = "USB 2.0 (High-Speed)";
-        } else if (speed_val == 5000) {
-            gen = "USB 3.0 (SuperSpeed)";
-        } else if (speed_val == 10000) {
-            gen = "USB 3.1 (SuperSpeed+)";
-        } else if (speed_val == 20000) {
-            gen = "USB 3.2 (SuperSpeed++)";
-        } else {
-            gchar *res = g_strdup_printf ("USB %s (%d Mbps)", version_str, speed_val);
-            g_free (speed_str);
-            g_free (version_str);
-            return res;
-        }
+    puls_usb_bridge_info_clear (out_info);
 
-        gchar *res = g_strdup_printf ("USB %s | %s", version_str, gen);
-        g_free (speed_str);
-        g_free (version_str);
+    g_autofree gchar *p_speed   = g_build_filename (usb_dir, "speed", NULL);
+    g_autofree gchar *p_version = g_build_filename (usb_dir, "version", NULL);
+    g_autofree gchar *p_vid     = g_build_filename (usb_dir, "idVendor", NULL);
+    g_autofree gchar *p_pid     = g_build_filename (usb_dir, "idProduct", NULL);
+    g_autofree gchar *p_mfg     = g_build_filename (usb_dir, "manufacturer", NULL);
+    g_autofree gchar *p_prod    = g_build_filename (usb_dir, "product", NULL);
+    g_autofree gchar *p_serial  = g_build_filename (usb_dir, "serial", NULL);
+
+    out_info->speed_mbps = puls_sysfs_read_uint64 (p_speed, 0, NULL);
+    out_info->speed = puls_usb_speed_from_mbps (out_info->speed_mbps);
+
+    out_info->version = puls_sysfs_read_string (p_version, 32);
+    out_info->vendor_id = puls_sysfs_read_string (p_vid, 32);
+    out_info->product_id = puls_sysfs_read_string (p_pid, 32);
+    out_info->manufacturer = puls_sysfs_read_string (p_mfg, 128);
+    out_info->product = puls_sysfs_read_string (p_prod, 128);
+    out_info->serial = puls_sysfs_read_string (p_serial, 128);
+
+    out_info->bridge_chip = puls_identify_usb_bridge_chip (out_info->vendor_id,
+                                                           out_info->product_id,
+                                                           out_info->manufacturer,
+                                                           out_info->product);
+
+    const gchar *badge = puls_usb_speed_to_generation_badge (out_info->speed);
+    if (out_info->bridge_chip && out_info->bridge_chip[0] != '\0') {
+        out_info->display_string = g_strdup_printf ("%s | %s", badge, out_info->bridge_chip);
+    } else if (out_info->product && out_info->product[0] != '\0') {
+        out_info->display_string = g_strdup_printf ("%s | %s", badge, out_info->product);
+    } else {
+        out_info->display_string = g_strdup (badge);
+    }
+
+    out_info->device_dir = g_strdup (usb_dir);
+    return TRUE;
+}
+
+gboolean
+puls_sysfs_read_usb_bridge_info (const gchar       *device_name,
+                                 PulsUsbBridgeInfo *out_info)
+{
+    if (device_name == NULL || out_info == NULL)
+        return FALSE;
+
+    g_autofree gchar *usb_dir = puls_sysfs_find_usb_device_dir (device_name);
+    if (usb_dir == NULL)
+        return FALSE;
+
+    return puls_sysfs_read_usb_bridge_info_from_dir (usb_dir, out_info);
+}
+
+gchar *
+puls_detect_usb_speed_version (const gchar *device_name)
+{
+    if (device_name == NULL)
+        return NULL;
+
+    PulsUsbBridgeInfo info = { 0 };
+    if (puls_sysfs_read_usb_bridge_info (device_name, &info)) {
+        gchar *res = g_strdup (info.display_string);
+        puls_usb_bridge_info_clear (&info);
         return res;
     }
 
-    g_free (speed_str);
-    g_free (version_str);
     return NULL;
 }
 

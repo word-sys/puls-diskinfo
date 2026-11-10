@@ -162,6 +162,8 @@ struct _PulsSmartData {
     guint64            tbw_rating_bytes;
     gint               wear_level_percent;
     GArray            *thermal_sensors;
+    PulsUsbSpeed       usb_speed;
+    gchar             *usb_bridge_chip;
 };
 
 G_DEFINE_TYPE (PulsSmartData, puls_smart_data, G_TYPE_OBJECT)
@@ -203,6 +205,8 @@ puls_smart_data_finalize (GObject *object)
         }
         g_array_free (self->thermal_sensors, TRUE);
     }
+
+    g_free (self->usb_bridge_chip);
 
     G_OBJECT_CLASS (puls_smart_data_parent_class)->finalize (object);
 }
@@ -268,6 +272,8 @@ puls_smart_data_init (PulsSmartData *self)
     self->tbw_rating_bytes         = 0;
     self->wear_level_percent       = -1;
     self->thermal_sensors          = g_array_new (FALSE, TRUE, sizeof (PulsThermalSensor));
+    self->usb_speed                = PULS_USB_SPEED_UNKNOWN;
+    self->usb_bridge_chip          = NULL;
 }
 
 
@@ -925,6 +931,35 @@ puls_smart_data_set_protocol_version (PulsSmartData *self, const gchar *val)
     self->protocol_version = g_strdup (val);
 }
 
+PulsUsbSpeed
+puls_smart_data_get_usb_speed (PulsSmartData *self)
+{
+    g_return_val_if_fail (PULS_IS_SMART_DATA (self), PULS_USB_SPEED_UNKNOWN);
+    return self->usb_speed;
+}
+
+void
+puls_smart_data_set_usb_speed (PulsSmartData *self, PulsUsbSpeed speed)
+{
+    g_return_if_fail (PULS_IS_SMART_DATA (self));
+    self->usb_speed = speed;
+}
+
+const gchar *
+puls_smart_data_get_usb_bridge_chip (PulsSmartData *self)
+{
+    g_return_val_if_fail (PULS_IS_SMART_DATA (self), NULL);
+    return self->usb_bridge_chip;
+}
+
+void
+puls_smart_data_set_usb_bridge_chip (PulsSmartData *self, const gchar *chip)
+{
+    g_return_if_fail (PULS_IS_SMART_DATA (self));
+    g_free (self->usb_bridge_chip);
+    self->usb_bridge_chip = g_strdup (chip);
+}
+
 guint64
 puls_smart_data_get_tbw_rating_bytes (PulsSmartData *self)
 {
@@ -1128,4 +1163,86 @@ puls_sector_format_detect (guint32 logical, guint32 physical)
         return PULS_SECTOR_FORMAT_4KN;
 
     return PULS_SECTOR_FORMAT_OTHER;
+}
+
+const gchar *
+puls_usb_speed_to_string (PulsUsbSpeed speed)
+{
+    switch (speed) {
+    case PULS_USB_SPEED_LOW:           return "USB 1.0 Low-Speed (1.5 Mbps)";
+    case PULS_USB_SPEED_FULL:          return "USB 1.1 Full-Speed (12 Mbps)";
+    case PULS_USB_SPEED_HIGH:          return "USB 2.0 High-Speed (480 Mbps)";
+    case PULS_USB_SPEED_SUPER:         return "USB 3.0 SuperSpeed (5 Gbps)";
+    case PULS_USB_SPEED_SUPER_PLUS:    return "USB 3.1 SuperSpeed+ (10 Gbps)";
+    case PULS_USB_SPEED_SUPER_PLUS_X2: return "USB 3.2 SuperSpeed++ (20 Gbps)";
+    case PULS_USB_SPEED_USB4_40G:      return "USB4 (40 Gbps)";
+    case PULS_USB_SPEED_USB4_80G:      return "USB4 2.0 (80 Gbps)";
+    case PULS_USB_SPEED_UNKNOWN:
+    default:                           return "Unknown";
+    }
+}
+
+const gchar *
+puls_usb_speed_to_generation_badge (PulsUsbSpeed speed)
+{
+    switch (speed) {
+    case PULS_USB_SPEED_LOW:           return "USB 1.0 (1.5M)";
+    case PULS_USB_SPEED_FULL:          return "USB 1.1 (12M)";
+    case PULS_USB_SPEED_HIGH:          return "USB 2.0 (480M)";
+    case PULS_USB_SPEED_SUPER:         return "USB 3.0 (5G)";
+    case PULS_USB_SPEED_SUPER_PLUS:    return "USB 3.1 (10G)";
+    case PULS_USB_SPEED_SUPER_PLUS_X2: return "USB 3.2 (20G)";
+    case PULS_USB_SPEED_USB4_40G:      return "USB4 (40G)";
+    case PULS_USB_SPEED_USB4_80G:      return "USB4 (80G)";
+    case PULS_USB_SPEED_UNKNOWN:
+    default:                           return "USB";
+    }
+}
+
+PulsUsbSpeed
+puls_usb_speed_from_mbps (guint64 mbps)
+{
+    if (mbps == 0)
+        return PULS_USB_SPEED_UNKNOWN;
+    if (mbps <= 2)
+        return PULS_USB_SPEED_LOW;
+    if (mbps <= 12)
+        return PULS_USB_SPEED_FULL;
+    if (mbps <= 480)
+        return PULS_USB_SPEED_HIGH;
+    if (mbps <= 5000)
+        return PULS_USB_SPEED_SUPER;
+    if (mbps <= 10000)
+        return PULS_USB_SPEED_SUPER_PLUS;
+    if (mbps <= 20000)
+        return PULS_USB_SPEED_SUPER_PLUS_X2;
+    if (mbps <= 40000)
+        return PULS_USB_SPEED_USB4_40G;
+    return PULS_USB_SPEED_USB4_80G;
+}
+
+PulsUsbSpeed
+puls_usb_speed_from_string (const gchar *str)
+{
+    if (str == NULL)
+        return PULS_USB_SPEED_UNKNOWN;
+
+    if (strstr (str, "80G") || strstr (str, "80000"))
+        return PULS_USB_SPEED_USB4_80G;
+    if (strstr (str, "40G") || strstr (str, "40000") || strstr (str, "USB4"))
+        return PULS_USB_SPEED_USB4_40G;
+    if (strstr (str, "20G") || strstr (str, "20000") || strstr (str, "Gen 2x2") || strstr (str, "Gen2x2") || strstr (str, "SuperSpeed++"))
+        return PULS_USB_SPEED_SUPER_PLUS_X2;
+    if (strstr (str, "10G") || strstr (str, "10000") || strstr (str, "USB 3.1") || strstr (str, "SuperSpeed+"))
+        return PULS_USB_SPEED_SUPER_PLUS;
+    if (strstr (str, "5G") || strstr (str, "5000") || strstr (str, "USB 3.0") || strstr (str, "SuperSpeed"))
+        return PULS_USB_SPEED_SUPER;
+    if (strstr (str, "480") || strstr (str, "USB 2.0") || strstr (str, "High-Speed"))
+        return PULS_USB_SPEED_HIGH;
+    if (strstr (str, "12M") || strstr (str, "12") || strstr (str, "Full-Speed"))
+        return PULS_USB_SPEED_FULL;
+    if (strstr (str, "1.5M") || strstr (str, "Low-Speed"))
+        return PULS_USB_SPEED_LOW;
+
+    return PULS_USB_SPEED_UNKNOWN;
 }

@@ -810,6 +810,162 @@ test_pcie_link_inspector (void)
     }
 }
 
+static void
+test_usb_speed_and_bridge_inspector (void)
+{
+    /* 1. Enum mappings & Mbps rate conversions */
+    g_assert_cmpint (puls_usb_speed_from_mbps (1),     ==, PULS_USB_SPEED_LOW);
+    g_assert_cmpint (puls_usb_speed_from_mbps (12),    ==, PULS_USB_SPEED_FULL);
+    g_assert_cmpint (puls_usb_speed_from_mbps (480),   ==, PULS_USB_SPEED_HIGH);
+    g_assert_cmpint (puls_usb_speed_from_mbps (5000),  ==, PULS_USB_SPEED_SUPER);
+    g_assert_cmpint (puls_usb_speed_from_mbps (10000), ==, PULS_USB_SPEED_SUPER_PLUS);
+    g_assert_cmpint (puls_usb_speed_from_mbps (20000), ==, PULS_USB_SPEED_SUPER_PLUS_X2);
+    g_assert_cmpint (puls_usb_speed_from_mbps (40000), ==, PULS_USB_SPEED_USB4_40G);
+    g_assert_cmpint (puls_usb_speed_from_mbps (80000), ==, PULS_USB_SPEED_USB4_80G);
+    g_assert_cmpint (puls_usb_speed_from_mbps (0),     ==, PULS_USB_SPEED_UNKNOWN);
+
+    /* 2. String parsing */
+    g_assert_cmpint (puls_usb_speed_from_string ("480"),         ==, PULS_USB_SPEED_HIGH);
+    g_assert_cmpint (puls_usb_speed_from_string ("480M"),        ==, PULS_USB_SPEED_HIGH);
+    g_assert_cmpint (puls_usb_speed_from_string ("USB 2.0"),     ==, PULS_USB_SPEED_HIGH);
+    g_assert_cmpint (puls_usb_speed_from_string ("5000"),        ==, PULS_USB_SPEED_SUPER);
+    g_assert_cmpint (puls_usb_speed_from_string ("5G"),          ==, PULS_USB_SPEED_SUPER);
+    g_assert_cmpint (puls_usb_speed_from_string ("USB 3.0"),     ==, PULS_USB_SPEED_SUPER);
+    g_assert_cmpint (puls_usb_speed_from_string ("10000"),       ==, PULS_USB_SPEED_SUPER_PLUS);
+    g_assert_cmpint (puls_usb_speed_from_string ("10G"),         ==, PULS_USB_SPEED_SUPER_PLUS);
+    g_assert_cmpint (puls_usb_speed_from_string ("USB 3.1"),     ==, PULS_USB_SPEED_SUPER_PLUS);
+    g_assert_cmpint (puls_usb_speed_from_string ("20000"),       ==, PULS_USB_SPEED_SUPER_PLUS_X2);
+    g_assert_cmpint (puls_usb_speed_from_string ("20G"),         ==, PULS_USB_SPEED_SUPER_PLUS_X2);
+    g_assert_cmpint (puls_usb_speed_from_string ("Gen 2x2"),     ==, PULS_USB_SPEED_SUPER_PLUS_X2);
+    g_assert_cmpint (puls_usb_speed_from_string ("40000"),       ==, PULS_USB_SPEED_USB4_40G);
+    g_assert_cmpint (puls_usb_speed_from_string ("40G"),         ==, PULS_USB_SPEED_USB4_40G);
+    g_assert_cmpint (puls_usb_speed_from_string ("USB4"),        ==, PULS_USB_SPEED_USB4_40G);
+    g_assert_cmpint (puls_usb_speed_from_string (NULL),          ==, PULS_USB_SPEED_UNKNOWN);
+    g_assert_cmpint (puls_usb_speed_from_string ("nonexistent"), ==, PULS_USB_SPEED_UNKNOWN);
+
+    /* 3. Generation badges */
+    g_assert_cmpstr (puls_usb_speed_to_generation_badge (PULS_USB_SPEED_LOW),           ==, "USB 1.0 (1.5M)");
+    g_assert_cmpstr (puls_usb_speed_to_generation_badge (PULS_USB_SPEED_FULL),          ==, "USB 1.1 (12M)");
+    g_assert_cmpstr (puls_usb_speed_to_generation_badge (PULS_USB_SPEED_HIGH),          ==, "USB 2.0 (480M)");
+    g_assert_cmpstr (puls_usb_speed_to_generation_badge (PULS_USB_SPEED_SUPER),         ==, "USB 3.0 (5G)");
+    g_assert_cmpstr (puls_usb_speed_to_generation_badge (PULS_USB_SPEED_SUPER_PLUS),    ==, "USB 3.1 (10G)");
+    g_assert_cmpstr (puls_usb_speed_to_generation_badge (PULS_USB_SPEED_SUPER_PLUS_X2), ==, "USB 3.2 (20G)");
+    g_assert_cmpstr (puls_usb_speed_to_generation_badge (PULS_USB_SPEED_USB4_40G),      ==, "USB4 (40G)");
+    g_assert_cmpstr (puls_usb_speed_to_generation_badge (PULS_USB_SPEED_USB4_80G),      ==, "USB4 (80G)");
+    g_assert_cmpstr (puls_usb_speed_to_generation_badge (PULS_USB_SPEED_UNKNOWN),       ==, "USB");
+
+    /* 4. Bridge chip identification database */
+    g_autofree gchar *b1 = puls_identify_usb_bridge_chip ("174c", "2362", "ASMedia", "ASM2362 NVMe");
+    g_assert_nonnull (b1);
+    g_assert_true (strstr (b1, "ASM2362") != NULL);
+
+    g_autofree gchar *b2 = puls_identify_usb_bridge_chip ("0bda", "9210", "Realtek", "RTL9210B-CG");
+    g_assert_nonnull (b2);
+    g_assert_true (strstr (b2, "RTL9210") != NULL);
+
+    g_autofree gchar *b3 = puls_identify_usb_bridge_chip ("152d", "0583", "JMicron", "JMS583 NVMe");
+    g_assert_nonnull (b3);
+    g_assert_true (strstr (b3, "JMS583") != NULL);
+
+    g_autofree gchar *b4 = puls_identify_usb_bridge_chip ("174c", "2364", "ASMedia", "ASM2364");
+    g_assert_nonnull (b4);
+    g_assert_true (strstr (b4, "ASM2364") != NULL);
+
+    g_assert_null (puls_identify_usb_bridge_chip (NULL, NULL, NULL, NULL));
+
+    /* 5. Mock USB sysfs hierarchy */
+    GError *error = NULL;
+    g_autofree gchar *tmp_dir = g_dir_make_tmp ("puls-usb-mock-XXXXXX", &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (tmp_dir);
+
+    g_autofree gchar *f_spd = g_build_filename (tmp_dir, "speed", NULL);
+    g_autofree gchar *f_ver = g_build_filename (tmp_dir, "version", NULL);
+    g_autofree gchar *f_vid = g_build_filename (tmp_dir, "idVendor", NULL);
+    g_autofree gchar *f_pid = g_build_filename (tmp_dir, "idProduct", NULL);
+    g_autofree gchar *f_mfg = g_build_filename (tmp_dir, "manufacturer", NULL);
+    g_autofree gchar *f_prd = g_build_filename (tmp_dir, "product", NULL);
+    g_autofree gchar *f_ser = g_build_filename (tmp_dir, "serial", NULL);
+
+    g_file_set_contents (f_spd, "10000\n", -1, &error);
+    g_assert_no_error (error);
+    g_file_set_contents (f_ver, " 3.10\n", -1, &error);
+    g_assert_no_error (error);
+    g_file_set_contents (f_vid, "174c\n", -1, &error);
+    g_assert_no_error (error);
+    g_file_set_contents (f_pid, "2362\n", -1, &error);
+    g_assert_no_error (error);
+    g_file_set_contents (f_mfg, "ASMedia\n", -1, &error);
+    g_assert_no_error (error);
+    g_file_set_contents (f_prd, "ASM2362 Enclosure\n", -1, &error);
+    g_assert_no_error (error);
+    g_file_set_contents (f_ser, "MS0987654321\n", -1, &error);
+    g_assert_no_error (error);
+
+    PulsUsbBridgeInfo usb_info = { 0 };
+    gboolean read_ok = puls_sysfs_read_usb_bridge_info_from_dir (tmp_dir, &usb_info);
+    g_assert_true (read_ok);
+    g_assert_cmpint (usb_info.speed, ==, PULS_USB_SPEED_SUPER_PLUS);
+    g_assert_cmpuint (usb_info.speed_mbps, ==, 10000);
+    g_assert_cmpstr (usb_info.vendor_id, ==, "174c");
+    g_assert_cmpstr (usb_info.product_id, ==, "2362");
+    g_assert_nonnull (usb_info.bridge_chip);
+    g_assert_true (strstr (usb_info.bridge_chip, "ASM2362") != NULL);
+    g_assert_nonnull (usb_info.display_string);
+    g_assert_true (strstr (usb_info.display_string, "USB 3.1 (10G)") != NULL);
+    g_assert_true (strstr (usb_info.display_string, "ASM2362") != NULL);
+    puls_usb_bridge_info_clear (&usb_info);
+
+    /* Test USB 2.0 fallback */
+    g_file_set_contents (f_spd, "480\n", -1, &error);
+    g_assert_no_error (error);
+    g_file_set_contents (f_vid, "058f\n", -1, &error);
+    g_assert_no_error (error);
+    g_file_set_contents (f_pid, "6387\n", -1, &error);
+    g_assert_no_error (error);
+    g_file_set_contents (f_prd, "Flash Disk\n", -1, &error);
+    g_assert_no_error (error);
+
+    read_ok = puls_sysfs_read_usb_bridge_info_from_dir (tmp_dir, &usb_info);
+    g_assert_true (read_ok);
+    g_assert_cmpint (usb_info.speed, ==, PULS_USB_SPEED_HIGH);
+    g_assert_cmpuint (usb_info.speed_mbps, ==, 480);
+    g_assert_nonnull (usb_info.display_string);
+    g_assert_true (strstr (usb_info.display_string, "USB 2.0 (480M)") != NULL);
+    puls_usb_bridge_info_clear (&usb_info);
+
+    /* Cleanup mock files */
+    unlink (f_spd);
+    unlink (f_ver);
+    unlink (f_vid);
+    unlink (f_pid);
+    unlink (f_mfg);
+    unlink (f_prd);
+    unlink (f_ser);
+    rmdir (tmp_dir);
+
+    /* 6. PulsSmartData accessors */
+    g_autoptr(PulsSmartData) d = puls_smart_data_new ();
+    g_assert_cmpint (puls_smart_data_get_usb_speed (d), ==, PULS_USB_SPEED_UNKNOWN);
+    g_assert_null (puls_smart_data_get_usb_bridge_chip (d));
+
+    puls_smart_data_set_usb_speed (d, PULS_USB_SPEED_SUPER_PLUS_X2);
+    puls_smart_data_set_usb_bridge_chip (d, "ASMedia ASM2364 NVMe-USB Bridge");
+    g_assert_cmpint (puls_smart_data_get_usb_speed (d), ==, PULS_USB_SPEED_SUPER_PLUS_X2);
+    g_assert_cmpstr (puls_smart_data_get_usb_bridge_chip (d), ==, "ASMedia ASM2364 NVMe-USB Bridge");
+
+    /* 7. Edge cases & error safety */
+    PulsUsbBridgeInfo empty = { 0 };
+    g_assert_false (puls_sysfs_read_usb_bridge_info_from_dir (NULL, &empty));
+    g_assert_false (puls_sysfs_read_usb_bridge_info_from_dir ("/path/not/exist", &empty));
+    g_assert_false (puls_sysfs_read_usb_bridge_info (NULL, &empty));
+    g_assert_false (puls_sysfs_read_usb_bridge_info ("../invalid", &empty));
+    g_assert_null (puls_sysfs_find_usb_device_dir (NULL));
+    g_assert_null (puls_sysfs_find_usb_device_dir ("nonexistent_dev_xyz"));
+    g_assert_null (puls_detect_usb_speed_version (NULL));
+    g_assert_null (puls_detect_usb_speed_version ("nonexistent_dev_xyz"));
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -827,6 +983,7 @@ main (int argc, char *argv[])
     g_test_add_func ("/basic/hwmon-temperature", test_hwmon_temperature);
     g_test_add_func ("/basic/queue-attributes-trim", test_queue_attributes_trim);
     g_test_add_func ("/basic/pcie-link-inspector", test_pcie_link_inspector);
+    g_test_add_func ("/basic/usb-speed-and-bridge", test_usb_speed_and_bridge_inspector);
 
     return g_test_run ();
 }

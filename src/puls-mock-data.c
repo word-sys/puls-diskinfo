@@ -234,7 +234,9 @@ create_mock_usb_drive (void)
     puls_smart_data_set_serial_number (d, "322109845612");
     puls_smart_data_set_firmware_version (d, "1012");
     puls_smart_data_set_interface_type (d, "USB");
-    puls_smart_data_set_transfer_mode (d, "USB 3.2 (SuperSpeed++)");
+    puls_smart_data_set_transfer_mode (d, "USB 3.2 (20G) | ASMedia ASM2364 NVMe-USB Bridge");
+    puls_smart_data_set_usb_speed (d, PULS_USB_SPEED_SUPER_PLUS_X2);
+    puls_smart_data_set_usb_bridge_chip (d, "ASMedia ASM2364 NVMe-USB Bridge");
     puls_smart_data_set_standard (d, "NVM Express 1.3 (via Bridge)");
     puls_smart_data_set_form_factor (d, "USB Drive / External");
     puls_smart_data_set_capacity_bytes (d, 1000204886016ULL);

@@ -301,15 +301,27 @@ puls_smart_data_fill_sysfs_fallbacks (PulsSmartData *data)
     }
 
     const gchar *iface = puls_smart_data_get_interface_type (data);
-    if (dtype == PULS_DRIVE_TYPE_USB) {
+    if (dtype == PULS_DRIVE_TYPE_USB || transport == PULS_TRANSPORT_USB) {
         if (iface == NULL || strlen (iface) == 0 || g_strcmp0 (iface, "Unknown") == 0 || g_ascii_strcasecmp (iface, "usb") == 0) {
             puls_smart_data_set_interface_type (data, "USB");
         }
-        const gchar *tmode = puls_smart_data_get_transfer_mode (data);
-        if (tmode == NULL || strlen (tmode) == 0) {
-            g_autofree gchar *usb_mode = puls_detect_usb_speed_version (base);
-            if (usb_mode) {
-                puls_smart_data_set_transfer_mode (data, usb_mode);
+        PulsUsbBridgeInfo usb_info = { 0 };
+        if (puls_sysfs_read_usb_bridge_info (base, &usb_info)) {
+            puls_smart_data_set_usb_speed (data, usb_info.speed);
+            if (usb_info.bridge_chip)
+                puls_smart_data_set_usb_bridge_chip (data, usb_info.bridge_chip);
+
+            const gchar *tmode = puls_smart_data_get_transfer_mode (data);
+            if ((tmode == NULL || strlen (tmode) == 0) && usb_info.display_string)
+                puls_smart_data_set_transfer_mode (data, usb_info.display_string);
+
+            puls_usb_bridge_info_clear (&usb_info);
+        } else {
+            const gchar *tmode = puls_smart_data_get_transfer_mode (data);
+            if (tmode == NULL || strlen (tmode) == 0) {
+                g_autofree gchar *usb_mode = puls_detect_usb_speed_version (base);
+                if (usb_mode)
+                    puls_smart_data_set_transfer_mode (data, usb_mode);
             }
         }
     } else if (dtype == PULS_DRIVE_TYPE_NVME_SSD || transport == PULS_TRANSPORT_PCIE) {

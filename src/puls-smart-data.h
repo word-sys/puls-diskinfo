@@ -73,6 +73,18 @@ typedef enum {
     PULS_SECTOR_FORMAT_OTHER
 } PulsSectorFormat;
 
+typedef enum {
+    PULS_USB_SPEED_UNKNOWN = 0,
+    PULS_USB_SPEED_LOW,           /* 1.5 Mbps (USB 1.0 Low-Speed) */
+    PULS_USB_SPEED_FULL,          /* 12 Mbps (USB 1.1 Full-Speed) */
+    PULS_USB_SPEED_HIGH,          /* 480 Mbps (USB 2.0 High-Speed) */
+    PULS_USB_SPEED_SUPER,         /* 5000 Mbps / 5 Gbps (USB 3.0 / USB 3.2 Gen 1 SuperSpeed) */
+    PULS_USB_SPEED_SUPER_PLUS,    /* 10000 Mbps / 10 Gbps (USB 3.1 / USB 3.2 Gen 2 SuperSpeed+) */
+    PULS_USB_SPEED_SUPER_PLUS_X2, /* 20000 Mbps / 20 Gbps (USB 3.2 Gen 2x2 SuperSpeed++) */
+    PULS_USB_SPEED_USB4_40G,      /* 40000 Mbps / 40 Gbps (USB4 40Gbps) */
+    PULS_USB_SPEED_USB4_80G       /* 80000 Mbps / 80 Gbps (USB4 80Gbps / USB4 2.0) */
+} PulsUsbSpeed;
+
 typedef struct {
     gchar *name;
     gint   temperature;
@@ -259,6 +271,16 @@ const gchar          *puls_pcie_generation_to_max_speed_str (PulsPcieGeneration 
 
 const gchar          *puls_sector_format_to_string       (PulsSectorFormat format);
 PulsSectorFormat      puls_sector_format_detect          (guint32 logical, guint32 physical);
+
+const gchar          *puls_usb_speed_to_string            (PulsUsbSpeed speed);
+const gchar          *puls_usb_speed_to_generation_badge  (PulsUsbSpeed speed);
+PulsUsbSpeed          puls_usb_speed_from_mbps            (guint64 mbps);
+PulsUsbSpeed          puls_usb_speed_from_string          (const gchar *str);
+
+PulsUsbSpeed          puls_smart_data_get_usb_speed       (PulsSmartData *self);
+void                  puls_smart_data_set_usb_speed       (PulsSmartData *self, PulsUsbSpeed speed);
+const gchar          *puls_smart_data_get_usb_bridge_chip (PulsSmartData *self);
+void                  puls_smart_data_set_usb_bridge_chip (PulsSmartData *self, const gchar *chip);
 
 gint             puls_smart_data_get_health_percent          (PulsSmartData *self);
 gint             puls_smart_data_get_estimated_lifetime_days (PulsSmartData *self);
