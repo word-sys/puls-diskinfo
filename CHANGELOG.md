@@ -4,6 +4,18 @@ All notable changes to **PULS DiskInfo** will be documented in this file.
 
 ---
 
+## [1.1.4] - 2026-11-11
+
+### Added
+- **Direct Unprivileged `hwmon` Temperature Monitoring**: Read drive thermal sensors directly via kernel `/sys/block/<dev>/device/hwmon*/temp*_input` without requiring root or external utilities.
+- **PCIe Link Speed & Width Inspector**: Identify negotiated and maximum PCIe generations (Gen 1 through Gen 6) and lane widths (x1 to x16) with link downgrade detection.
+- **USB Speed & Bridge Controller Identification**: Accurately categorize USB connections (USB 2.0 480M, USB 3.0 5G, USB 3.1 10G, USB 3.2 20G, USB4 40G/80G) and identify bridge controller chipsets (ASMedia, Realtek, JMicron, Genesys Logic, VIA, Innostor, Phison).
+- **Enhanced Partition & Mount Point Mapper**: Recursively trace multi-layer device mapper devices (dm-crypt/LUKS, LVM) and parent block devices to build an exhaustive partition and mount point inventory.
+- **Dual Storage Capacity Formatters**: Support Decimal SI (1 TB = 10^12 B), Binary IEC (1 TiB = 2^40 B), and Dual format (`512.1 GB (476.9 GiB)`) with exact byte precision and persistent user preference toggle in Preferences.
+- **Rich CLI Hardware Telemetry**: Extended both `--headless` human-readable terminal report and `--headless --json` structured output with complete sysfs parameters, sector sizes, TRIM/discard status, write cache, and partition inventories.
+
+---
+
 ## [1.1.3] - 2026-11-05
 
 ### Added

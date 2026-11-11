@@ -23,12 +23,15 @@ A highly detailed storage health and S.M.A.R.T. monitoring application for Linux
 
 - **Multi-Drive Support**: Enumerate and monitor multiple drives (NVMe SSD, SATA SSD, SSHD, HDD, USB, etc.).
 - **Health Indicators**: Clear, color-coded health badges (Good, Caution, Bad) based on S.M.A.R.T. attributes.
-- **Real-Time Temperature**: Dynamic temperature thermometer gauge widget with safe ranges.
-- **S.M.A.R.T. Attributes Table**: Color-coded, sortable list of all standard attributes.
-- **NVMe Specific Logs**: Comprehensive health metrics for NVMe SSDs (available spare, percentage used, media errors, etc.).
+- **Real-Time Temperature & Unprivileged `hwmon`**: Dynamic thermometer widget with safe ranges and direct Linux kernel `hwmon` readout without root requirements.
+- **Hardware Topology & Bus Inspection**: Real-time PCIe link speed & width negotiation (PCIe Gen 1–6, e.g. PCIe 4.0 x4) and USB speed version classification (USB 2.0 to USB4) with bridge controller IC identification (ASMedia, Realtek, JMicron, etc.).
+- **Enhanced Partition & Mount Point Mapper**: Complete partition and volume inventory with full support for multi-layer device mapper setups (dm-crypt/LUKS, LVM).
+- **Dual Storage Capacity Units**: Display storage capacity in manufacturer Decimal SI (GB/TB), OS Binary IEC (GiB/TiB), or Dual format (`512.1 GB (476.9 GiB)`) with exact byte precision and persistent user toggle.
+- **S.M.A.R.T. Attributes Table**: Color-coded, sortable list of all standard attributes with trend tracking.
+- **NVMe Specific Logs**: Comprehensive health metrics for NVMe SSDs (available spare, percentage used, media errors, controller busy time, etc.).
 - **Headless & CLI Mode**: Run comprehensive disk scans directly in the terminal (`--headless`) or output structured JSON (`--json`) without a display server.
 - **Hardware Simulator**: Test and preview storage metrics with built-in mock drives (`--mock-disk`).
-- **Polkit Integration**: Clean privilege separation. The main GUI runs unprivileged, calling a small, auditable helper executable via `pkexec` when querying S.M.A.R.T. data.
+- **Polkit Integration**: Clean privilege separation. The main GUI runs unprivileged, calling a small, auditable helper executable via `pkexec` when querying privileged S.M.A.R.T. data.
 
 ---
 
@@ -113,21 +116,83 @@ meson test -C build-asan --verbose
 
 ## Installation & Packaging
 
-### Option A: Portable Release Tarball
-You can generate a self-contained release package with helper binaries, desktop integration, and install/uninstall scripts:
+PULS DiskInfo supports multiple installation and packaging methods:
 
+### Method 1: Pre-built Binaries from GitHub Releases
+
+Download the latest release for your distribution from [GitHub Releases](https://github.com/word-sys/puls-diskinfo/releases):
+
+#### A. Debian / Ubuntu Package (`.deb`)
 ```bash
-# Build the portable tarball
-./packaging/build-binary.sh
+sudo dpkg -i puls-diskinfo_1.1.4_amd64.deb
+# If dependencies are missing:
+sudo apt-get install -f
 ```
-The tarball will be saved in `dist/puls-diskinfo-1.1.3-linux-x86_64.tar.gz`.
 
-To install from the tarball:
+#### B. Standalone Universal AppImage (`.AppImage`)
+Runs on almost any modern Linux distribution without installation:
 ```bash
-tar xzf dist/puls-diskinfo-1.1.3-linux-x86_64.tar.gz
-cd puls-diskinfo-1.1.3-linux-x86_64
+chmod +x puls-diskinfo-1.1.4-linux-x86_64.AppImage
+./puls-diskinfo-1.1.4-linux-x86_64.AppImage
+```
+
+#### C. Portable Release Tarball (`.tar.gz`)
+Includes binaries, Polkit helper, desktop integration, and automated install scripts:
+```bash
+tar xzf puls-diskinfo-1.1.4-linux-x86_64.tar.gz
+cd puls-diskinfo-1.1.4-linux-x86_64
 sudo ./install.sh
 ```
+To uninstall later:
+```bash
+sudo ./uninstall.sh
+```
+
+---
+
+### Method 2: System-wide Build & Install from Source (Meson)
+
+You can compile and install directly to `/usr` or `/usr/local`:
+
+```bash
+# Configure for system installation
+meson setup build --prefix=/usr
+
+# Compile all components
+meson compile -C build
+
+# Install binary, polkit actions, desktop files, and icons
+sudo meson install -C build
+```
+
+To uninstall:
+```bash
+sudo ninja -C build uninstall
+```
+
+---
+
+### Method 3: Build Packages Locally
+
+Use the built-in packaging scripts to produce distributable packages:
+
+- **Build Debian Package (`.deb`)**:
+  ```bash
+  ./packaging/build-deb.sh
+  ```
+  The generated `.deb` package will be saved in `dist/`.
+
+- **Build Portable Tarball & Zip**:
+  ```bash
+  ./packaging/build-binary.sh
+  ```
+  Generates `dist/puls-diskinfo-1.1.4-linux-x86_64.tar.gz` and `.zip`.
+
+- **Build Universal AppImage**:
+  ```bash
+  ./packaging/build-appimage.sh
+  ```
+  Generates `dist/puls-diskinfo-1.1.4-linux-x86_64.AppImage`.
 
 ---
 

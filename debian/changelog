@@ -1,3 +1,14 @@
+puls-diskinfo (1.1.4) bookworm; urgency=medium
+
+  * Direct unprivileged hwmon drive temperature monitoring without root privileges
+  * PCIe link speed, width, and generation negotiation inspector (PCIe Gen 1-6)
+  * USB speed version categorization (USB 2.0 to USB4) and bridge chip identification
+  * Enhanced partition & multi-layer device-mapper (LUKS/LVM) mapping
+  * Dual storage capacity formatters (Decimal SI vs Binary IEC) with user preference toggle
+  * Rich hardware parameters populated in headless CLI and JSON telemetry modes
+
+ -- Barın Güzeldemirci <baringuzeldemir@gmail.com>  Wed, 11 Nov 2026 13:00:00 +0300
+
 puls-diskinfo (1.1.3) bookworm; urgency=medium
 
   * Architectural overhaul: headless CLI mode (--headless) and JSON output (--json)

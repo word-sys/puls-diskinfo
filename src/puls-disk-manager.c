@@ -389,6 +389,15 @@ puls_smart_data_fill_sysfs_fallbacks (PulsSmartData *data)
 
         if (!puls_smart_data_get_supports_write_cache (data) && q_attrs.write_cache_enabled)
             puls_smart_data_set_supports_write_cache (data, TRUE);
+
+        if (puls_smart_data_get_rotation_rpm (data) < 0) {
+            if (!q_attrs.rotational)
+                puls_smart_data_set_rotation_rpm (data, 0);
+        }
+    }
+
+    if (dtype == PULS_DRIVE_TYPE_NVME_SSD && puls_smart_data_get_rotation_rpm (data) < 0) {
+        puls_smart_data_set_rotation_rpm (data, 0);
     }
 
     const gchar *ff = puls_smart_data_get_form_factor (data);

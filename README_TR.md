@@ -21,8 +21,11 @@ Linux için GTK4 ve C ile geliştirilmiş, kapsamlı bir depolama sağlığı ve
 
 - **Çoklu Sürücü Desteği**: Birden fazla sürücüyü (NVMe SSD, SATA SSD, SSHD, HDD, USB vb.) listeler ve izler.
 - **Sağlık Göstergeleri**: S.M.A.R.T. niteliklerine dayalı net, renk kodlu sağlık rozetleri (İyi, Dikkat, Kötü).
-- **Gerçek Zamanlı Sıcaklık**: Güvenli aralıklarla dinamik sıcaklık termometre göstergesi.
-- **S.M.A.R.T. Nitelikleri Tablosu**: Tüm standart niteliklerin renk kodlu, sıralanabilir listesi.
+- **Gerçek Zamanlı Sıcaklık ve Yetkisiz `hwmon`**: Güvenli aralıklarla dinamik sıcaklık termometre göstergesi ve root yetkisi gerektirmeyen doğrudan çekirdek `hwmon` sıcaklık takibi.
+- **Donanım Topolojisi ve Veri Yolu İnceleme**: Gerçek zamanlı PCIe bağlantı hızı ve şerit genişliği (PCIe Gen 1–6, örn. PCIe 4.0 x4) ile USB hız sürümü sınıflandırması (USB 2.0 - USB4) ve köprü yonga seti tanımlama (ASMedia, Realtek, JMicron vb.).
+- **Gelişmiş Bölüm ve Bağlama Noktası Haritalayıcı**: Çok katmanlı aygıt eşleyici yapılandırmalarını (dm-crypt/LUKS, LVM) ve bağlı dosya sistemlerini eksiksiz listeler.
+- **İkili Depolama Kapasitesi Biçimlendirme**: Üretici standardı Ondalık SI (GB/TB), İşletim Sistemi İkili IEC (GiB/TiB) veya İkili kipte (`512.1 GB (476.9 GiB)`) tam bayt duyarlılığı ve kalıcı kullanıcı ayarı.
+- **S.M.A.R.T. Nitelikleri Tablosu**: Tüm standart niteliklerin renk kodlu, sıralanabilir listesi ve eğilim takibi.
 - **NVMe'ye Özgü Günlükler**: NVMe SSD'ler için kapsamlı sağlık ölçümleri (kullanılabilir yedek, kullanım yüzdesi, medya hataları vb.).
 - **Başsız (Headless) ve Uçbirim Kipi**: Ekran sunucusu olmadan doğrudan uçbirimden disk taraması (`--headless`) veya JSON çıktısı (`--json`) alma desteği.
 - **Donanım Simülatörü**: Yerleşik sanal sürücülerle (`--mock-disk`) test ve önizleme yapabilme.
@@ -112,26 +115,83 @@ meson test -C build-asan --verbose
 
 ## Kurulum ve Paketleme
 
-### Seçenek A: Taşınabilir Sürüm Arşivi
-Yardımcı ikili dosyaları, masaüstü entegrasyonu ve kurma/kaldırma betiklerini içeren bağımsız bir sürüm paketi oluşturabilirsiniz:
+PULS DiskInfo birden fazla kurulum ve paketleme yöntemini destekler:
 
+### Yöntem 1: GitHub Sürümlerinden Hazır Paketler
+
+Dağıtımınıza uygun en son sürümü [GitHub Sürümleri](https://github.com/word-sys/puls-diskinfo/releases) sayfasından indirin:
+
+#### A. Debian / Ubuntu Paketi (`.deb`)
 ```bash
-# Taşınabilir tarball oluştur
-./packaging/build-binary.sh
+sudo dpkg -i puls-diskinfo_1.1.4_amd64.deb
+# Bağımlılık eksikliği varsa:
+sudo apt-get install -f
 ```
-Arşiv `dist/puls-diskinfo-1.1.3-linux-x86_64.tar.gz` konumuna kaydedilir.
 
-Arşivden kurulum için:
+#### B. Bağımsız Evrensel AppImage (`.AppImage`)
+Neredeyse tüm modern Linux dağıtımlarında kurulum gerektirmeden çalışır:
 ```bash
-tar xzf dist/puls-diskinfo-1.1.3-linux-x86_64.tar.gz
-cd puls-diskinfo-1.1.3-linux-x86_64
+chmod +x puls-diskinfo-1.1.4-linux-x86_64.AppImage
+./puls-diskinfo-1.1.4-linux-x86_64.AppImage
+```
+
+#### C. Taşınabilir Sürüm Arşivi (`.tar.gz`)
+İkili dosyaları, Polkit yardımcısını, masaüstü entegrasyonunu ve otomatik kurulum betiklerini içerir:
+```bash
+tar xzf puls-diskinfo-1.1.4-linux-x86_64.tar.gz
+cd puls-diskinfo-1.1.4-linux-x86_64
 sudo ./install.sh
 ```
-
-### Seçenek B: Debian Paketi (.deb)
+Daha sonra kaldırmak için:
 ```bash
-./packaging/build-deb.sh
+sudo ./uninstall.sh
 ```
+
+---
+
+### Yöntem 2: Kaynak Koddan Sistem Geneline Derleme ve Kurulum (Meson)
+
+Uygulamayı doğrudan `/usr` dizinine derleyip kurabilirsiniz:
+
+```bash
+# Sistem kurulumu için yapılandır
+meson setup build --prefix=/usr
+
+# Tüm bileşenleri derle
+meson compile -C build
+
+# İkili dosya, polkit izinleri, masaüstü dosyası ve simgeleri kur
+sudo meson install -C build
+```
+
+Kaldırmak için:
+```bash
+sudo ninja -C build uninstall
+```
+
+---
+
+### Yöntem 3: Paketleri Yerel Olarak Derleme
+
+Dağıtılabilir paketler üretmek için yerleşik paketleme betiklerini kullanın:
+
+- **Debian Paketi Derleme (`.deb`)**:
+  ```bash
+  ./packaging/build-deb.sh
+  ```
+  Oluşturulan `.deb` paketi `dist/` dizinine kaydedilir.
+
+- **Taşınabilir Tarball ve Zip Derleme**:
+  ```bash
+  ./packaging/build-binary.sh
+  ```
+  `dist/puls-diskinfo-1.1.4-linux-x86_64.tar.gz` ve `.zip` üretilir.
+
+- **Evrensel AppImage Derleme**:
+  ```bash
+  ./packaging/build-appimage.sh
+  ```
+  `dist/puls-diskinfo-1.1.4-linux-x86_64.AppImage` üretilir.
 
 ---
 

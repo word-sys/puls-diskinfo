@@ -14,7 +14,7 @@
 #include "puls-settings.h"
 
 #ifndef PULS_VERSION
-#define PULS_VERSION "1.1.3"
+#define PULS_VERSION "1.1.4"
 #endif
 
 GResource *puls_diskinfo_get_resource (void);
@@ -1195,6 +1195,89 @@ test_capacity_formatters (void)
     puls_settings_set_capacity_unit (settings, orig_unit);
 }
 
+static void
+test_phase2_final_integration (void)
+{
+    /* 1. Mock Mode Integration */
+    PulsDiskManager *mgr_mock = puls_disk_manager_new ();
+    g_assert_nonnull (mgr_mock);
+    puls_disk_manager_set_mock_mode (mgr_mock, TRUE);
+    g_assert_true (puls_disk_manager_get_mock_mode (mgr_mock));
+
+    puls_disk_manager_scan (mgr_mock);
+    guint mock_count = puls_disk_manager_get_device_count (mgr_mock);
+    g_assert_cmpuint (mock_count, >, 0);
+
+    GList *mock_devs = puls_disk_manager_get_devices (mgr_mock);
+    g_assert_nonnull (mock_devs);
+
+    for (GList *l = mock_devs; l != NULL; l = l->next) {
+        const gchar *path = l->data;
+        PulsSmartData *data = puls_disk_manager_get_smart_data (mgr_mock, path);
+        g_assert_nonnull (data);
+        g_assert_cmpstr (puls_smart_data_get_device_path (data), ==, path);
+        g_assert_nonnull (puls_smart_data_get_model_name (data));
+        g_assert_cmpuint (puls_smart_data_get_capacity_bytes (data), >, 0);
+    }
+    g_object_unref (mgr_mock);
+
+    /* 2. Live Host Scan & Sysfs Fallback Engine Integration */
+    PulsDiskManager *mgr_live = puls_disk_manager_new ();
+    g_assert_nonnull (mgr_live);
+    puls_disk_manager_set_mock_mode (mgr_live, FALSE);
+    g_assert_false (puls_disk_manager_get_mock_mode (mgr_live));
+
+    puls_disk_manager_scan (mgr_live);
+    guint live_count = puls_disk_manager_get_device_count (mgr_live);
+
+    if (live_count > 0) {
+        GList *live_devs = puls_disk_manager_get_devices (mgr_live);
+        for (GList *l = live_devs; l != NULL; l = l->next) {
+            const gchar *path = l->data;
+            PulsSmartData *data = puls_disk_manager_get_smart_data (mgr_live, path);
+            g_assert_nonnull (data);
+            g_assert_cmpstr (puls_smart_data_get_device_path (data), ==, path);
+
+            /* Model, serial, firmware populated via sysfs */
+            g_assert_nonnull (puls_smart_data_get_model_name (data));
+            g_assert_nonnull (puls_smart_data_get_serial_number (data));
+            g_assert_nonnull (puls_smart_data_get_firmware_version (data));
+
+            /* Drive type, transport, and form factor */
+            PulsDriveType dtype = puls_smart_data_get_drive_type (data);
+            g_assert_cmpint (dtype, !=, PULS_DRIVE_TYPE_UNKNOWN);
+            g_assert_nonnull (puls_drive_type_to_string (dtype));
+
+            PulsTransportProtocol transport = puls_smart_data_get_transport_protocol (data);
+            g_assert_nonnull (puls_transport_protocol_to_string (transport));
+
+            const gchar *ff = puls_smart_data_get_form_factor (data);
+            g_assert_nonnull (ff);
+
+            /* Capacity */
+            guint64 cap = puls_smart_data_get_capacity_bytes (data);
+            g_assert_cmpuint (cap, >, 0);
+
+            /* Queue attributes: sectors, trim, write cache */
+            guint32 log_sec = puls_smart_data_get_logical_sector_size (data);
+            g_assert_cmpuint (log_sec, >, 0);
+
+            /* Partitions */
+            GList *parts = puls_get_disk_partitions (path);
+            if (parts != NULL) {
+                for (GList *p = parts; p != NULL; p = p->next) {
+                    PulsPartitionInfo *pinfo = p->data;
+                    g_assert_nonnull (pinfo->device_path);
+                    g_assert_nonnull (pinfo->mount_point);
+                    g_assert_nonnull (pinfo->fs_type);
+                }
+                g_list_free_full (parts, (GDestroyNotify)puls_partition_info_free);
+            }
+        }
+    }
+    g_object_unref (mgr_live);
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -1219,6 +1302,7 @@ main (int argc, char *argv[])
     g_test_add_func ("/basic/usb-speed-and-bridge", test_usb_speed_and_bridge_inspector);
     g_test_add_func ("/basic/partition-mount-mapper", test_partition_mount_mapper);
     g_test_add_func ("/basic/capacity-formatters", test_capacity_formatters);
+    g_test_add_func ("/basic/phase2-final-integration", test_phase2_final_integration);
 
     int result = g_test_run ();
 
