@@ -23,6 +23,7 @@ struct _PulsSettings {
     gboolean use_fahrenheit;
     gint     caution_temp;
     gint     theme_preference;
+    PulsCapacityUnit capacity_unit;
 
     gboolean alerts_enabled;
     gint     alert_temp_threshold;
@@ -73,7 +74,7 @@ puls_settings_load (PulsSettings *self)
     GError *error = NULL;
 
     if (!json_parser_load_from_file (parser, path, &error)) {
-        g_warning ("Failed to load settings: %s", error->message);
+        PULS_LOG_WARN ("Failed to load settings: %s", error->message);
         g_clear_error (&error);
         return;
     }
@@ -93,6 +94,9 @@ puls_settings_load (PulsSettings *self)
 
         if (json_object_has_member (root, "theme_preference"))
             self->theme_preference = json_object_get_int_member (root, "theme_preference");
+
+        if (json_object_has_member (root, "capacity_unit"))
+            self->capacity_unit = (PulsCapacityUnit)json_object_get_int_member (root, "capacity_unit");
 
         if (json_object_has_member (root, "alerts_enabled"))
             self->alerts_enabled = json_object_get_boolean_member (root, "alerts_enabled");
@@ -115,6 +119,7 @@ puls_settings_init (PulsSettings *self)
     self->use_fahrenheit = FALSE;
     self->caution_temp = 60;
     self->theme_preference = 0;
+    self->capacity_unit = PULS_CAPACITY_UNIT_DUAL;
     self->alerts_enabled        = TRUE;
     self->alert_temp_threshold   = 55;
     self->alert_health_threshold = 80;
@@ -205,6 +210,24 @@ puls_settings_set_theme_preference (PulsSettings *self, gint val)
     }
 }
 
+PulsCapacityUnit
+puls_settings_get_capacity_unit (PulsSettings *self)
+{
+    g_return_val_if_fail (PULS_IS_SETTINGS (self), PULS_CAPACITY_UNIT_DUAL);
+    return self->capacity_unit;
+}
+
+void
+puls_settings_set_capacity_unit (PulsSettings *self, PulsCapacityUnit unit)
+{
+    g_return_if_fail (PULS_IS_SETTINGS (self));
+    if (self->capacity_unit != unit) {
+        self->capacity_unit = unit;
+        puls_settings_save (self);
+        g_signal_emit (self, settings_changed_signal, 0);
+    }
+}
+
 void
 puls_settings_save (PulsSettings *self)
 {
@@ -230,6 +253,9 @@ puls_settings_save (PulsSettings *self)
     json_builder_set_member_name (builder, "theme_preference");
     json_builder_add_int_value (builder, self->theme_preference);
 
+    json_builder_set_member_name (builder, "capacity_unit");
+    json_builder_add_int_value (builder, (gint64)self->capacity_unit);
+
     json_builder_set_member_name (builder, "alerts_enabled");
     json_builder_add_boolean_value (builder, self->alerts_enabled);
 
@@ -251,7 +277,7 @@ puls_settings_save (PulsSettings *self)
 
     GError *error = NULL;
     if (!json_generator_to_file (gen, path, &error)) {
-        g_warning ("Failed to save settings: %s", error->message);
+        PULS_LOG_WARN ("Failed to save settings: %s", error->message);
         g_clear_error (&error);
     }
 }

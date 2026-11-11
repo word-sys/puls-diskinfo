@@ -14,6 +14,7 @@
 #pragma once
 
 #include <glib-object.h>
+#include "puls-utils.h"
 
 G_BEGIN_DECLS
 
@@ -33,6 +34,9 @@ void          puls_settings_set_caution_temp     (PulsSettings *self, gint val);
 
 gint          puls_settings_get_theme_preference (PulsSettings *self);
 void          puls_settings_set_theme_preference (PulsSettings *self, gint val);
+
+PulsCapacityUnit puls_settings_get_capacity_unit (PulsSettings *self);
+void             puls_settings_set_capacity_unit (PulsSettings *self, PulsCapacityUnit unit);
 
 void          puls_settings_save                 (PulsSettings *self);
 

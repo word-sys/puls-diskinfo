@@ -33,15 +33,18 @@ typedef struct {
 } ActionTaskData;
 
 gchar *
-puls_format_bytes (guint64 bytes)
+puls_format_bytes_decimal (guint64 bytes)
 {
     const gdouble KB = 1000.0;
     const gdouble MB = 1000.0 * 1000.0;
     const gdouble GB = 1000.0 * 1000.0 * 1000.0;
     const gdouble TB = 1000.0 * 1000.0 * 1000.0 * 1000.0;
     const gdouble PB = 1000.0 * 1000.0 * 1000.0 * 1000.0 * 1000.0;
+    const gdouble EB = 1000.0 * 1000.0 * 1000.0 * 1000.0 * 1000.0 * 1000.0;
 
-    if (bytes >= (guint64)PB)
+    if (bytes >= (guint64)EB)
+        return g_strdup_printf ("%.1f EB", (gdouble)bytes / EB);
+    else if (bytes >= (guint64)PB)
         return g_strdup_printf ("%.1f PB", (gdouble)bytes / PB);
     else if (bytes >= (guint64)TB)
         return g_strdup_printf ("%.1f TB", (gdouble)bytes / TB);
@@ -56,12 +59,79 @@ puls_format_bytes (guint64 bytes)
 }
 
 gchar *
-puls_format_bytes_exact (guint64 bytes)
+puls_format_bytes_binary (guint64 bytes)
 {
-    g_autofree gchar *formatted = puls_format_bytes (bytes);
+    const gdouble KiB = 1024.0;
+    const gdouble MiB = 1024.0 * 1024.0;
+    const gdouble GiB = 1024.0 * 1024.0 * 1024.0;
+    const gdouble TiB = 1024.0 * 1024.0 * 1024.0 * 1024.0;
+    const gdouble PiB = 1024.0 * 1024.0 * 1024.0 * 1024.0 * 1024.0;
+    const gdouble EiB = 1024.0 * 1024.0 * 1024.0 * 1024.0 * 1024.0 * 1024.0;
+
+    if (bytes >= (guint64)EiB)
+        return g_strdup_printf ("%.1f EiB", (gdouble)bytes / EiB);
+    else if (bytes >= (guint64)PiB)
+        return g_strdup_printf ("%.1f PiB", (gdouble)bytes / PiB);
+    else if (bytes >= (guint64)TiB)
+        return g_strdup_printf ("%.1f TiB", (gdouble)bytes / TiB);
+    else if (bytes >= (guint64)GiB)
+        return g_strdup_printf ("%.1f GiB", (gdouble)bytes / GiB);
+    else if (bytes >= (guint64)MiB)
+        return g_strdup_printf ("%.1f MiB", (gdouble)bytes / MiB);
+    else if (bytes >= (guint64)KiB)
+        return g_strdup_printf ("%.1f KiB", (gdouble)bytes / KiB);
+    else
+        return g_strdup_printf ("%" G_GUINT64_FORMAT " B", bytes);
+}
+
+gchar *
+puls_format_bytes_dual (guint64 bytes)
+{
+    if (bytes >= 1000) {
+        g_autofree gchar *dec = puls_format_bytes_decimal (bytes);
+        g_autofree gchar *bin = puls_format_bytes_binary (bytes);
+        return g_strdup_printf ("%s (%s)", dec, bin);
+    } else {
+        return g_strdup_printf ("%" G_GUINT64_FORMAT " B", bytes);
+    }
+}
+
+gchar *
+puls_format_capacity_unit (guint64 bytes, PulsCapacityUnit unit)
+{
+    switch (unit) {
+    case PULS_CAPACITY_UNIT_DECIMAL:
+        return puls_format_bytes_decimal (bytes);
+    case PULS_CAPACITY_UNIT_BINARY:
+        return puls_format_bytes_binary (bytes);
+    case PULS_CAPACITY_UNIT_DUAL:
+    default:
+        return puls_format_bytes_dual (bytes);
+    }
+}
+
+gchar *
+puls_format_capacity_unit_exact (guint64 bytes, PulsCapacityUnit unit)
+{
+    g_autofree gchar *formatted = puls_format_capacity_unit (bytes, unit);
     g_autofree gchar *exact = puls_format_number (bytes);
 
-    return g_strdup_printf ("%s (%s bytes)", formatted, exact);
+    if (unit == PULS_CAPACITY_UNIT_DUAL)
+        return g_strdup_printf ("%s [%s bytes]", formatted, exact);
+    else
+        return g_strdup_printf ("%s (%s bytes)", formatted, exact);
+}
+
+gchar *
+puls_format_bytes (guint64 bytes)
+{
+    return puls_format_bytes_decimal (bytes);
+}
+
+gchar *
+puls_format_bytes_exact (guint64 bytes)
+{
+    return puls_format_capacity_unit_exact (bytes, PULS_CAPACITY_UNIT_DUAL);
 }
 
 gchar *

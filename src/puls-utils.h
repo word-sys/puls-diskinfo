@@ -20,11 +20,22 @@
 G_BEGIN_DECLS
 
 
-gchar *puls_format_bytes       (guint64 bytes);
-gchar *puls_format_bytes_exact (guint64 bytes);
-gchar *puls_format_hours       (guint64 hours);
-gchar *puls_format_temperature (gint    celsius);
-gchar *puls_format_number      (guint64 number);
+typedef enum {
+    PULS_CAPACITY_UNIT_DUAL    = 0, /* Dual: "512.1 GB (476.9 GiB)" */
+    PULS_CAPACITY_UNIT_DECIMAL = 1, /* Decimal (SI, base 1000): "512.1 GB" */
+    PULS_CAPACITY_UNIT_BINARY  = 2  /* Binary (IEC, base 1024): "476.9 GiB" */
+} PulsCapacityUnit;
+
+gchar *puls_format_bytes              (guint64 bytes);
+gchar *puls_format_bytes_decimal      (guint64 bytes);
+gchar *puls_format_bytes_binary       (guint64 bytes);
+gchar *puls_format_bytes_dual         (guint64 bytes);
+gchar *puls_format_capacity_unit      (guint64 bytes, PulsCapacityUnit unit);
+gchar *puls_format_capacity_unit_exact(guint64 bytes, PulsCapacityUnit unit);
+gchar *puls_format_bytes_exact        (guint64 bytes);
+gchar *puls_format_hours              (guint64 hours);
+gchar *puls_format_temperature        (gint    celsius);
+gchar *puls_format_number             (guint64 number);
 
 
 typedef struct {

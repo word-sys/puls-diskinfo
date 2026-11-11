@@ -1684,10 +1684,16 @@ puls_disk_info_view_set_data (PulsDiskInfoView *self,
 
     guint64 cap = puls_smart_data_get_capacity_bytes (data);
     if (cap > 0) {
-        g_autofree gchar *cap_str = puls_format_bytes_exact (cap);
+        PulsSettings *settings = puls_settings_get_default ();
+        PulsCapacityUnit cap_unit = puls_settings_get_capacity_unit (settings);
+        g_autofree gchar *cap_str = puls_format_capacity_unit (cap, cap_unit);
+        g_autofree gchar *exact_str = puls_format_number (cap);
+        g_autofree gchar *tip = g_strdup_printf ("%" G_GUINT64_FORMAT " bytes (%s bytes)", cap, exact_str);
         gtk_label_set_text (GTK_LABEL (self->capacity_label), cap_str);
+        gtk_widget_set_tooltip_text (self->capacity_label, tip);
     } else {
         gtk_label_set_text (GTK_LABEL (self->capacity_label), "N/A");
+        gtk_widget_set_tooltip_text (self->capacity_label, NULL);
     }
 
     gint rpm = puls_smart_data_get_rotation_rpm (data);

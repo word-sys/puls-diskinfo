@@ -11,6 +11,7 @@
 #include "puls-disk-manager.h"
 #include "puls-mock-data.h"
 #include "puls-utils.h"
+#include "puls-settings.h"
 
 #ifndef PULS_VERSION
 #define PULS_VERSION "1.1.3"
@@ -1090,9 +1091,117 @@ test_partition_mount_mapper (void)
     }
 }
 
+static void
+test_capacity_formatters (void)
+{
+    /* 1. Decimal Format (SI, Base 1000) */
+    g_autofree gchar *dec_0 = puls_format_bytes_decimal (0);
+    g_assert_cmpstr (dec_0, ==, "0 B");
+
+    g_autofree gchar *dec_500 = puls_format_bytes_decimal (500);
+    g_assert_cmpstr (dec_500, ==, "500 B");
+
+    g_autofree gchar *dec_1k = puls_format_bytes_decimal (1000);
+    g_assert_cmpstr (dec_1k, ==, "1.0 KB");
+
+    g_autofree gchar *dec_1m = puls_format_bytes_decimal (1000000ULL);
+    g_assert_cmpstr (dec_1m, ==, "1.0 MB");
+
+    g_autofree gchar *dec_1g = puls_format_bytes_decimal (1000000000ULL);
+    g_assert_cmpstr (dec_1g, ==, "1.0 GB");
+
+    g_autofree gchar *dec_512g = puls_format_bytes_decimal (512110190592ULL);
+    g_assert_cmpstr (dec_512g, ==, "512.1 GB");
+
+    g_autofree gchar *dec_1t = puls_format_bytes_decimal (1000000000000ULL);
+    g_assert_cmpstr (dec_1t, ==, "1.0 TB");
+
+    g_autofree gchar *dec_2t = puls_format_bytes_decimal (2000000000000ULL);
+    g_assert_cmpstr (dec_2t, ==, "2.0 TB");
+
+    g_autofree gchar *dec_1p = puls_format_bytes_decimal (1000000000000000ULL);
+    g_assert_cmpstr (dec_1p, ==, "1.0 PB");
+
+    /* 2. Binary Format (IEC, Base 1024) */
+    g_autofree gchar *bin_0 = puls_format_bytes_binary (0);
+    g_assert_cmpstr (bin_0, ==, "0 B");
+
+    g_autofree gchar *bin_512 = puls_format_bytes_binary (512);
+    g_assert_cmpstr (bin_512, ==, "512 B");
+
+    g_autofree gchar *bin_1k = puls_format_bytes_binary (1024);
+    g_assert_cmpstr (bin_1k, ==, "1.0 KiB");
+
+    g_autofree gchar *bin_1m = puls_format_bytes_binary (1024ULL * 1024ULL);
+    g_assert_cmpstr (bin_1m, ==, "1.0 MiB");
+
+    g_autofree gchar *bin_1g = puls_format_bytes_binary (1024ULL * 1024ULL * 1024ULL);
+    g_assert_cmpstr (bin_1g, ==, "1.0 GiB");
+
+    g_autofree gchar *bin_476g = puls_format_bytes_binary (512110190592ULL);
+    g_assert_cmpstr (bin_476g, ==, "476.9 GiB");
+
+    g_autofree gchar *bin_1t = puls_format_bytes_binary (1024ULL * 1024ULL * 1024ULL * 1024ULL);
+    g_assert_cmpstr (bin_1t, ==, "1.0 TiB");
+
+    g_autofree gchar *bin_931g = puls_format_bytes_binary (1000000000000ULL);
+    g_assert_cmpstr (bin_931g, ==, "931.3 GiB");
+
+    /* 3. Dual Format: Decimal with Binary in parentheses */
+    g_autofree gchar *dual_512 = puls_format_bytes_dual (512110190592ULL);
+    g_assert_cmpstr (dual_512, ==, "512.1 GB (476.9 GiB)");
+
+    g_autofree gchar *dual_1t = puls_format_bytes_dual (1000000000000ULL);
+    g_assert_cmpstr (dual_1t, ==, "1.0 TB (931.3 GiB)");
+
+    g_autofree gchar *dual_small = puls_format_bytes_dual (512);
+    g_assert_cmpstr (dual_small, ==, "512 B");
+
+    /* 4. Format according to PulsCapacityUnit */
+    g_autofree gchar *unit_dual = puls_format_capacity_unit (512110190592ULL, PULS_CAPACITY_UNIT_DUAL);
+    g_assert_cmpstr (unit_dual, ==, "512.1 GB (476.9 GiB)");
+
+    g_autofree gchar *unit_dec = puls_format_capacity_unit (512110190592ULL, PULS_CAPACITY_UNIT_DECIMAL);
+    g_assert_cmpstr (unit_dec, ==, "512.1 GB");
+
+    g_autofree gchar *unit_bin = puls_format_capacity_unit (512110190592ULL, PULS_CAPACITY_UNIT_BINARY);
+    g_assert_cmpstr (unit_bin, ==, "476.9 GiB");
+
+    /* 5. Format exact capacity representations */
+    g_autofree gchar *exact_dual = puls_format_capacity_unit_exact (512110190592ULL, PULS_CAPACITY_UNIT_DUAL);
+    g_assert_true (strstr (exact_dual, "512.1 GB (476.9 GiB)") != NULL);
+    g_assert_true (strstr (exact_dual, "512,110,190,592") != NULL);
+
+    g_autofree gchar *exact_dec = puls_format_capacity_unit_exact (512110190592ULL, PULS_CAPACITY_UNIT_DECIMAL);
+    g_assert_cmpstr (exact_dec, ==, "512.1 GB (512,110,190,592 bytes)");
+
+    g_autofree gchar *exact_bin = puls_format_capacity_unit_exact (512110190592ULL, PULS_CAPACITY_UNIT_BINARY);
+    g_assert_cmpstr (exact_bin, ==, "476.9 GiB (512,110,190,592 bytes)");
+
+    /* 6. PulsSettings user preference toggle */
+    PulsSettings *settings = puls_settings_get_default ();
+    g_assert_nonnull (settings);
+
+    PulsCapacityUnit orig_unit = puls_settings_get_capacity_unit (settings);
+    puls_settings_set_capacity_unit (settings, PULS_CAPACITY_UNIT_DECIMAL);
+    g_assert_cmpint (puls_settings_get_capacity_unit (settings), ==, PULS_CAPACITY_UNIT_DECIMAL);
+
+    puls_settings_set_capacity_unit (settings, PULS_CAPACITY_UNIT_BINARY);
+    g_assert_cmpint (puls_settings_get_capacity_unit (settings), ==, PULS_CAPACITY_UNIT_BINARY);
+
+    puls_settings_set_capacity_unit (settings, PULS_CAPACITY_UNIT_DUAL);
+    g_assert_cmpint (puls_settings_get_capacity_unit (settings), ==, PULS_CAPACITY_UNIT_DUAL);
+
+    puls_settings_set_capacity_unit (settings, orig_unit);
+}
+
 int
 main (int argc, char *argv[])
 {
+    gchar *tmp_config = g_dir_make_tmp ("puls_test_config_XXXXXX", NULL);
+    if (tmp_config != NULL)
+        g_setenv ("XDG_CONFIG_HOME", tmp_config, TRUE);
+
     g_test_init (&argc, &argv, NULL);
 
     g_test_add_func ("/basic/version", test_version);
@@ -1109,6 +1218,18 @@ main (int argc, char *argv[])
     g_test_add_func ("/basic/pcie-link-inspector", test_pcie_link_inspector);
     g_test_add_func ("/basic/usb-speed-and-bridge", test_usb_speed_and_bridge_inspector);
     g_test_add_func ("/basic/partition-mount-mapper", test_partition_mount_mapper);
+    g_test_add_func ("/basic/capacity-formatters", test_capacity_formatters);
 
-    return g_test_run ();
+    int result = g_test_run ();
+
+    if (tmp_config != NULL) {
+        g_autofree gchar *cfg_file = g_build_filename (tmp_config, "puls-diskinfo", "settings.json", NULL);
+        unlink (cfg_file);
+        g_autofree gchar *cfg_sub = g_build_filename (tmp_config, "puls-diskinfo", NULL);
+        rmdir (cfg_sub);
+        rmdir (tmp_config);
+        g_free (tmp_config);
+    }
+
+    return result;
 }

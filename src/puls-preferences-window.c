@@ -20,6 +20,7 @@ struct _PulsPreferencesWindow {
 
     AdwComboRow *theme_row;
     AdwComboRow *polling_row;
+    AdwComboRow *capacity_row;
     GtkWidget   *fahrenheit_switch;
     GtkWidget   *caution_spin;
 
@@ -70,6 +71,24 @@ on_polling_changed (GObject *object G_GNUC_UNUSED, GParamSpec *pspec G_GNUC_UNUS
 }
 
 static void
+on_capacity_changed (GObject *object G_GNUC_UNUSED, GParamSpec *pspec G_GNUC_UNUSED, gpointer user_data)
+{
+    PulsPreferencesWindow *self = PULS_PREFERENCES_WINDOW (user_data);
+    if (self->updating_widgets)
+        return;
+
+    guint selected = adw_combo_row_get_selected (self->capacity_row);
+    PulsCapacityUnit unit = PULS_CAPACITY_UNIT_DUAL;
+    switch (selected) {
+    case 0: unit = PULS_CAPACITY_UNIT_DUAL;    break;
+    case 1: unit = PULS_CAPACITY_UNIT_DECIMAL; break;
+    case 2: unit = PULS_CAPACITY_UNIT_BINARY;  break;
+    default: unit = PULS_CAPACITY_UNIT_DUAL;   break;
+    }
+    puls_settings_set_capacity_unit (self->settings, unit);
+}
+
+static void
 on_fahrenheit_changed (GObject *object G_GNUC_UNUSED, GParamSpec *pspec G_GNUC_UNUSED, gpointer user_data)
 {
     PulsPreferencesWindow *self = PULS_PREFERENCES_WINDOW (user_data);
@@ -109,6 +128,16 @@ update_widgets (PulsPreferencesWindow *self)
     case 300: poll_idx = 4; break;
     }
     adw_combo_row_set_selected (self->polling_row, poll_idx);
+
+    PulsCapacityUnit cap_unit = puls_settings_get_capacity_unit (self->settings);
+    guint cap_idx = 0;
+    switch (cap_unit) {
+    case PULS_CAPACITY_UNIT_DUAL:    cap_idx = 0; break;
+    case PULS_CAPACITY_UNIT_DECIMAL: cap_idx = 1; break;
+    case PULS_CAPACITY_UNIT_BINARY:  cap_idx = 2; break;
+    default:                         cap_idx = 0; break;
+    }
+    adw_combo_row_set_selected (self->capacity_row, cap_idx);
 
     gboolean fahr = puls_settings_get_use_fahrenheit (self->settings);
     gtk_switch_set_active (GTK_SWITCH (self->fahrenheit_switch), fahr);
@@ -186,6 +215,20 @@ puls_preferences_window_init (PulsPreferencesWindow *self)
     g_autoptr(GtkStringList) interval_list = gtk_string_list_new ((const gchar * const *)intervals);
     adw_combo_row_set_model (self->polling_row, G_LIST_MODEL (interval_list));
     g_signal_connect (self->polling_row, "notify::selected", G_CALLBACK (on_polling_changed), self);
+
+    self->capacity_row = ADW_COMBO_ROW (adw_combo_row_new ());
+    adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->capacity_row), _(PULS_STR_PREF_CAPACITY_UNIT));
+    adw_action_row_set_subtitle (ADW_ACTION_ROW (self->capacity_row), _(PULS_STR_PREF_CAPACITY_UNIT_SUB));
+    adw_preferences_group_add (general_group, GTK_WIDGET (self->capacity_row));
+
+    g_auto(GStrv) cap_units = g_new0 (gchar*, 4);
+    cap_units[0] = g_strdup (_(PULS_STR_PREF_CAP_DUAL));
+    cap_units[1] = g_strdup (_(PULS_STR_PREF_CAP_DECIMAL));
+    cap_units[2] = g_strdup (_(PULS_STR_PREF_CAP_BINARY));
+    cap_units[3] = NULL;
+    g_autoptr(GtkStringList) cap_list = gtk_string_list_new ((const gchar * const *)cap_units);
+    adw_combo_row_set_model (self->capacity_row, G_LIST_MODEL (cap_list));
+    g_signal_connect (self->capacity_row, "notify::selected", G_CALLBACK (on_capacity_changed), self);
 
     AdwPreferencesGroup *temp_group = ADW_PREFERENCES_GROUP (adw_preferences_group_new ());
     adw_preferences_group_set_title (temp_group, _(PULS_STR_PREF_GROUP_TEMP));
