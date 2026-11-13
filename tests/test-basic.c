@@ -1278,6 +1278,154 @@ test_phase2_final_integration (void)
     g_object_unref (mgr_live);
 }
 
+typedef struct {
+    guint added_count;
+    guint removed_count;
+    guint updated_count;
+    gchar *last_added;
+    gchar *last_removed;
+    gchar *last_updated;
+} HotplugSignalStats;
+
+static void
+on_test_disk_added (PulsDiskManager *mgr G_GNUC_UNUSED,
+                    const gchar     *device_path,
+                    gpointer         user_data)
+{
+    HotplugSignalStats *stats = user_data;
+    stats->added_count++;
+    g_free (stats->last_added);
+    stats->last_added = g_strdup (device_path);
+}
+
+static void
+on_test_disk_removed (PulsDiskManager *mgr G_GNUC_UNUSED,
+                      const gchar     *device_path,
+                      gpointer         user_data)
+{
+    HotplugSignalStats *stats = user_data;
+    stats->removed_count++;
+    g_free (stats->last_removed);
+    stats->last_removed = g_strdup (device_path);
+}
+
+static void
+on_test_disk_updated (PulsDiskManager *mgr G_GNUC_UNUSED,
+                      const gchar     *device_path,
+                      gpointer         user_data)
+{
+    HotplugSignalStats *stats = user_data;
+    stats->updated_count++;
+    g_free (stats->last_updated);
+    stats->last_updated = g_strdup (device_path);
+}
+
+static void
+test_hotplug_monitoring (void)
+{
+    /* 1. Validate raw netlink uevent payload parsing */
+    const gchar add_payload[] =
+        "add@/devices/pci0000:00/0000:00:14.0/usb1/block/sdz\0"
+        "ACTION=add\0"
+        "DEVPATH=/devices/pci0000:00/0000:00:14.0/usb1/block/sdz\0"
+        "SUBSYSTEM=block\0"
+        "DEVNAME=sdz\0"
+        "DEVTYPE=disk\0"
+        "SEQNUM=4201\0";
+
+    PulsUeventInfo info;
+    g_assert_true (puls_disk_manager_parse_uevent (add_payload, sizeof (add_payload), &info));
+    g_assert_cmpint (info.action, ==, PULS_UEVENT_ADD);
+    g_assert_cmpstr (info.subsystem, ==, "block");
+    g_assert_cmpstr (info.devtype, ==, "disk");
+    g_assert_cmpstr (info.devname, ==, "/dev/sdz");
+    g_assert_cmpstr (info.devpath, ==, "/devices/pci0000:00/0000:00:14.0/usb1/block/sdz");
+    puls_uevent_info_clear (&info);
+    g_assert_cmpint (info.action, ==, PULS_UEVENT_UNKNOWN);
+    g_assert_null (info.devname);
+
+    /* 2. Simulated USB drive attachment & detachment signals */
+    g_autoptr(PulsDiskManager) mgr = puls_disk_manager_new ();
+    puls_disk_manager_set_mock_mode (mgr, TRUE);
+
+    HotplugSignalStats stats = { 0 };
+    g_signal_connect (mgr, "disk-added", G_CALLBACK (on_test_disk_added), &stats);
+    g_signal_connect (mgr, "disk-removed", G_CALLBACK (on_test_disk_removed), &stats);
+    g_signal_connect (mgr, "disk-updated", G_CALLBACK (on_test_disk_updated), &stats);
+
+    /* Partitions, non-block subsystems, and virtual devices must be ignored */
+    const gchar part_payload[] =
+        "ACTION=add\0SUBSYSTEM=block\0DEVTYPE=partition\0DEVNAME=sdz1\0";
+    g_assert_false (puls_disk_manager_handle_uevent (mgr, part_payload, sizeof (part_payload)));
+
+    const gchar usb_if_payload[] =
+        "ACTION=add\0SUBSYSTEM=usb\0DEVTYPE=usb_interface\0DEVNAME=usb1\0";
+    g_assert_false (puls_disk_manager_handle_uevent (mgr, usb_if_payload, sizeof (usb_if_payload)));
+
+    const gchar loop_payload[] =
+        "ACTION=add\0SUBSYSTEM=block\0DEVTYPE=disk\0DEVNAME=loop0\0";
+    g_assert_false (puls_disk_manager_handle_uevent (mgr, loop_payload, sizeof (loop_payload)));
+
+    g_assert_cmpuint (stats.added_count, ==, 0);
+    g_assert_cmpuint (puls_disk_manager_get_device_count (mgr), ==, 0);
+
+    /* Simulate USB disk attach */
+    g_assert_true (puls_disk_manager_handle_uevent (mgr, add_payload, sizeof (add_payload)));
+    g_assert_cmpuint (stats.added_count, ==, 1);
+    g_assert_cmpstr (stats.last_added, ==, "/dev/sdz");
+    g_assert_cmpuint (puls_disk_manager_get_device_count (mgr), ==, 1);
+    g_assert_nonnull (puls_disk_manager_get_smart_data (mgr, "/dev/sdz"));
+
+    /* Duplicate add event should be a no-op */
+    g_assert_false (puls_disk_manager_handle_uevent (mgr, add_payload, sizeof (add_payload)));
+    g_assert_cmpuint (stats.added_count, ==, 1);
+
+    /* Change event updates existing tracked disk */
+    const gchar change_payload[] =
+        "ACTION=change\0SUBSYSTEM=block\0DEVTYPE=disk\0DEVNAME=sdz\0";
+    g_assert_true (puls_disk_manager_handle_uevent (mgr, change_payload, sizeof (change_payload)));
+    g_assert_cmpuint (stats.updated_count, ==, 1);
+    g_assert_cmpstr (stats.last_updated, ==, "/dev/sdz");
+
+    /* Simulate USB disk detach */
+    const gchar remove_payload[] =
+        "remove@/devices/pci0000:00/0000:00:14.0/usb1/block/sdz\0"
+        "ACTION=remove\0SUBSYSTEM=block\0DEVTYPE=disk\0DEVNAME=sdz\0";
+    g_assert_true (puls_disk_manager_handle_uevent (mgr, remove_payload, sizeof (remove_payload)));
+    g_assert_cmpuint (stats.removed_count, ==, 1);
+    g_assert_cmpstr (stats.last_removed, ==, "/dev/sdz");
+    g_assert_cmpuint (puls_disk_manager_get_device_count (mgr), ==, 0);
+    g_assert_null (puls_disk_manager_get_smart_data (mgr, "/dev/sdz"));
+
+    /* 3. Explicit add_mock_device + remove_device roundtrip */
+    PulsSmartData *nvme = puls_smart_data_new ();
+    puls_smart_data_set_device_path (nvme, "/dev/nvme9n1");
+    puls_disk_manager_add_mock_device (mgr, "/dev/nvme9n1", nvme);
+    g_assert_cmpuint (stats.added_count, ==, 2);
+    g_assert_true (puls_disk_manager_remove_device (mgr, "/dev/nvme9n1"));
+    g_assert_cmpuint (stats.removed_count, ==, 2);
+    g_assert_cmpstr (stats.last_removed, ==, "/dev/nvme9n1");
+    g_assert_false (puls_disk_manager_remove_device (mgr, "/dev/nvme9n1"));
+
+    /* 4. Start / stop hotplug monitoring lifecycle */
+    g_assert_false (puls_disk_manager_is_monitoring (mgr));
+    puls_disk_manager_start_monitoring (mgr);
+    g_assert_true (puls_disk_manager_is_monitoring (mgr));
+    /* Idempotent second start call */
+    puls_disk_manager_start_monitoring (mgr);
+    g_assert_true (puls_disk_manager_is_monitoring (mgr));
+
+    while (g_main_context_pending (NULL))
+        g_main_context_iteration (NULL, FALSE);
+
+    puls_disk_manager_stop_monitoring (mgr);
+    g_assert_false (puls_disk_manager_is_monitoring (mgr));
+
+    g_free (stats.last_added);
+    g_free (stats.last_removed);
+    g_free (stats.last_updated);
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -1303,6 +1451,7 @@ main (int argc, char *argv[])
     g_test_add_func ("/basic/partition-mount-mapper", test_partition_mount_mapper);
     g_test_add_func ("/basic/capacity-formatters", test_capacity_formatters);
     g_test_add_func ("/basic/phase2-final-integration", test_phase2_final_integration);
+    g_test_add_func ("/basic/hotplug-monitoring", test_hotplug_monitoring);
 
     int result = g_test_run ();
 

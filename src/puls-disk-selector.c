@@ -296,7 +296,8 @@ puls_disk_selector_select (PulsDiskSelector *self,
 
     for (GList *l = self->cards; l != NULL; l = l->next) {
         DiskCard *card = l->data;
-        gboolean is_sel = g_strcmp0 (card->device_path, device_path) == 0;
+        gboolean is_sel = (device_path != NULL &&
+                           g_strcmp0 (card->device_path, device_path) == 0);
 
         if (is_sel)
             gtk_widget_add_css_class (card->button, "disk-card-active");
@@ -304,7 +305,27 @@ puls_disk_selector_select (PulsDiskSelector *self,
             gtk_widget_remove_css_class (card->button, "disk-card-active");
     }
 
-    g_signal_emit (self, signals[SIGNAL_DISK_SELECTED], 0, device_path);
+    if (device_path != NULL)
+        g_signal_emit (self, signals[SIGNAL_DISK_SELECTED], 0, device_path);
+}
+
+static gboolean
+cards_match_devices (GList *cards,
+                     GList *devices)
+{
+    GList *c = cards;
+    GList *d = devices;
+
+    while (c != NULL && d != NULL) {
+        DiskCard *card = c->data;
+        const gchar *dev_path = d->data;
+        if (g_strcmp0 (card->device_path, dev_path) != 0)
+            return FALSE;
+        c = c->next;
+        d = d->next;
+    }
+
+    return (c == NULL && d == NULL);
 }
 
 void
@@ -313,10 +334,13 @@ puls_disk_selector_refresh (PulsDiskSelector *self)
     g_return_if_fail (PULS_IS_DISK_SELECTOR (self));
 
     GList *devices = puls_disk_manager_get_devices (self->manager);
-    guint device_count = g_list_length (devices);
-    guint card_count = g_list_length (self->cards);
 
-    if (device_count != card_count) {
+    if (self->selected != NULL &&
+        g_list_find_custom (devices, self->selected, (GCompareFunc)g_strcmp0) == NULL) {
+        g_clear_pointer (&self->selected, g_free);
+    }
+
+    if (!cards_match_devices (self->cards, devices)) {
         rebuild_cards (self);
         return;
     }

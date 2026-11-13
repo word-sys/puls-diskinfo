@@ -15,9 +15,16 @@
 #include "puls-mock-data.h"
 #include "puls-smart-parser.h"
 #include "puls-utils.h"
+#include <errno.h>
 #include <gio/gio.h>
-#include <string.h>
+#include <linux/netlink.h>
 #include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#define PULS_HOTPLUG_DEBOUNCE_MS 350
+#define PULS_UEVENT_BUFFER_SIZE  4096
 
 enum {
     SIGNAL_DISK_ADDED,
@@ -34,6 +41,16 @@ struct _PulsDiskManager {
     GHashTable *devices;
     GList *device_paths;
     gboolean mock_mode;
+
+    gboolean monitoring;
+    GVolumeMonitor *volume_monitor;
+    gulong drive_connected_id;
+    gulong drive_disconnected_id;
+    gulong volume_added_id;
+    gulong volume_removed_id;
+    GSocket *udev_socket;
+    GSource *udev_source;
+    guint rescan_timeout_id;
 };
 
 G_DEFINE_TYPE (PulsDiskManager, puls_disk_manager, G_TYPE_OBJECT)
@@ -114,6 +131,8 @@ puls_disk_manager_finalize (GObject *object)
 {
     PulsDiskManager *self = PULS_DISK_MANAGER (object);
 
+    puls_disk_manager_stop_monitoring (self);
+
     g_hash_table_destroy (self->devices);
     g_list_free_full (self->device_paths, g_free);
 
@@ -155,6 +174,16 @@ puls_disk_manager_init (PulsDiskManager *self)
                                            g_free, g_object_unref);
     self->device_paths = NULL;
     self->mock_mode = puls_is_mock_mode_enabled ();
+
+    self->monitoring = FALSE;
+    self->volume_monitor = NULL;
+    self->drive_connected_id = 0;
+    self->drive_disconnected_id = 0;
+    self->volume_added_id = 0;
+    self->volume_removed_id = 0;
+    self->udev_socket = NULL;
+    self->udev_source = NULL;
+    self->rescan_timeout_id = 0;
 }
 
 void
@@ -440,6 +469,75 @@ puls_smart_data_fill_sysfs_fallbacks (PulsSmartData *data)
     }
 }
 
+static void
+probe_and_add_device (PulsDiskManager *self,
+                      const gchar     *dev_path)
+{
+    if (g_hash_table_contains (self->devices, dev_path))
+        return;
+
+    PulsSmartData *data = NULL;
+
+    if (!self->mock_mode) {
+        GError *error = NULL;
+        g_autofree gchar *json = puls_run_smartctl_sync (dev_path, &error);
+        g_clear_error (&error);
+
+        if (json != NULL) {
+            GError *parse_err = NULL;
+            data = puls_smart_parser_parse_json (json, &parse_err);
+            g_clear_error (&parse_err);
+        }
+    }
+
+    if (data == NULL)
+        data = puls_smart_data_new ();
+
+    if (puls_smart_data_get_device_path (data) == NULL)
+        puls_smart_data_set_device_path (data, dev_path);
+
+    puls_smart_data_fill_sysfs_fallbacks (data);
+
+    g_hash_table_insert (self->devices, g_strdup (dev_path), data);
+    self->device_paths = g_list_append (self->device_paths, g_strdup (dev_path));
+    g_signal_emit (self, signals[SIGNAL_DISK_ADDED], 0, dev_path);
+}
+
+/**
+ * puls_disk_manager_remove_device:
+ * @self: A #PulsDiskManager.
+ * @device_path: Block device path such as `/dev/sdb`.
+ *
+ * Removes a tracked device from the manager and emits `disk-removed`.
+ *
+ * Returns: %TRUE if the device existed and was removed.
+ */
+gboolean
+puls_disk_manager_remove_device (PulsDiskManager *self,
+                                 const gchar     *device_path)
+{
+    g_return_val_if_fail (PULS_IS_DISK_MANAGER (self), FALSE);
+    g_return_val_if_fail (device_path != NULL, FALSE);
+
+    if (!g_hash_table_contains (self->devices, device_path))
+        return FALSE;
+
+    g_autofree gchar *path_copy = g_strdup (device_path);
+
+    for (GList *l = self->device_paths; l != NULL; l = l->next) {
+        if (g_strcmp0 (l->data, path_copy) == 0) {
+            g_free (l->data);
+            self->device_paths = g_list_delete_link (self->device_paths, l);
+            break;
+        }
+    }
+
+    g_hash_table_remove (self->devices, path_copy);
+    PULS_LOG_INFO ("Hotplug: removed device %s", path_copy);
+    g_signal_emit (self, signals[SIGNAL_DISK_REMOVED], 0, path_copy);
+    return TRUE;
+}
+
 void
 puls_disk_manager_scan (PulsDiskManager *self)
 {
@@ -454,36 +552,21 @@ puls_disk_manager_scan (PulsDiskManager *self)
     GList *found = scan_sys_block ();
     PULS_LOG_DEBUG ("Scanning /sys/block: found %u device path(s)", g_list_length (found));
 
+    /* Collect devices that disappeared since the previous scan */
+    GPtrArray *stale = g_ptr_array_new_with_free_func (g_free);
+    for (GList *l = self->device_paths; l != NULL; l = l->next) {
+        const gchar *existing = l->data;
+        if (g_list_find_custom (found, existing, (GCompareFunc)g_strcmp0) == NULL)
+            g_ptr_array_add (stale, g_strdup (existing));
+    }
+
+    for (guint i = 0; i < stale->len; i++) {
+        puls_disk_manager_remove_device (self, g_ptr_array_index (stale, i));
+    }
+    g_ptr_array_unref (stale);
+
     for (GList *l = found; l != NULL; l = l->next) {
-        const gchar *dev_path = l->data;
-        GError *error = NULL;
-
-        if (!g_hash_table_contains (self->devices, dev_path)) {
-            g_autofree gchar *json = puls_run_smartctl_sync (dev_path, &error);
-
-            PulsSmartData *data = NULL;
-            if (json) {
-                GError *parse_err = NULL;
-                data = puls_smart_parser_parse_json (json, &parse_err);
-                g_clear_error (&parse_err);
-            }
-
-            if (data == NULL) {
-                data = puls_smart_data_new ();
-            }
-            if (puls_smart_data_get_device_path (data) == NULL) {
-                puls_smart_data_set_device_path (data, dev_path);
-            }
-
-            puls_smart_data_fill_sysfs_fallbacks (data);
-
-            g_hash_table_insert (self->devices, g_strdup (dev_path), data);
-            self->device_paths = g_list_append (self->device_paths,
-                                                g_strdup (dev_path));
-            g_signal_emit (self, signals[SIGNAL_DISK_ADDED], 0, dev_path);
-        }
-
-        g_clear_error (&error);
+        probe_and_add_device (self, (const gchar *)l->data);
     }
 
     g_list_free_full (found, g_free);
@@ -597,4 +680,392 @@ puls_disk_manager_refresh_finish (PulsDiskManager *self G_GNUC_UNUSED,
                                    GError         **error)
 {
     return g_task_propagate_pointer (G_TASK (result), error);
+}
+
+/**
+ * puls_uevent_info_clear:
+ * @info: A #PulsUeventInfo structure to reset.
+ *
+ * Frees owned strings in @info and zeroes its fields.
+ */
+void
+puls_uevent_info_clear (PulsUeventInfo *info)
+{
+    if (info == NULL)
+        return;
+
+    g_clear_pointer (&info->subsystem, g_free);
+    g_clear_pointer (&info->devtype, g_free);
+    g_clear_pointer (&info->devname, g_free);
+    g_clear_pointer (&info->devpath, g_free);
+    info->action = PULS_UEVENT_UNKNOWN;
+}
+
+static PulsUeventAction
+parse_uevent_action (const gchar *val)
+{
+    if (g_strcmp0 (val, "add") == 0)
+        return PULS_UEVENT_ADD;
+    if (g_strcmp0 (val, "remove") == 0)
+        return PULS_UEVENT_REMOVE;
+    if (g_strcmp0 (val, "change") == 0)
+        return PULS_UEVENT_CHANGE;
+    return PULS_UEVENT_UNKNOWN;
+}
+
+static gchar *
+normalize_devname (const gchar *val)
+{
+    if (val == NULL || *val == '\0')
+        return NULL;
+    if (g_str_has_prefix (val, "/dev/"))
+        return g_strdup (val);
+    return g_strdup_printf ("/dev/%s", val);
+}
+
+/**
+ * puls_disk_manager_parse_uevent:
+ * @payload: Raw NUL-delimited kernel uevent payload.
+ * @len: Payload length in bytes.
+ * @out_info: Output #PulsUeventInfo structure.
+ *
+ * Parses `ACTION`, `SUBSYSTEM`, `DEVTYPE`, `DEVNAME`, and `DEVPATH` fields from
+ * a kernel kobject uevent netlink frame.
+ *
+ * Returns: %TRUE if meaningful uevent metadata was parsed.
+ */
+gboolean
+puls_disk_manager_parse_uevent (const gchar    *payload,
+                                gsize           len,
+                                PulsUeventInfo *out_info)
+{
+    g_return_val_if_fail (out_info != NULL, FALSE);
+
+    memset (out_info, 0, sizeof (*out_info));
+    if (payload == NULL || len == 0)
+        return FALSE;
+
+    gsize offset = 0;
+    while (offset < len) {
+        const gchar *cur = payload + offset;
+        gsize remaining = len - offset;
+        gsize tok_len = strnlen (cur, remaining);
+
+        if (tok_len > 0) {
+            g_autofree gchar *tok = g_strndup (cur, tok_len);
+            const gchar *eq = strchr (tok, '=');
+
+            if (eq != NULL) {
+                g_autofree gchar *key = g_strndup (tok, (gsize)(eq - tok));
+                const gchar *val = eq + 1;
+
+                if (g_strcmp0 (key, "ACTION") == 0) {
+                    out_info->action = parse_uevent_action (val);
+                } else if (g_strcmp0 (key, "SUBSYSTEM") == 0) {
+                    g_free (out_info->subsystem);
+                    out_info->subsystem = g_strdup (val);
+                } else if (g_strcmp0 (key, "DEVTYPE") == 0) {
+                    g_free (out_info->devtype);
+                    out_info->devtype = g_strdup (val);
+                } else if (g_strcmp0 (key, "DEVNAME") == 0) {
+                    g_free (out_info->devname);
+                    out_info->devname = normalize_devname (val);
+                } else if (g_strcmp0 (key, "DEVPATH") == 0) {
+                    g_free (out_info->devpath);
+                    out_info->devpath = g_strdup (val);
+                }
+            }
+        }
+
+        offset += tok_len + 1;
+    }
+
+    return (out_info->action != PULS_UEVENT_UNKNOWN || out_info->subsystem != NULL);
+}
+
+static gchar *
+resolve_uevent_disk_path (const PulsUeventInfo *info)
+{
+    if (g_strcmp0 (info->subsystem, "block") != 0)
+        return NULL;
+
+    if (info->devtype != NULL && g_strcmp0 (info->devtype, "disk") != 0)
+        return NULL;
+
+    g_autofree gchar *resolved = g_strdup (info->devname);
+    if (resolved == NULL && info->devpath != NULL) {
+        g_autofree gchar *base_from_path = g_path_get_basename (info->devpath);
+        resolved = normalize_devname (base_from_path);
+    }
+
+    if (resolved == NULL)
+        return NULL;
+
+    g_autofree gchar *base = g_path_get_basename (resolved);
+    if (!is_real_disk (base))
+        return NULL;
+
+    return g_steal_pointer (&resolved);
+}
+
+/**
+ * puls_disk_manager_handle_uevent:
+ * @self: A #PulsDiskManager.
+ * @payload: Raw NUL-delimited uevent buffer.
+ * @len: Length of @payload in bytes.
+ *
+ * Filters and applies a block-disk uevent (`add`, `remove`, or `change`),
+ * updating tracked devices and emitting `disk-added`, `disk-removed`, or
+ * `disk-updated`.
+ *
+ * Returns: %TRUE if the uevent resulted in a tracked disk state update.
+ */
+gboolean
+puls_disk_manager_handle_uevent (PulsDiskManager *self,
+                                 const gchar     *payload,
+                                 gsize            len)
+{
+    g_return_val_if_fail (PULS_IS_DISK_MANAGER (self), FALSE);
+
+    PulsUeventInfo info;
+    if (!puls_disk_manager_parse_uevent (payload, len, &info)) {
+        puls_uevent_info_clear (&info);
+        return FALSE;
+    }
+
+    g_autofree gchar *resolved_dev = resolve_uevent_disk_path (&info);
+    PulsUeventAction action = info.action;
+    puls_uevent_info_clear (&info);
+
+    if (resolved_dev == NULL)
+        return FALSE;
+
+    switch (action) {
+    case PULS_UEVENT_ADD:
+        if (!g_hash_table_contains (self->devices, resolved_dev)) {
+            PULS_LOG_INFO ("Hotplug uevent: device attached %s", resolved_dev);
+            probe_and_add_device (self, resolved_dev);
+            return TRUE;
+        }
+        return FALSE;
+    case PULS_UEVENT_REMOVE:
+        return puls_disk_manager_remove_device (self, resolved_dev);
+    case PULS_UEVENT_CHANGE:
+        if (g_hash_table_contains (self->devices, resolved_dev)) {
+            if (self->mock_mode) {
+                g_signal_emit (self, signals[SIGNAL_DISK_UPDATED], 0, resolved_dev);
+            } else {
+                puls_disk_manager_refresh_async (self, resolved_dev, NULL, NULL, NULL);
+            }
+            return TRUE;
+        }
+        return FALSE;
+    case PULS_UEVENT_UNKNOWN:
+    default:
+        return FALSE;
+    }
+}
+
+static gboolean
+on_debounced_rescan_timeout (gpointer user_data)
+{
+    PulsDiskManager *self = PULS_DISK_MANAGER (user_data);
+    self->rescan_timeout_id = 0;
+
+    if (!self->mock_mode)
+        puls_disk_manager_scan (self);
+
+    return G_SOURCE_REMOVE;
+}
+
+static void
+schedule_debounced_rescan (PulsDiskManager *self)
+{
+    if (self->rescan_timeout_id > 0)
+        g_source_remove (self->rescan_timeout_id);
+
+    self->rescan_timeout_id = g_timeout_add (PULS_HOTPLUG_DEBOUNCE_MS,
+                                             on_debounced_rescan_timeout,
+                                             self);
+}
+
+static void
+on_volume_monitor_changed (GVolumeMonitor *monitor G_GNUC_UNUSED,
+                           gpointer        item G_GNUC_UNUSED,
+                           gpointer        user_data)
+{
+    PulsDiskManager *self = PULS_DISK_MANAGER (user_data);
+    PULS_LOG_DEBUG ("Hotplug: GVolumeMonitor event received, scheduling rescan");
+    schedule_debounced_rescan (self);
+}
+
+static gboolean
+on_udev_socket_io (GSocket      *socket,
+                   GIOCondition  condition,
+                   gpointer      user_data)
+{
+    PulsDiskManager *self = PULS_DISK_MANAGER (user_data);
+
+    if (condition & (G_IO_ERR | G_IO_HUP | G_IO_NVAL)) {
+        PULS_LOG_DEBUG ("Hotplug: udev netlink socket closed");
+        self->udev_source = NULL;
+        return G_SOURCE_REMOVE;
+    }
+
+    gchar buf[PULS_UEVENT_BUFFER_SIZE];
+    GError *err = NULL;
+    gssize received = g_socket_receive (socket, buf, sizeof (buf) - 1, NULL, &err);
+
+    if (received < 0) {
+        if (!g_error_matches (err, G_IO_ERROR, G_IO_ERROR_WOULD_BLOCK))
+            PULS_LOG_DEBUG ("Hotplug: udev receive error: %s", err ? err->message : "unknown");
+        g_clear_error (&err);
+        return G_SOURCE_CONTINUE;
+    }
+
+    if (received > 0 && !self->mock_mode) {
+        buf[received] = '\0';
+        puls_disk_manager_handle_uevent (self, buf, (gsize)received);
+    }
+
+    return G_SOURCE_CONTINUE;
+}
+
+static void
+start_udev_netlink_listener (PulsDiskManager *self)
+{
+    int fd = socket (AF_NETLINK,
+                     SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK,
+                     NETLINK_KOBJECT_UEVENT);
+    if (fd < 0) {
+        PULS_LOG_DEBUG ("Hotplug: netlink socket unavailable (%s)", g_strerror (errno));
+        return;
+    }
+
+    struct sockaddr_nl addr;
+    memset (&addr, 0, sizeof (addr));
+    addr.nl_family = AF_NETLINK;
+    addr.nl_pid = 0;
+    addr.nl_groups = 1; /* Kernel uevent multicast group */
+
+    if (bind (fd, (struct sockaddr *)&addr, sizeof (addr)) != 0) {
+        PULS_LOG_DEBUG ("Hotplug: netlink bind failed (%s)", g_strerror (errno));
+        close (fd);
+        return;
+    }
+
+    GError *err = NULL;
+    self->udev_socket = g_socket_new_from_fd (fd, &err);
+    if (self->udev_socket == NULL) {
+        PULS_LOG_DEBUG ("Hotplug: failed to wrap netlink fd: %s", err ? err->message : "unknown");
+        g_clear_error (&err);
+        close (fd);
+        return;
+    }
+
+    self->udev_source = g_socket_create_source (self->udev_socket, G_IO_IN, NULL);
+    g_source_set_callback (self->udev_source,
+                           G_SOURCE_FUNC (on_udev_socket_io),
+                           self,
+                           NULL);
+    g_source_attach (self->udev_source, g_main_context_default ());
+    PULS_LOG_INFO ("Hotplug: kernel udev netlink listener active");
+}
+
+/**
+ * puls_disk_manager_start_monitoring:
+ * @self: A #PulsDiskManager.
+ *
+ * Starts real-time drive hotplug monitoring using both a Linux kernel udev
+ * netlink listener (`NETLINK_KOBJECT_UEVENT`) and GIO #GVolumeMonitor signals.
+ * Safe to call repeatedly; falls back gracefully if netlink is unavailable.
+ */
+void
+puls_disk_manager_start_monitoring (PulsDiskManager *self)
+{
+    g_return_if_fail (PULS_IS_DISK_MANAGER (self));
+
+    if (self->monitoring)
+        return;
+
+    self->monitoring = TRUE;
+
+    start_udev_netlink_listener (self);
+
+    self->volume_monitor = g_volume_monitor_get ();
+    if (self->volume_monitor != NULL) {
+        self->drive_connected_id =
+            g_signal_connect (self->volume_monitor, "drive-connected",
+                              G_CALLBACK (on_volume_monitor_changed), self);
+        self->drive_disconnected_id =
+            g_signal_connect (self->volume_monitor, "drive-disconnected",
+                              G_CALLBACK (on_volume_monitor_changed), self);
+        self->volume_added_id =
+            g_signal_connect (self->volume_monitor, "volume-added",
+                              G_CALLBACK (on_volume_monitor_changed), self);
+        self->volume_removed_id =
+            g_signal_connect (self->volume_monitor, "volume-removed",
+                              G_CALLBACK (on_volume_monitor_changed), self);
+        PULS_LOG_INFO ("Hotplug: GVolumeMonitor drive/volume listeners active");
+    }
+}
+
+/**
+ * puls_disk_manager_stop_monitoring:
+ * @self: A #PulsDiskManager.
+ *
+ * Stops hotplug listeners and releases any attached main-loop sources.
+ */
+void
+puls_disk_manager_stop_monitoring (PulsDiskManager *self)
+{
+    g_return_if_fail (PULS_IS_DISK_MANAGER (self));
+
+    if (self->rescan_timeout_id > 0) {
+        g_source_remove (self->rescan_timeout_id);
+        self->rescan_timeout_id = 0;
+    }
+
+    if (self->udev_source != NULL) {
+        g_source_destroy (self->udev_source);
+        g_source_unref (self->udev_source);
+        self->udev_source = NULL;
+    }
+
+    g_clear_object (&self->udev_socket);
+
+    if (self->volume_monitor != NULL) {
+        if (self->drive_connected_id > 0) {
+            g_signal_handler_disconnect (self->volume_monitor, self->drive_connected_id);
+            self->drive_connected_id = 0;
+        }
+        if (self->drive_disconnected_id > 0) {
+            g_signal_handler_disconnect (self->volume_monitor, self->drive_disconnected_id);
+            self->drive_disconnected_id = 0;
+        }
+        if (self->volume_added_id > 0) {
+            g_signal_handler_disconnect (self->volume_monitor, self->volume_added_id);
+            self->volume_added_id = 0;
+        }
+        if (self->volume_removed_id > 0) {
+            g_signal_handler_disconnect (self->volume_monitor, self->volume_removed_id);
+            self->volume_removed_id = 0;
+        }
+        g_clear_object (&self->volume_monitor);
+    }
+
+    self->monitoring = FALSE;
+}
+
+/**
+ * puls_disk_manager_is_monitoring:
+ * @self: A #PulsDiskManager.
+ *
+ * Returns: %TRUE if hotplug monitoring is currently active.
+ */
+gboolean
+puls_disk_manager_is_monitoring (PulsDiskManager *self)
+{
+    g_return_val_if_fail (PULS_IS_DISK_MANAGER (self), FALSE);
+    return self->monitoring;
 }

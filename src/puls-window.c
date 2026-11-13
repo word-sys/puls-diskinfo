@@ -653,6 +653,18 @@ on_disk_selected (PulsDiskSelector *selector G_GNUC_UNUSED,
 }
 
 static void
+update_status_disk_count (PulsWindow *self)
+{
+    if (self->status_label == NULL || self->manager == NULL)
+        return;
+
+    guint count = puls_disk_manager_get_device_count (self->manager);
+    const gchar *fmt = (count == 1) ? _(PULS_STR_STATUS_FOUND_DISK) : _(PULS_STR_STATUS_FOUND_DISKS);
+    g_autofree gchar *status = g_strdup_printf (fmt, count);
+    gtk_label_set_text (GTK_LABEL (self->status_label), status);
+}
+
+static void
 on_disk_added (PulsDiskManager *manager,
                const gchar     *device_path,
                PulsWindow      *self)
@@ -666,11 +678,61 @@ on_disk_added (PulsDiskManager *manager,
     if (data)
         puls_disk_info_view_set_data (PULS_DISK_INFO_VIEW (view), data);
 
+    puls_disk_selector_refresh (PULS_DISK_SELECTOR (self->disk_selector));
+
     if (g_hash_table_size (self->info_views) == 1) {
         puls_disk_selector_select (PULS_DISK_SELECTOR (self->disk_selector),
                                    device_path);
         gtk_stack_set_visible_child (GTK_STACK (self->info_stack), view);
     }
+
+    update_status_disk_count (self);
+}
+
+static void
+on_disk_removed (PulsDiskManager *manager G_GNUC_UNUSED,
+                 const gchar     *device_path,
+                 PulsWindow      *self)
+{
+    GtkWidget *view = g_hash_table_lookup (self->info_views, device_path);
+    gboolean was_visible = (view != NULL &&
+                            gtk_stack_get_visible_child (GTK_STACK (self->info_stack)) == view);
+
+    if (view != NULL) {
+        g_hash_table_remove (self->info_views, device_path);
+        gtk_stack_remove (GTK_STACK (self->info_stack), view);
+    }
+
+    puls_disk_selector_refresh (PULS_DISK_SELECTOR (self->disk_selector));
+
+    if (was_visible ||
+        puls_disk_selector_get_selected (PULS_DISK_SELECTOR (self->disk_selector)) == NULL) {
+        GList *remaining = puls_disk_manager_get_devices (self->manager);
+        if (remaining != NULL) {
+            const gchar *next_dev = remaining->data;
+            puls_disk_selector_select (PULS_DISK_SELECTOR (self->disk_selector), next_dev);
+            GtkWidget *next_view = g_hash_table_lookup (self->info_views, next_dev);
+            if (next_view != NULL)
+                gtk_stack_set_visible_child (GTK_STACK (self->info_stack), next_view);
+        } else {
+            gtk_stack_set_visible_child_name (GTK_STACK (self->info_stack), "empty");
+        }
+    }
+
+    update_status_disk_count (self);
+}
+
+static void
+on_disk_updated (PulsDiskManager *manager,
+                 const gchar     *device_path,
+                 PulsWindow      *self)
+{
+    GtkWidget *view = g_hash_table_lookup (self->info_views, device_path);
+    PulsSmartData *data = puls_disk_manager_get_smart_data (manager, device_path);
+    if (view != NULL && data != NULL)
+        puls_disk_info_view_set_data (PULS_DISK_INFO_VIEW (view), data);
+
+    puls_disk_selector_refresh (PULS_DISK_SELECTOR (self->disk_selector));
 }
 
 static void
@@ -687,6 +749,9 @@ puls_window_dispose (GObject *object)
         g_signal_handler_disconnect (self->settings, self->settings_changed_id);
         self->settings_changed_id = 0;
     }
+
+    if (self->manager != NULL)
+        puls_disk_manager_stop_monitoring (self->manager);
 
     g_clear_object (&self->manager);
     g_clear_pointer (&self->info_views, g_hash_table_destroy);
@@ -795,6 +860,10 @@ puls_window_init (PulsWindow *self)
     self->manager = puls_disk_manager_new ();
     g_signal_connect (self->manager, "disk-added",
                       G_CALLBACK (on_disk_added), self);
+    g_signal_connect (self->manager, "disk-removed",
+                      G_CALLBACK (on_disk_removed), self);
+    g_signal_connect (self->manager, "disk-updated",
+                      G_CALLBACK (on_disk_updated), self);
 
     self->disk_selector = puls_disk_selector_new (self->manager);
     gtk_box_append (GTK_BOX (self->main_box), self->disk_selector);
@@ -853,15 +922,13 @@ puls_window_init (PulsWindow *self)
     gtk_box_append (GTK_BOX (self->status_bar), self->status_label);
 
     puls_disk_manager_scan (self->manager);
+    puls_disk_manager_start_monitoring (self->manager);
 
     update_timer (self);
     self->settings_changed_id = g_signal_connect (self->settings, "changed",
                                                    G_CALLBACK (on_settings_changed), self);
 
-    guint count = puls_disk_manager_get_device_count (self->manager);
-    const gchar *fmt = (count == 1) ? _(PULS_STR_STATUS_FOUND_DISK) : _(PULS_STR_STATUS_FOUND_DISKS);
-    g_autofree gchar *init_status = g_strdup_printf (fmt, count);
-    gtk_label_set_text (GTK_LABEL (self->status_label), init_status);
+    update_status_disk_count (self);
 }
 
 PulsWindow *
