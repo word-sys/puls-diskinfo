@@ -640,6 +640,13 @@ puls_sysfs_find_hwmon_dir (const gchar *device_name)
         return NULL;
 
     g_autofree gchar *dev_link = g_strdup_printf ("/sys/block/%s/device", clean_name);
+    if (!g_file_test (dev_link, G_FILE_TEST_EXISTS)) {
+        g_autofree gchar *ctrl_name = NULL;
+        if (puls_nvme_parse_device_name (clean_name, &ctrl_name, NULL)) {
+            g_free (dev_link);
+            dev_link = g_strdup_printf ("/sys/class/nvme/%s", ctrl_name);
+        }
+    }
     g_autofree gchar *real_dev = puls_sysfs_resolve_link (dev_link);
 
     const gchar *candidates[4];
@@ -963,6 +970,15 @@ puls_sysfs_find_pcie_dir (const gchar *device_name)
     g_autofree gchar *f1 = g_build_filename (p1, "current_link_speed", NULL);
     if (g_file_test (f1, G_FILE_TEST_EXISTS))
         return puls_sysfs_resolve_link (p1);
+
+    /* Candidate 1b: /sys/class/nvme/<controller>/device (controller-level / multipath fallback) */
+    g_autofree gchar *nvme_ctrl = NULL;
+    if (puls_nvme_parse_device_name (clean_name, &nvme_ctrl, NULL)) {
+        g_autofree gchar *p_ctrl = g_strdup_printf ("/sys/class/nvme/%s/device", nvme_ctrl);
+        g_autofree gchar *f_ctrl = g_build_filename (p_ctrl, "current_link_speed", NULL);
+        if (g_file_test (f_ctrl, G_FILE_TEST_EXISTS))
+            return puls_sysfs_resolve_link (p_ctrl);
+    }
 
     /* Candidate 2: /sys/block/<clean_name>/device (direct PCI block device) */
     g_autofree gchar *p2 = g_strdup_printf ("/sys/block/%s/device", clean_name);
@@ -1950,5 +1966,377 @@ puls_log_structured (const gchar   *domain,
                       "CODE_LINE", line_str,
                       "CODE_FUNC", func ? func : "",
                       "MESSAGE", "%s", formatted);
+}
+
+/**
+ * puls_nvme_topology_clear:
+ * @topo: A #PulsNvmeTopology struct.
+ *
+ * Frees owned fields in @topo and resets its memory to zero.
+ */
+void
+puls_nvme_topology_clear (PulsNvmeTopology *topo)
+{
+    if (topo == NULL)
+        return;
+
+    g_free (topo->controller_name);
+    g_free (topo->controller_path);
+    g_free (topo->namespace_name);
+    g_free (topo->namespace_path);
+    g_free (topo->transport);
+    g_free (topo->subsysnqn);
+    g_free (topo->eui64);
+    g_free (topo->nguid);
+    g_free (topo->wwid);
+    g_free (topo->state);
+    memset (topo, 0, sizeof (*topo));
+    topo->cntlid = -1;
+}
+
+typedef enum {
+    NVME_KIND_INVALID = 0,
+    NVME_KIND_CONTROLLER,
+    NVME_KIND_NAMESPACE,
+    NVME_KIND_PARTITION
+} NvmeNameKind;
+
+static NvmeNameKind
+classify_nvme_name (const gchar *name_or_path,
+                    gchar      **out_controller_name,
+                    guint32     *out_nsid)
+{
+    if (name_or_path == NULL)
+        return NVME_KIND_INVALID;
+
+    const gchar *base = strrchr (name_or_path, '/');
+    base = base ? base + 1 : name_or_path;
+
+    if (!g_str_has_prefix (base, "nvme"))
+        return NVME_KIND_INVALID;
+
+    const gchar *p = base + 4;
+    if (!g_ascii_isdigit (*p))
+        return NVME_KIND_INVALID;
+
+    while (g_ascii_isdigit (*p))
+        p++;
+
+    const gchar *ctrl_end = p;
+
+    if (*p == '\0') {
+        if (out_controller_name)
+            *out_controller_name = g_strndup (base, (gsize)(ctrl_end - base));
+        if (out_nsid)
+            *out_nsid = 0;
+        return NVME_KIND_CONTROLLER;
+    }
+
+    /* Optional multipath controller sub-instance (e.g. nvme0c0n1) */
+    if (*p == 'c') {
+        p++;
+        if (!g_ascii_isdigit (*p))
+            return NVME_KIND_INVALID;
+        while (g_ascii_isdigit (*p))
+            p++;
+    }
+
+    if (*p != 'n')
+        return NVME_KIND_INVALID;
+    p++;
+
+    if (!g_ascii_isdigit (*p))
+        return NVME_KIND_INVALID;
+
+    const gchar *ns_start = p;
+    while (g_ascii_isdigit (*p))
+        p++;
+
+    guint64 parsed_nsid = g_ascii_strtoull (ns_start, NULL, 10);
+    if (parsed_nsid == 0 || parsed_nsid > G_MAXUINT32)
+        return NVME_KIND_INVALID;
+
+    NvmeNameKind kind = NVME_KIND_INVALID;
+    if (*p == '\0') {
+        kind = NVME_KIND_NAMESPACE;
+    } else if (*p == 'p') {
+        p++;
+        if (!g_ascii_isdigit (*p))
+            return NVME_KIND_INVALID;
+        while (g_ascii_isdigit (*p))
+            p++;
+        if (*p != '\0')
+            return NVME_KIND_INVALID;
+        kind = NVME_KIND_PARTITION;
+    } else {
+        return NVME_KIND_INVALID;
+    }
+
+    if (out_controller_name)
+        *out_controller_name = g_strndup (base, (gsize)(ctrl_end - base));
+    if (out_nsid)
+        *out_nsid = (guint32)parsed_nsid;
+
+    return kind;
+}
+
+/**
+ * puls_nvme_is_controller_name:
+ * @name_or_path: Device name or path (e.g. `nvme0` or `/dev/nvme0`).
+ *
+ * Returns: %TRUE if @name_or_path identifies a bare NVMe controller node.
+ */
+gboolean
+puls_nvme_is_controller_name (const gchar *name_or_path)
+{
+    return classify_nvme_name (name_or_path, NULL, NULL) == NVME_KIND_CONTROLLER;
+}
+
+/**
+ * puls_nvme_is_namespace_name:
+ * @name_or_path: Device name or path (e.g. `nvme0n1` or `nvme0c0n1`).
+ *
+ * Returns: %TRUE if @name_or_path identifies a whole NVMe namespace block device
+ * (excluding bare controllers like `nvme0` and partitions like `nvme0n1p1`).
+ */
+gboolean
+puls_nvme_is_namespace_name (const gchar *name_or_path)
+{
+    return classify_nvme_name (name_or_path, NULL, NULL) == NVME_KIND_NAMESPACE;
+}
+
+/**
+ * puls_nvme_parse_device_name:
+ * @name_or_path: Device name or path (e.g. `/dev/nvme0n1`, `nvme0c1n2`, `nvme0`).
+ * @out_controller_name: (out) (optional): Location to store controller name (`nvme0`).
+ * @out_nsid: (out) (optional): Location to store parsed namespace ID (`0` if controller only).
+ *
+ * Parses an NVMe controller, namespace, multipath namespace, or namespace partition
+ * name into its owning controller name and optional namespace ID.
+ *
+ * Returns: %TRUE if @name_or_path is a syntactically valid NVMe identifier.
+ */
+gboolean
+puls_nvme_parse_device_name (const gchar  *name_or_path,
+                             gchar       **out_controller_name,
+                             guint32      *out_nsid)
+{
+    return classify_nvme_name (name_or_path, out_controller_name, out_nsid) != NVME_KIND_INVALID;
+}
+
+/**
+ * puls_nvme_resolve_controller_path:
+ * @device_path: Block device path or name (e.g. `/dev/nvme0n1`).
+ *
+ * Resolves the owning NVMe controller device node (`/dev/nvme0`) for an NVMe
+ * namespace by inspecting `/sys/block/<name>/device` first and falling back to
+ * NVMe device name topology parsing.
+ *
+ * Returns: (nullable) (transfer full): Newly allocated controller path, or %NULL if not NVMe.
+ */
+gchar *
+puls_nvme_resolve_controller_path (const gchar *device_path)
+{
+    if (device_path == NULL)
+        return NULL;
+
+    g_autofree gchar *clean_name = puls_sanitize_device_name (device_path);
+    g_autofree gchar *ctrl_name = NULL;
+
+    if (clean_name != NULL && puls_nvme_is_namespace_name (clean_name)) {
+        g_autofree gchar *dev_link = g_strdup_printf ("/sys/block/%s/device", clean_name);
+        g_autofree gchar *target = puls_sysfs_resolve_link (dev_link);
+        if (target != NULL) {
+            g_autofree gchar *target_base = g_path_get_basename (target);
+            if (puls_nvme_is_controller_name (target_base))
+                return g_strdup_printf ("/dev/%s", target_base);
+        }
+    }
+
+    if (puls_nvme_parse_device_name (device_path, &ctrl_name, NULL) && ctrl_name != NULL)
+        return g_strdup_printf ("/dev/%s", ctrl_name);
+
+    return NULL;
+}
+
+/**
+ * puls_nvme_resolve_smart_target:
+ * @device_path: Storage block device path (e.g. `/dev/nvme0n1` or `/dev/sda`).
+ *
+ * Determines the appropriate device node to query via `smartctl`: for NVMe
+ * namespaces, targets the owning NVMe controller (`/dev/nvme0`) unless sysfs
+ * confirms a real namespace exists without the corresponding controller char node;
+ * for all other storage devices, returns a copy of @device_path.
+ *
+ * Returns: (nullable) (transfer full): Newly allocated target path for SMART queries.
+ */
+gchar *
+puls_nvme_resolve_smart_target (const gchar *device_path)
+{
+    if (device_path == NULL)
+        return NULL;
+
+    g_autofree gchar *ctrl_path = puls_nvme_resolve_controller_path (device_path);
+    if (ctrl_path == NULL)
+        return g_strdup (device_path);
+
+    g_autofree gchar *clean_name = puls_sanitize_device_name (device_path);
+    if (clean_name != NULL && puls_nvme_is_namespace_name (clean_name)) {
+        g_autofree gchar *sys_block = g_strdup_printf ("/sys/block/%s", clean_name);
+        if (g_file_test (sys_block, G_FILE_TEST_IS_DIR) &&
+            !g_file_test (ctrl_path, G_FILE_TEST_EXISTS) &&
+            g_file_test (device_path, G_FILE_TEST_EXISTS)) {
+            return g_strdup (device_path);
+        }
+    }
+
+    return g_steal_pointer (&ctrl_path);
+}
+
+static gchar *
+read_optional_trimmed_attr (const gchar *dir,
+                            const gchar *attr,
+                            gsize        max_len)
+{
+    if (dir == NULL || attr == NULL)
+        return NULL;
+
+    g_autofree gchar *p = g_build_filename (dir, attr, NULL);
+    g_autofree gchar *val = puls_sysfs_read_string (p, max_len);
+    if (val == NULL || val[0] == '\0')
+        return NULL;
+
+    return g_steal_pointer (&val);
+}
+
+/**
+ * puls_nvme_read_topology_from_dir:
+ * @block_dir: Path to an NVMe namespace block sysfs directory (e.g. `/sys/block/nvme0n1`).
+ * @out_topo: Output #PulsNvmeTopology struct.
+ *
+ * Reads controller and namespace identity attributes from @block_dir and its
+ * linked `device` controller directory.
+ *
+ * Returns: %TRUE if @block_dir represents an NVMe namespace/controller topology.
+ */
+gboolean
+puls_nvme_read_topology_from_dir (const gchar      *block_dir,
+                                  PulsNvmeTopology *out_topo)
+{
+    g_return_val_if_fail (out_topo != NULL, FALSE);
+
+    memset (out_topo, 0, sizeof (*out_topo));
+    out_topo->cntlid = -1;
+
+    if (block_dir == NULL || !g_file_test (block_dir, G_FILE_TEST_IS_DIR))
+        return FALSE;
+
+    g_autofree gchar *dir_base = g_path_get_basename (block_dir);
+    g_autofree gchar *parsed_ctrl = NULL;
+    guint32 parsed_nsid = 0;
+
+    if (!puls_nvme_parse_device_name (dir_base, &parsed_ctrl, &parsed_nsid))
+        return FALSE;
+
+    out_topo->is_nvme = TRUE;
+    out_topo->namespace_name = g_strdup (dir_base);
+    out_topo->namespace_path = g_strdup_printf ("/dev/%s", dir_base);
+
+    g_autofree gchar *nsid_path = g_build_filename (block_dir, "nsid", NULL);
+    gboolean nsid_ok = FALSE;
+    guint64 sysfs_nsid = puls_sysfs_read_uint64 (nsid_path, 0, &nsid_ok);
+    out_topo->nsid = (nsid_ok && sysfs_nsid > 0 && sysfs_nsid <= G_MAXUINT32)
+                     ? (guint32)sysfs_nsid
+                     : parsed_nsid;
+
+    out_topo->eui64 = read_optional_trimmed_attr (block_dir, "eui", 128);
+    out_topo->nguid = read_optional_trimmed_attr (block_dir, "nguid", 128);
+    out_topo->wwid  = read_optional_trimmed_attr (block_dir, "wwid", 256);
+
+    g_autofree gchar *dev_sub = g_build_filename (block_dir, "device", NULL);
+    g_autofree gchar *ctrl_dir = puls_sysfs_resolve_link (dev_sub);
+    if (ctrl_dir == NULL && g_file_test (dev_sub, G_FILE_TEST_IS_DIR))
+        ctrl_dir = g_strdup (dev_sub);
+
+    if (ctrl_dir != NULL) {
+        g_autofree gchar *link_base = g_path_get_basename (ctrl_dir);
+        if (puls_nvme_is_controller_name (link_base))
+            out_topo->controller_name = g_strdup (link_base);
+    }
+
+    if (out_topo->controller_name == NULL && parsed_ctrl != NULL)
+        out_topo->controller_name = g_strdup (parsed_ctrl);
+
+    if (out_topo->controller_name != NULL) {
+        out_topo->controller_path = g_strdup_printf ("/dev/%s", out_topo->controller_name);
+        if (ctrl_dir == NULL) {
+            g_autofree gchar *class_ctrl = g_strdup_printf ("/sys/class/nvme/%s",
+                                                            out_topo->controller_name);
+            if (g_file_test (class_ctrl, G_FILE_TEST_IS_DIR))
+                ctrl_dir = g_steal_pointer (&class_ctrl);
+        }
+    }
+
+    if (ctrl_dir != NULL) {
+        g_autofree gchar *cntlid_path = g_build_filename (ctrl_dir, "cntlid", NULL);
+        gboolean cntlid_ok = FALSE;
+        gint64 cntlid = puls_sysfs_read_int64 (cntlid_path, -1, &cntlid_ok);
+        if (cntlid_ok && cntlid >= 0)
+            out_topo->cntlid = (gint)cntlid;
+
+        out_topo->transport = read_optional_trimmed_attr (ctrl_dir, "transport", 64);
+        out_topo->subsysnqn = read_optional_trimmed_attr (ctrl_dir, "subsysnqn", 512);
+        out_topo->state     = read_optional_trimmed_attr (ctrl_dir, "state", 64);
+    }
+
+    return TRUE;
+}
+
+/**
+ * puls_nvme_read_topology:
+ * @device_path: Block device path or name (e.g. `/dev/nvme0n1`).
+ * @out_topo: Output #PulsNvmeTopology struct.
+ *
+ * Resolves NVMe controller vs namespace topology from sysfs, falling back to
+ * deterministic device path parsing when sysfs entries are unavailable.
+ *
+ * Returns: %TRUE if @device_path is an NVMe namespace or controller.
+ */
+gboolean
+puls_nvme_read_topology (const gchar      *device_path,
+                         PulsNvmeTopology *out_topo)
+{
+    g_return_val_if_fail (out_topo != NULL, FALSE);
+
+    memset (out_topo, 0, sizeof (*out_topo));
+    out_topo->cntlid = -1;
+
+    if (device_path == NULL)
+        return FALSE;
+
+    g_autofree gchar *clean_name = puls_sanitize_device_name (device_path);
+    if (clean_name != NULL) {
+        g_autofree gchar *block_dir = g_strdup_printf ("/sys/block/%s", clean_name);
+        if (puls_nvme_read_topology_from_dir (block_dir, out_topo))
+            return TRUE;
+    }
+
+    g_autofree gchar *ctrl_name = NULL;
+    guint32 nsid = 0;
+    NvmeNameKind kind = classify_nvme_name (device_path, &ctrl_name, &nsid);
+    if (kind == NVME_KIND_INVALID)
+        return FALSE;
+
+    out_topo->is_nvme = TRUE;
+    out_topo->controller_name = g_strdup (ctrl_name);
+    out_topo->controller_path = ctrl_name ? g_strdup_printf ("/dev/%s", ctrl_name) : NULL;
+    out_topo->nsid = nsid;
+
+    if (kind == NVME_KIND_NAMESPACE && clean_name != NULL) {
+        out_topo->namespace_name = g_strdup (clean_name);
+        out_topo->namespace_path = g_strdup_printf ("/dev/%s", clean_name);
+    }
+
+    return TRUE;
 }
 

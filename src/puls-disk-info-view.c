@@ -236,30 +236,35 @@ on_action_done (GObject *source G_GNUC_UNUSED, GAsyncResult *result, gpointer us
 }
 
 static void
-on_short_test_clicked (GtkButton *btn G_GNUC_UNUSED, PulsDiskInfoView *self)
+start_smart_self_test (PulsDiskInfoView *self,
+                       const gchar      *action,
+                       const gchar      *status_msg)
 {
     if (self->current_device == NULL)
         return;
-    gtk_label_set_text (GTK_LABEL (self->test_status_label), _(PULS_STR_TEST_STARTING_SHORT));
-    puls_run_smartctl_action_async (self->current_device, "short", NULL, on_action_done, self);
+
+    g_autofree gchar *smart_target = puls_nvme_resolve_smart_target (self->current_device);
+    gtk_label_set_text (GTK_LABEL (self->test_status_label), status_msg);
+    puls_run_smartctl_action_async (smart_target ? smart_target : self->current_device,
+                                    action, NULL, on_action_done, self);
+}
+
+static void
+on_short_test_clicked (GtkButton *btn G_GNUC_UNUSED, PulsDiskInfoView *self)
+{
+    start_smart_self_test (self, "short", _(PULS_STR_TEST_STARTING_SHORT));
 }
 
 static void
 on_long_test_clicked (GtkButton *btn G_GNUC_UNUSED, PulsDiskInfoView *self)
 {
-    if (self->current_device == NULL)
-        return;
-    gtk_label_set_text (GTK_LABEL (self->test_status_label), _(PULS_STR_TEST_STARTING_LONG));
-    puls_run_smartctl_action_async (self->current_device, "long", NULL, on_action_done, self);
+    start_smart_self_test (self, "long", _(PULS_STR_TEST_STARTING_LONG));
 }
 
 static void
 on_abort_test_clicked (GtkButton *btn G_GNUC_UNUSED, PulsDiskInfoView *self)
 {
-    if (self->current_device == NULL)
-        return;
-    gtk_label_set_text (GTK_LABEL (self->test_status_label), _(PULS_STR_TEST_ABORTING));
-    puls_run_smartctl_action_async (self->current_device, "abort", NULL, on_action_done, self);
+    start_smart_self_test (self, "abort", _(PULS_STR_TEST_ABORTING));
 }
 
 typedef struct {
@@ -1642,7 +1647,19 @@ puls_disk_info_view_set_data (PulsDiskInfoView *self,
     gtk_label_set_text (GTK_LABEL (self->form_factor_label), ff ? ff : "N/A");
 
     const gchar *dev_path = puls_smart_data_get_device_path (data);
-    gtk_label_set_text (GTK_LABEL (self->device_path_label), dev_path ? dev_path : "N/A");
+    const gchar *ctrl_path = puls_smart_data_get_controller_path (data);
+    guint32 nsid = puls_smart_data_get_nvme_nsid (data);
+    if (dev_path && ctrl_path && nsid > 0) {
+        g_autofree gchar *path_display = g_strdup_printf ("%s (Controller: %s, NSID %u)",
+                                                          dev_path, ctrl_path, nsid);
+        gtk_label_set_text (GTK_LABEL (self->device_path_label), path_display);
+    } else if (dev_path && ctrl_path) {
+        g_autofree gchar *path_display = g_strdup_printf ("%s (Controller: %s)",
+                                                          dev_path, ctrl_path);
+        gtk_label_set_text (GTK_LABEL (self->device_path_label), path_display);
+    } else {
+        gtk_label_set_text (GTK_LABEL (self->device_path_label), dev_path ? dev_path : "N/A");
+    }
 
     gint r_rpm = puls_smart_data_get_rotation_rpm (data);
     if (r_rpm == 0) {

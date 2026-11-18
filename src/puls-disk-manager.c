@@ -74,16 +74,8 @@ is_real_disk (const gchar *name)
             return FALSE;
     }
 
-    if (g_str_has_prefix (name, "nvme")) {
-        if (strstr (name, "p") != NULL) {
-            const gchar *n_pos = strstr (name + 4, "n");
-            if (n_pos) {
-                const gchar *p_pos = strstr (n_pos, "p");
-                if (p_pos && g_ascii_isdigit (*(p_pos + 1)))
-                    return FALSE;
-            }
-        }
-    }
+    if (g_str_has_prefix (name, "nvme"))
+        return puls_nvme_is_namespace_name (name);
 
     if (g_str_has_prefix (name, "mmcblk")) {
         if (strstr (name, "p") != NULL) {
@@ -323,10 +315,27 @@ puls_smart_data_fill_sysfs_fallbacks (PulsSmartData *data)
     }
 
     guint64 cap = puls_smart_data_get_capacity_bytes (data);
-    if (cap == 0) {
-        guint64 sectors = puls_sysfs_read_device_uint64 (base, "size", 0);
-        if (sectors > 0)
-            puls_smart_data_set_capacity_bytes (data, sectors * 512ULL);
+    guint64 sysfs_sectors = puls_sysfs_read_device_uint64 (base, "size", 0);
+    if (sysfs_sectors > 0 && (cap == 0 || puls_nvme_is_namespace_name (base))) {
+        puls_smart_data_set_capacity_bytes (data, sysfs_sectors * 512ULL);
+    }
+
+    if (dtype == PULS_DRIVE_TYPE_NVME_SSD || transport == PULS_TRANSPORT_PCIE || puls_nvme_is_namespace_name (base)) {
+        PulsNvmeTopology topo = { 0 };
+        if (puls_nvme_read_topology (dev_path, &topo)) {
+            if (puls_smart_data_get_controller_path (data) == NULL && topo.controller_path != NULL)
+                puls_smart_data_set_controller_path (data, topo.controller_path);
+            if (puls_smart_data_get_nvme_nsid (data) == 0 && topo.nsid > 0)
+                puls_smart_data_set_nvme_nsid (data, topo.nsid);
+            if (puls_smart_data_get_nvme_subsys_nqn (data) == NULL && topo.subsysnqn != NULL)
+                puls_smart_data_set_nvme_subsys_nqn (data, topo.subsysnqn);
+            if (puls_smart_data_get_nvme_wwid (data) == NULL) {
+                const gchar *id = topo.wwid ? topo.wwid : (topo.nguid ? topo.nguid : topo.eui64);
+                if (id != NULL)
+                    puls_smart_data_set_nvme_wwid (data, id);
+            }
+            puls_nvme_topology_clear (&topo);
+        }
     }
 
     const gchar *iface = puls_smart_data_get_interface_type (data);
@@ -469,38 +478,74 @@ puls_smart_data_fill_sysfs_fallbacks (PulsSmartData *data)
     }
 }
 
-static void
-probe_and_add_device (PulsDiskManager *self,
-                      const gchar     *dev_path)
+static PulsSmartData *
+build_probed_smart_data (const gchar *dev_path,
+                         const gchar *json)
 {
-    if (g_hash_table_contains (self->devices, dev_path))
-        return;
-
     PulsSmartData *data = NULL;
 
-    if (!self->mock_mode) {
-        GError *error = NULL;
-        g_autofree gchar *json = puls_run_smartctl_sync (dev_path, &error);
-        g_clear_error (&error);
-
-        if (json != NULL) {
-            GError *parse_err = NULL;
-            data = puls_smart_parser_parse_json (json, &parse_err);
-            g_clear_error (&parse_err);
-        }
+    if (json != NULL) {
+        GError *parse_err = NULL;
+        data = puls_smart_parser_parse_json (json, &parse_err);
+        g_clear_error (&parse_err);
     }
 
     if (data == NULL)
         data = puls_smart_data_new ();
 
-    if (puls_smart_data_get_device_path (data) == NULL)
-        puls_smart_data_set_device_path (data, dev_path);
+    /* Always keep the namespace/block path as primary device_path for
+     * partition/mount mapping even when smartctl queried an NVMe controller. */
+    puls_smart_data_set_device_path (data, dev_path);
+
+    g_autofree gchar *ctrl_path = puls_nvme_resolve_controller_path (dev_path);
+    if (ctrl_path != NULL)
+        puls_smart_data_set_controller_path (data, ctrl_path);
 
     puls_smart_data_fill_sysfs_fallbacks (data);
+    return data;
+}
 
+static void
+probe_and_add_device_with_cache (PulsDiskManager *self,
+                                 const gchar     *dev_path,
+                                 GHashTable      *controller_json_cache)
+{
+    if (g_hash_table_contains (self->devices, dev_path))
+        return;
+
+    g_autofree gchar *owned_json = NULL;
+    const gchar *json = NULL;
+
+    if (!self->mock_mode) {
+        g_autofree gchar *smart_target = puls_nvme_resolve_smart_target (dev_path);
+        const gchar *query_dev = smart_target ? smart_target : dev_path;
+
+        if (controller_json_cache != NULL && g_hash_table_contains (controller_json_cache, query_dev)) {
+            json = g_hash_table_lookup (controller_json_cache, query_dev);
+        } else {
+            GError *error = NULL;
+            owned_json = puls_run_smartctl_sync (query_dev, &error);
+            g_clear_error (&error);
+            json = owned_json;
+            if (controller_json_cache != NULL) {
+                g_hash_table_insert (controller_json_cache,
+                                     g_strdup (query_dev),
+                                     g_strdup (owned_json));
+            }
+        }
+    }
+
+    PulsSmartData *data = build_probed_smart_data (dev_path, json);
     g_hash_table_insert (self->devices, g_strdup (dev_path), data);
     self->device_paths = g_list_append (self->device_paths, g_strdup (dev_path));
     g_signal_emit (self, signals[SIGNAL_DISK_ADDED], 0, dev_path);
+}
+
+static void
+probe_and_add_device (PulsDiskManager *self,
+                      const gchar     *dev_path)
+{
+    probe_and_add_device_with_cache (self, dev_path, NULL);
 }
 
 /**
@@ -565,9 +610,11 @@ puls_disk_manager_scan (PulsDiskManager *self)
     }
     g_ptr_array_unref (stale);
 
+    GHashTable *ctrl_cache = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
     for (GList *l = found; l != NULL; l = l->next) {
-        probe_and_add_device (self, (const gchar *)l->data);
+        probe_and_add_device_with_cache (self, (const gchar *)l->data, ctrl_cache);
     }
+    g_hash_table_destroy (ctrl_cache);
 
     g_list_free_full (found, g_free);
 }
@@ -620,21 +667,7 @@ on_smartctl_done (GObject      *source G_GNUC_UNUSED,
     g_autofree gchar *json = puls_run_smartctl_finish (result, &error);
     g_clear_error (&error);
 
-    PulsSmartData *data = NULL;
-    if (json) {
-        GError *parse_err = NULL;
-        data = puls_smart_parser_parse_json (json, &parse_err);
-        g_clear_error (&parse_err);
-    }
-
-    if (data == NULL) {
-        data = puls_smart_data_new ();
-    }
-    if (puls_smart_data_get_device_path (data) == NULL) {
-        puls_smart_data_set_device_path (data, rd->device_path);
-    }
-
-    puls_smart_data_fill_sysfs_fallbacks (data);
+    PulsSmartData *data = build_probed_smart_data (rd->device_path, json);
 
     g_hash_table_replace (rd->manager->devices,
                           g_strdup (rd->device_path),
@@ -671,7 +704,9 @@ puls_disk_manager_refresh_async (PulsDiskManager     *self,
     rd->device_path = g_strdup (device_path);
     g_task_set_task_data (task, rd, (GDestroyNotify)refresh_data_free);
 
-    puls_run_smartctl_async (device_path, cancellable, on_smartctl_done, task);
+    g_autofree gchar *smart_target = puls_nvme_resolve_smart_target (device_path);
+    puls_run_smartctl_async (smart_target ? smart_target : device_path,
+                             cancellable, on_smartctl_done, task);
 }
 
 PulsSmartData *

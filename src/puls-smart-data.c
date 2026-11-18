@@ -164,6 +164,11 @@ struct _PulsSmartData {
     GArray            *thermal_sensors;
     PulsUsbSpeed       usb_speed;
     gchar             *usb_bridge_chip;
+
+    gchar             *controller_path;
+    guint32            nvme_nsid;
+    gchar             *nvme_subsys_nqn;
+    gchar             *nvme_wwid;
 };
 
 G_DEFINE_TYPE (PulsSmartData, puls_smart_data, G_TYPE_OBJECT)
@@ -207,6 +212,9 @@ puls_smart_data_finalize (GObject *object)
     }
 
     g_free (self->usb_bridge_chip);
+    g_free (self->controller_path);
+    g_free (self->nvme_subsys_nqn);
+    g_free (self->nvme_wwid);
 
     G_OBJECT_CLASS (puls_smart_data_parent_class)->finalize (object);
 }
@@ -274,6 +282,10 @@ puls_smart_data_init (PulsSmartData *self)
     self->thermal_sensors          = g_array_new (FALSE, TRUE, sizeof (PulsThermalSensor));
     self->usb_speed                = PULS_USB_SPEED_UNKNOWN;
     self->usb_bridge_chip          = NULL;
+    self->controller_path          = NULL;
+    self->nvme_nsid                = 0;
+    self->nvme_subsys_nqn          = NULL;
+    self->nvme_wwid                = NULL;
 }
 
 
@@ -299,6 +311,9 @@ puls_smart_data_new (void)
     }
 
 IMPL_STRING_ACCESSOR (device_path)
+IMPL_STRING_ACCESSOR (controller_path)
+IMPL_STRING_ACCESSOR (nvme_subsys_nqn)
+IMPL_STRING_ACCESSOR (nvme_wwid)
 IMPL_STRING_ACCESSOR (model_name)
 IMPL_STRING_ACCESSOR (serial_number)
 IMPL_STRING_ACCESSOR (firmware_version)
@@ -308,6 +323,20 @@ IMPL_STRING_ACCESSOR (transfer_mode)
 IMPL_STRING_ACCESSOR (form_factor)
 
 #undef IMPL_STRING_ACCESSOR
+
+guint32
+puls_smart_data_get_nvme_nsid (PulsSmartData *self)
+{
+    g_return_val_if_fail (PULS_IS_SMART_DATA (self), 0);
+    return self->nvme_nsid;
+}
+
+void
+puls_smart_data_set_nvme_nsid (PulsSmartData *self, guint32 nsid)
+{
+    g_return_if_fail (PULS_IS_SMART_DATA (self));
+    self->nvme_nsid = nsid;
+}
 
 guint32
 puls_smart_data_get_logical_sector_size (PulsSmartData *self)

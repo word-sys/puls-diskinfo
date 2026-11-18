@@ -70,6 +70,23 @@ run_headless_scan (gboolean json_output)
             json_builder_begin_object (builder);
             json_builder_set_member_name (builder, "device_path");
             json_builder_add_string_value (builder, path);
+            const gchar *ctrl_path = puls_smart_data_get_controller_path (data);
+            if (ctrl_path != NULL) {
+                json_builder_set_member_name (builder, "controller_path");
+                json_builder_add_string_value (builder, ctrl_path);
+                json_builder_set_member_name (builder, "nvme_nsid");
+                json_builder_add_int_value (builder, (gint64)puls_smart_data_get_nvme_nsid (data));
+            }
+            const gchar *nqn = puls_smart_data_get_nvme_subsys_nqn (data);
+            if (nqn != NULL) {
+                json_builder_set_member_name (builder, "nvme_subsys_nqn");
+                json_builder_add_string_value (builder, nqn);
+            }
+            const gchar *wwid = puls_smart_data_get_nvme_wwid (data);
+            if (wwid != NULL) {
+                json_builder_set_member_name (builder, "nvme_wwid");
+                json_builder_add_string_value (builder, wwid);
+            }
             json_builder_set_member_name (builder, "model");
             json_builder_add_string_value (builder, puls_smart_data_get_model_name (data) ? puls_smart_data_get_model_name (data) : "Unknown");
             json_builder_set_member_name (builder, "serial");
@@ -171,6 +188,17 @@ run_headless_scan (gboolean json_output)
         g_autofree gchar *hours_str = puls_format_hours (puls_smart_data_get_power_on_hours (data));
 
         g_print ("- Device:        %s\n", path);
+        const gchar *ctrl_path = puls_smart_data_get_controller_path (data);
+        if (ctrl_path != NULL) {
+            guint32 nsid = puls_smart_data_get_nvme_nsid (data);
+            if (nsid > 0)
+                g_print ("  Controller:    %s (Namespace ID: %u)\n", ctrl_path, nsid);
+            else
+                g_print ("  Controller:    %s\n", ctrl_path);
+        }
+        const gchar *wwid = puls_smart_data_get_nvme_wwid (data);
+        if (wwid != NULL)
+            g_print ("  NVMe WWID:     %s\n", wwid);
         g_print ("  Model:         %s\n", puls_smart_data_get_model_name (data) ? puls_smart_data_get_model_name (data) : "Unknown");
         g_print ("  Serial:        %s\n", puls_smart_data_get_serial_number (data) ? puls_smart_data_get_serial_number (data) : "Unknown");
         g_print ("  Firmware:      %s\n", puls_smart_data_get_firmware_version (data) ? puls_smart_data_get_firmware_version (data) : "Unknown");

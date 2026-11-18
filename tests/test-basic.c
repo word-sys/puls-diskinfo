@@ -1426,6 +1426,141 @@ test_hotplug_monitoring (void)
     g_free (stats.last_updated);
 }
 
+static void
+test_nvme_topology_separation (void)
+{
+    /* 1. Controller vs namespace vs partition name classification */
+    g_assert_true  (puls_nvme_is_controller_name ("nvme0"));
+    g_assert_true  (puls_nvme_is_controller_name ("/dev/nvme12"));
+    g_assert_false (puls_nvme_is_controller_name ("nvme0n1"));
+    g_assert_false (puls_nvme_is_controller_name ("nvme0n1p1"));
+    g_assert_false (puls_nvme_is_controller_name ("sda"));
+
+    g_assert_true  (puls_nvme_is_namespace_name ("nvme0n1"));
+    g_assert_true  (puls_nvme_is_namespace_name ("/dev/nvme0n2"));
+    g_assert_true  (puls_nvme_is_namespace_name ("/dev/nvme1c0n3"));
+    g_assert_false (puls_nvme_is_namespace_name ("nvme0"));
+    g_assert_false (puls_nvme_is_namespace_name ("/dev/nvme0n1p1"));
+    g_assert_false (puls_nvme_is_namespace_name ("/dev/sda"));
+
+    g_autofree gchar *ctrl = NULL;
+    guint32 nsid = 0;
+    g_assert_true (puls_nvme_parse_device_name ("/dev/nvme1c0n4", &ctrl, &nsid));
+    g_assert_cmpstr (ctrl, ==, "nvme1");
+    g_assert_cmpuint (nsid, ==, 4);
+    g_clear_pointer (&ctrl, g_free);
+
+    g_assert_true (puls_nvme_parse_device_name ("/dev/nvme0n1p2", &ctrl, &nsid));
+    g_assert_cmpstr (ctrl, ==, "nvme0");
+    g_assert_cmpuint (nsid, ==, 1);
+    g_clear_pointer (&ctrl, g_free);
+
+    g_assert_false (puls_nvme_parse_device_name ("/dev/sda1", &ctrl, &nsid));
+
+    /* 2. SMART target resolution routes NVMe namespaces to their controller */
+    g_autofree gchar *c0 = puls_nvme_resolve_controller_path ("/dev/nvme0n1");
+    g_assert_cmpstr (c0, ==, "/dev/nvme0");
+    g_autofree gchar *t0 = puls_nvme_resolve_smart_target ("/dev/nvme0n1");
+    g_assert_cmpstr (t0, ==, "/dev/nvme0");
+    g_autofree gchar *t2 = puls_nvme_resolve_smart_target ("/dev/nvme2c0n3");
+    g_assert_cmpstr (t2, ==, "/dev/nvme2");
+    g_autofree gchar *ts = puls_nvme_resolve_smart_target ("/dev/sda");
+    g_assert_cmpstr (ts, ==, "/dev/sda");
+    g_assert_null (puls_nvme_resolve_controller_path ("/dev/sda"));
+
+    /* 3. Multi-namespace mock sysfs topology tree linked to single controller */
+    g_autofree gchar *tmp_root = g_dir_make_tmp ("puls_nvme_topo_XXXXXX", NULL);
+    g_assert_nonnull (tmp_root);
+
+    g_autofree gchar *ctrl_dir = g_build_filename (tmp_root, "nvme0", NULL);
+    g_autofree gchar *ns1_dir  = g_build_filename (tmp_root, "nvme0n1", NULL);
+    g_autofree gchar *ns2_dir  = g_build_filename (tmp_root, "nvme0n2", NULL);
+    g_assert_cmpint (g_mkdir_with_parents (ctrl_dir, 0755), ==, 0);
+    g_assert_cmpint (g_mkdir_with_parents (ns1_dir, 0755), ==, 0);
+    g_assert_cmpint (g_mkdir_with_parents (ns2_dir, 0755), ==, 0);
+
+    g_autofree gchar *p_cntlid = g_build_filename (ctrl_dir, "cntlid", NULL);
+    g_autofree gchar *p_trans  = g_build_filename (ctrl_dir, "transport", NULL);
+    g_autofree gchar *p_nqn    = g_build_filename (ctrl_dir, "subsysnqn", NULL);
+    g_autofree gchar *p_state  = g_build_filename (ctrl_dir, "state", NULL);
+    g_assert_true (g_file_set_contents (p_cntlid, "1\n", -1, NULL));
+    g_assert_true (g_file_set_contents (p_trans,  "pcie\n", -1, NULL));
+    g_assert_true (g_file_set_contents (p_nqn,    "nqn.2016-06.io.puls:nvm-test\n", -1, NULL));
+    g_assert_true (g_file_set_contents (p_state,  "live\n", -1, NULL));
+
+    g_autofree gchar *ns1_nsid = g_build_filename (ns1_dir, "nsid", NULL);
+    g_autofree gchar *ns1_eui  = g_build_filename (ns1_dir, "eui", NULL);
+    g_autofree gchar *ns1_wwid = g_build_filename (ns1_dir, "wwid", NULL);
+    g_autofree gchar *ns1_dev  = g_build_filename (ns1_dir, "device", NULL);
+    g_assert_true (g_file_set_contents (ns1_nsid, "1\n", -1, NULL));
+    g_assert_true (g_file_set_contents (ns1_eui,  "0025388b11000001\n", -1, NULL));
+    g_assert_true (g_file_set_contents (ns1_wwid, "eui.0025388b11000001\n", -1, NULL));
+    g_assert_cmpint (symlink ("../nvme0", ns1_dev), ==, 0);
+
+    g_autofree gchar *ns2_nsid = g_build_filename (ns2_dir, "nsid", NULL);
+    g_autofree gchar *ns2_nguid = g_build_filename (ns2_dir, "nguid", NULL);
+    g_autofree gchar *ns2_dev  = g_build_filename (ns2_dir, "device", NULL);
+    g_assert_true (g_file_set_contents (ns2_nsid, "2\n", -1, NULL));
+    g_assert_true (g_file_set_contents (ns2_nguid, "00000000-0000-0002-0025-380000000002\n", -1, NULL));
+    g_assert_cmpint (symlink ("../nvme0", ns2_dev), ==, 0);
+
+    PulsNvmeTopology topo1 = { 0 };
+    g_assert_true (puls_nvme_read_topology_from_dir (ns1_dir, &topo1));
+    g_assert_true (topo1.is_nvme);
+    g_assert_cmpstr (topo1.controller_name, ==, "nvme0");
+    g_assert_cmpstr (topo1.controller_path, ==, "/dev/nvme0");
+    g_assert_cmpstr (topo1.namespace_name,  ==, "nvme0n1");
+    g_assert_cmpstr (topo1.namespace_path,  ==, "/dev/nvme0n1");
+    g_assert_cmpuint (topo1.nsid, ==, 1);
+    g_assert_cmpint (topo1.cntlid, ==, 1);
+    g_assert_cmpstr (topo1.transport, ==, "pcie");
+    g_assert_cmpstr (topo1.subsysnqn, ==, "nqn.2016-06.io.puls:nvm-test");
+    g_assert_cmpstr (topo1.eui64,     ==, "0025388b11000001");
+    g_assert_cmpstr (topo1.wwid,      ==, "eui.0025388b11000001");
+    g_assert_cmpstr (topo1.state,     ==, "live");
+    puls_nvme_topology_clear (&topo1);
+
+    PulsNvmeTopology topo2 = { 0 };
+    g_assert_true (puls_nvme_read_topology_from_dir (ns2_dir, &topo2));
+    g_assert_cmpstr (topo2.controller_path, ==, "/dev/nvme0");
+    g_assert_cmpstr (topo2.namespace_path,  ==, "/dev/nvme0n2");
+    g_assert_cmpuint (topo2.nsid, ==, 2);
+    g_assert_cmpstr (topo2.nguid, ==, "00000000-0000-0002-0025-380000000002");
+    puls_nvme_topology_clear (&topo2);
+
+    /* Clean up mock topology directory */
+    unlink (p_cntlid); unlink (p_trans); unlink (p_nqn); unlink (p_state);
+    unlink (ns1_nsid); unlink (ns1_eui); unlink (ns1_wwid); unlink (ns1_dev);
+    unlink (ns2_nsid); unlink (ns2_nguid); unlink (ns2_dev);
+    rmdir (ctrl_dir); rmdir (ns1_dir); rmdir (ns2_dir); rmdir (tmp_root);
+
+    /* 4. Reject bare controller uevent and populate namespace topology on valid uevent */
+    g_autoptr(PulsDiskManager) mgr = puls_disk_manager_new ();
+    puls_disk_manager_set_mock_mode (mgr, TRUE);
+
+    const gchar ctrl_uevent[] = "ACTION=add\0SUBSYSTEM=block\0DEVTYPE=disk\0DEVNAME=nvme0\0";
+    g_assert_false (puls_disk_manager_handle_uevent (mgr, ctrl_uevent, sizeof (ctrl_uevent)));
+    g_assert_cmpuint (puls_disk_manager_get_device_count (mgr), ==, 0);
+
+    const gchar ns_uevent[] = "ACTION=add\0SUBSYSTEM=block\0DEVTYPE=disk\0DEVNAME=nvme9n2\0";
+    g_assert_true (puls_disk_manager_handle_uevent (mgr, ns_uevent, sizeof (ns_uevent)));
+    PulsSmartData *ns_data = puls_disk_manager_get_smart_data (mgr, "/dev/nvme9n2");
+    g_assert_nonnull (ns_data);
+    g_assert_cmpstr (puls_smart_data_get_device_path (ns_data), ==, "/dev/nvme9n2");
+    g_assert_cmpstr (puls_smart_data_get_controller_path (ns_data), ==, "/dev/nvme9");
+    g_assert_cmpuint (puls_smart_data_get_nvme_nsid (ns_data), ==, 2);
+
+    /* 5. Live host check if /sys/block/nvme0n1 exists */
+    if (g_file_test ("/sys/block/nvme0n1", G_FILE_TEST_IS_DIR)) {
+        PulsNvmeTopology live_topo = { 0 };
+        g_assert_true (puls_nvme_read_topology ("/dev/nvme0n1", &live_topo));
+        g_assert_cmpstr (live_topo.controller_path, ==, "/dev/nvme0");
+        g_assert_cmpstr (live_topo.namespace_path, ==, "/dev/nvme0n1");
+        g_assert_cmpuint (live_topo.nsid, >=, 1);
+        puls_nvme_topology_clear (&live_topo);
+    }
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -1452,6 +1587,7 @@ main (int argc, char *argv[])
     g_test_add_func ("/basic/capacity-formatters", test_capacity_formatters);
     g_test_add_func ("/basic/phase2-final-integration", test_phase2_final_integration);
     g_test_add_func ("/basic/hotplug-monitoring", test_hotplug_monitoring);
+    g_test_add_func ("/basic/nvme-topology-separation", test_nvme_topology_separation);
 
     int result = g_test_run ();
 

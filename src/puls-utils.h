@@ -167,6 +167,36 @@ gboolean puls_sysfs_read_pcie_link_from_dir (const gchar      *pci_dir,
 gboolean puls_sysfs_read_pcie_link          (const gchar      *device_name,
                                              PulsPcieLinkInfo *out_info);
 
+/* NVMe Controller vs Namespace Topology */
+typedef struct {
+    gboolean is_nvme;
+    gchar   *controller_name;  /* e.g. "nvme0" */
+    gchar   *controller_path;  /* e.g. "/dev/nvme0" (target for SMART queries) */
+    gchar   *namespace_name;   /* e.g. "nvme0n1" */
+    gchar   *namespace_path;   /* e.g. "/dev/nvme0n1" (target for mounts/partitions) */
+    guint32  nsid;             /* Namespace ID (e.g. 1) */
+    gint     cntlid;           /* Controller ID (-1 if unknown) */
+    gchar   *transport;        /* Controller transport ("pcie", "tcp", "rdma", etc.) */
+    gchar   *subsysnqn;        /* NVMe Qualified Name from controller sysfs */
+    gchar   *eui64;            /* Namespace EUI-64 identifier */
+    gchar   *nguid;            /* Namespace NGUID identifier */
+    gchar   *wwid;             /* Namespace WWID identifier */
+    gchar   *state;            /* Controller state (e.g. "live") */
+} PulsNvmeTopology;
+
+void     puls_nvme_topology_clear         (PulsNvmeTopology  *topo);
+gboolean puls_nvme_is_controller_name     (const gchar       *name_or_path);
+gboolean puls_nvme_is_namespace_name      (const gchar       *name_or_path);
+gboolean puls_nvme_parse_device_name      (const gchar       *name_or_path,
+                                           gchar            **out_controller_name,
+                                           guint32           *out_nsid);
+gchar   *puls_nvme_resolve_controller_path (const gchar      *device_path);
+gchar   *puls_nvme_resolve_smart_target   (const gchar       *device_path);
+gboolean puls_nvme_read_topology_from_dir (const gchar       *block_dir,
+                                           PulsNvmeTopology  *out_topo);
+gboolean puls_nvme_read_topology          (const gchar       *device_path,
+                                           PulsNvmeTopology  *out_topo);
+
 /* USB Speed and Bridge Controller Inspector */
 typedef struct {
     gchar       *device_dir;       /* USB device directory in sysfs */
