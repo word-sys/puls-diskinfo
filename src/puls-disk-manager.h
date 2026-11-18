@@ -85,4 +85,9 @@ void             puls_disk_manager_start_monitoring (PulsDiskManager   *self);
 void             puls_disk_manager_stop_monitoring  (PulsDiskManager   *self);
 gboolean         puls_disk_manager_is_monitoring    (PulsDiskManager   *self);
 
+gboolean         puls_disk_manager_is_real_disk_name  (const gchar       *name);
+gboolean         puls_disk_manager_is_real_disk_sysfs (const gchar       *block_dir,
+                                                       const gchar       *name);
+GList           *puls_disk_manager_scan_sys_block_dir (const gchar       *sys_block_dir);
+
 G_END_DECLS

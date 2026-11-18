@@ -1095,7 +1095,9 @@ puls_get_transport (const gchar *device_name)
     if (g_str_has_prefix (device_name, "loop") ||
         g_str_has_prefix (device_name, "ram")  ||
         g_str_has_prefix (device_name, "zram") ||
-        g_str_has_prefix (device_name, "dm-"))
+        g_str_has_prefix (device_name, "dm-")  ||
+        g_str_has_prefix (device_name, "vd")   ||
+        g_str_has_prefix (device_name, "xvd"))
         return g_strdup ("virtual");
 
     g_autofree gchar *device_link = g_strdup_printf ("/sys/block/%s/device",
@@ -1155,7 +1157,9 @@ puls_detect_drive_type (const gchar *device_path)
     if (g_str_has_prefix (device_name, "loop") ||
         g_str_has_prefix (device_name, "ram")  ||
         g_str_has_prefix (device_name, "zram") ||
-        g_str_has_prefix (device_name, "dm-"))
+        g_str_has_prefix (device_name, "dm-")  ||
+        g_str_has_prefix (device_name, "vd")   ||
+        g_str_has_prefix (device_name, "xvd"))
         return PULS_DRIVE_TYPE_VIRTUAL;
 
     if (g_str_has_prefix (device_name, "mmcblk")) {

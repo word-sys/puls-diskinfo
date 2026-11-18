@@ -56,57 +56,156 @@ struct _PulsDiskManager {
 G_DEFINE_TYPE (PulsDiskManager, puls_disk_manager, G_TYPE_OBJECT)
 
 static gboolean
-is_real_disk (const gchar *name)
+matches_alpha_whole_disk (const gchar *name,
+                          const gchar *prefix)
 {
-    if (g_str_has_prefix (name, "loop") ||
-        g_str_has_prefix (name, "ram") ||
-        g_str_has_prefix (name, "dm-") ||
-        g_str_has_prefix (name, "sr") ||
-        g_str_has_prefix (name, "fd") ||
-        g_str_has_prefix (name, "zram"))
+    if (!g_str_has_prefix (name, prefix))
         return FALSE;
 
-    if (g_str_has_prefix (name, "sd") && strlen (name) > 3) {
-        const gchar *suffix = name + 2;
-        while (*suffix && g_ascii_isalpha (*suffix))
-            suffix++;
-        if (*suffix && g_ascii_isdigit (*suffix))
+    const gchar *suffix = name + strlen (prefix);
+    if (*suffix == '\0')
+        return FALSE;
+
+    while (*suffix != '\0') {
+        if (!g_ascii_isalpha (*suffix))
+            return FALSE;
+        suffix++;
+    }
+
+    return TRUE;
+}
+
+/**
+ * puls_disk_manager_is_real_disk_name:
+ * @name: Block device name (e.g. `sda`, `nvme0n1`, `vda`) or `/dev/<name>`.
+ *
+ * Determines whether @name identifies a whole physical or VM disk rather than
+ * a partition, NVMe controller node, optical drive, loopback device, zram,
+ * device-mapper (`dm-*` / `dm-verity` / LVM / docker thin), or pseudo block device.
+ *
+ * Returns: %TRUE if @name represents a supported whole disk.
+ */
+gboolean
+puls_disk_manager_is_real_disk_name (const gchar *name)
+{
+    if (name == NULL || *name == '\0')
+        return FALSE;
+
+    const gchar *base = g_str_has_prefix (name, "/dev/") ? (name + 5) : name;
+    if (*base == '\0' || strchr (base, '/') != NULL)
+        return FALSE;
+
+    static const gchar * const pseudo_prefixes[] = {
+        "loop", "ram", "zram", "dm-", "sr", "scd", "cdrom",
+        "pktcdvd", "fd", "nbd", "md", "zd", "drbd", "rbd",
+        "aoe", "mtd", "ubiblock", NULL
+    };
+
+    for (guint i = 0; pseudo_prefixes[i] != NULL; i++) {
+        if (g_str_has_prefix (base, pseudo_prefixes[i]))
             return FALSE;
     }
 
-    if (g_str_has_prefix (name, "nvme"))
-        return puls_nvme_is_namespace_name (name);
+    if (g_str_has_prefix (base, "nvme"))
+        return puls_nvme_is_namespace_name (base);
 
-    if (g_str_has_prefix (name, "mmcblk")) {
-        if (strstr (name, "p") != NULL) {
-            const gchar *p_pos = strstr (name + 6, "p");
-            if (p_pos && g_ascii_isdigit (*(p_pos + 1)))
-                return FALSE;
-        }
+    if (g_str_has_prefix (base, "mmcblk")) {
+        const gchar *p = base + 6;
+        if (!g_ascii_isdigit (*p))
+            return FALSE;
+        while (g_ascii_isdigit (*p))
+            p++;
+        return (*p == '\0');
     }
 
-    if (g_str_has_prefix (name, "sd") ||
-        g_str_has_prefix (name, "nvme") ||
-        g_str_has_prefix (name, "hd") ||
-        g_str_has_prefix (name, "vd") ||
-        g_str_has_prefix (name, "mmcblk"))
-        return TRUE;
-
-    return FALSE;
+    return matches_alpha_whole_disk (base, "sd") ||
+           matches_alpha_whole_disk (base, "hd") ||
+           matches_alpha_whole_disk (base, "vd") ||
+           matches_alpha_whole_disk (base, "xvd");
 }
 
-static GList *
-scan_sys_block (void)
+/**
+ * puls_disk_manager_is_real_disk_sysfs:
+ * @block_dir: (nullable): Sysfs block directory such as `/sys/block/sda`.
+ * @name: Block device name (e.g. `sda`).
+ *
+ * Applies name-based filtering via puls_disk_manager_is_real_disk_name() and
+ * inspects sysfs metadata (if @block_dir exists) to exclude device-mapper/verity
+ * (`dm/`), loopback (`loop/`), hidden multipath namespaces (`hidden == 1`),
+ * and optical CD/DVD-ROM drives (`device/type == 5`).
+ *
+ * Returns: %TRUE if the device should be enumerated.
+ */
+gboolean
+puls_disk_manager_is_real_disk_sysfs (const gchar *block_dir,
+                                      const gchar *name)
 {
+    if (!puls_disk_manager_is_real_disk_name (name))
+        return FALSE;
+
+    if (block_dir == NULL || !g_file_test (block_dir, G_FILE_TEST_IS_DIR))
+        return TRUE;
+
+    g_autofree gchar *dm_dir = g_build_filename (block_dir, "dm", NULL);
+    if (g_file_test (dm_dir, G_FILE_TEST_IS_DIR))
+        return FALSE;
+
+    g_autofree gchar *loop_dir = g_build_filename (block_dir, "loop", NULL);
+    if (g_file_test (loop_dir, G_FILE_TEST_IS_DIR))
+        return FALSE;
+
+    g_autofree gchar *hidden_path = g_build_filename (block_dir, "hidden", NULL);
+    g_autofree gchar *hidden_val = puls_sysfs_read_string (hidden_path, 16);
+    if (g_strcmp0 (hidden_val, "1") == 0)
+        return FALSE;
+
+    /* SCSI peripheral device type 5 == TYPE_ROM (CD/DVD/BD-ROM) */
+    g_autofree gchar *type_path = g_build_filename (block_dir, "device", "type", NULL);
+    g_autofree gchar *type_val = puls_sysfs_read_string (type_path, 32);
+    if (type_val != NULL) {
+        if (g_strcmp0 (type_val, "5") == 0 ||
+            g_ascii_strcasecmp (type_val, "CD/DVD") == 0)
+            return FALSE;
+    }
+
+    return TRUE;
+}
+
+static gboolean
+is_real_disk (const gchar *name)
+{
+    if (!puls_disk_manager_is_real_disk_name (name))
+        return FALSE;
+
+    const gchar *base = g_str_has_prefix (name, "/dev/") ? (name + 5) : name;
+    g_autofree gchar *block_dir = g_build_filename ("/sys/block", base, NULL);
+    return puls_disk_manager_is_real_disk_sysfs (block_dir, base);
+}
+
+/**
+ * puls_disk_manager_scan_sys_block_dir:
+ * @sys_block_dir: Directory following the `/sys/block` layout.
+ *
+ * Enumerates filtered real whole-disk `/dev/<name>` paths found in
+ * @sys_block_dir, sorted lexicographically.
+ *
+ * Returns: (element-type utf8) (transfer full): Sorted list of device paths.
+ */
+GList *
+puls_disk_manager_scan_sys_block_dir (const gchar *sys_block_dir)
+{
+    g_return_val_if_fail (sys_block_dir != NULL, NULL);
+
     GList *devices = NULL;
-    GDir *dir = g_dir_open ("/sys/block", 0, NULL);
+    GDir *dir = g_dir_open (sys_block_dir, 0, NULL);
 
     if (dir == NULL)
         return NULL;
 
     const gchar *name;
     while ((name = g_dir_read_name (dir)) != NULL) {
-        if (is_real_disk (name)) {
+        g_autofree gchar *block_dir = g_build_filename (sys_block_dir, name, NULL);
+        if (puls_disk_manager_is_real_disk_sysfs (block_dir, name)) {
             gchar *dev_path = g_strdup_printf ("/dev/%s", name);
             devices = g_list_append (devices, dev_path);
         }
@@ -116,6 +215,12 @@ scan_sys_block (void)
     devices = g_list_sort (devices, (GCompareFunc)g_strcmp0);
 
     return devices;
+}
+
+static GList *
+scan_sys_block (void)
+{
+    return puls_disk_manager_scan_sys_block_dir ("/sys/block");
 }
 
 static void

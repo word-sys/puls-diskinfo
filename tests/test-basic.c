@@ -1561,6 +1561,139 @@ test_nvme_topology_separation (void)
     }
 }
 
+static void
+remove_temp_tree (const gchar *path)
+{
+    GDir *dir = g_dir_open (path, 0, NULL);
+    if (dir != NULL) {
+        const gchar *entry;
+        while ((entry = g_dir_read_name (dir)) != NULL) {
+            g_autofree gchar *child = g_build_filename (path, entry, NULL);
+            if (g_file_test (child, G_FILE_TEST_IS_DIR) &&
+                !g_file_test (child, G_FILE_TEST_IS_SYMLINK)) {
+                remove_temp_tree (child);
+            } else {
+                unlink (child);
+            }
+        }
+        g_dir_close (dir);
+    }
+    rmdir (path);
+}
+
+static void
+test_pseudo_device_filter (void)
+{
+    /* 1. Pseudo, virtual clutter, partitions, and optical drives excluded */
+    static const gchar * const rejected[] = {
+        "loop0", "loop24", "/dev/loop5",
+        "zram0", "zram3",
+        "ram0", "ram15",
+        "dm-0", "dm-7",
+        "sr0", "sr1", "scd0", "cdrom", "pktcdvd0",
+        "fd0", "md0", "md127", "nbd0", "zd0", "drbd0", "rbd0",
+        "nvme0", "nvme0n1p1",
+        "sda1", "sda12", "hda1", "vda1", "xvda2",
+        "mmcblk0p1", "mmcblk0boot0", "mmcblk0boot1", "mmcblk0rpmb",
+        "sd", "vd", "mmcblk", "", NULL
+    };
+
+    for (guint i = 0; i < G_N_ELEMENTS (rejected); i++) {
+        g_assert_false (puls_disk_manager_is_real_disk_name (rejected[i]));
+    }
+
+    /* 2. Physical disks and VM disks (/dev/vd*, /dev/xvd*) preserved */
+    static const gchar * const accepted[] = {
+        "sda", "/dev/sda", "sdz", "sdab",
+        "hda", "vda", "vdb", "vdaa", "xvda",
+        "nvme0n1", "/dev/nvme1n2", "nvme0c0n1",
+        "mmcblk0", "mmcblk1"
+    };
+
+    for (guint i = 0; i < G_N_ELEMENTS (accepted); i++) {
+        g_assert_true (puls_disk_manager_is_real_disk_name (accepted[i]));
+    }
+
+    g_assert_cmpint (puls_detect_drive_type ("/dev/vda"), ==, PULS_DRIVE_TYPE_VIRTUAL);
+    g_assert_cmpint (puls_detect_transport_protocol ("/dev/vda"), ==, PULS_TRANSPORT_VIRTUAL);
+
+    /* 3. Synthetic /sys/block scan with 25 loop devices (snap/docker), dm-verity, optical, hidden */
+    g_autofree gchar *tmp_sys = g_dir_make_tmp ("puls_sys_block_XXXXXX", NULL);
+    g_assert_nonnull (tmp_sys);
+
+    for (gint i = 0; i < 25; i++) {
+        g_autofree gchar *loop_name = g_strdup_printf ("loop%d", i);
+        g_autofree gchar *loop_dir = g_build_filename (tmp_sys, loop_name, "loop", NULL);
+        g_assert_cmpint (g_mkdir_with_parents (loop_dir, 0755), ==, 0);
+        if (i == 0 || i == 1) {
+            g_autofree gchar *bf = g_build_filename (loop_dir, "backing_file", NULL);
+            const gchar *target = (i == 0)
+                ? "/var/lib/snapd/snaps/core22_1234.snap\n"
+                : "/var/lib/docker/overlay2/layer.img\n";
+            g_assert_true (g_file_set_contents (bf, target, -1, NULL));
+        }
+    }
+
+    /* Pseudo & dm-verity entries */
+    static const gchar * const extra_pseudo[] = {
+        "zram0", "ram0", "fd0", "md0", "nbd0", "mmcblk0boot0", "nvme0"
+    };
+    for (guint i = 0; i < G_N_ELEMENTS (extra_pseudo); i++) {
+        g_autofree gchar *d = g_build_filename (tmp_sys, extra_pseudo[i], NULL);
+        g_assert_cmpint (g_mkdir_with_parents (d, 0755), ==, 0);
+    }
+
+    g_autofree gchar *dm_sub = g_build_filename (tmp_sys, "dm-0", "dm", NULL);
+    g_assert_cmpint (g_mkdir_with_parents (dm_sub, 0755), ==, 0);
+    g_autofree gchar *dm_uuid = g_build_filename (dm_sub, "uuid", NULL);
+    g_assert_true (g_file_set_contents (dm_uuid, "VERITY-root-1234\n", -1, NULL));
+
+    g_autofree gchar *sr_dev = g_build_filename (tmp_sys, "sr0", "device", NULL);
+    g_assert_cmpint (g_mkdir_with_parents (sr_dev, 0755), ==, 0);
+    g_autofree gchar *sr_type = g_build_filename (sr_dev, "type", NULL);
+    g_assert_true (g_file_set_contents (sr_type, "5\n", -1, NULL));
+
+    /* Optical SCSI ROM & hidden multipath paths disguised under sd* names */
+    g_autofree gchar *sdb_dev = g_build_filename (tmp_sys, "sdb", "device", NULL);
+    g_assert_cmpint (g_mkdir_with_parents (sdb_dev, 0755), ==, 0);
+    g_autofree gchar *sdb_type = g_build_filename (sdb_dev, "type", NULL);
+    g_assert_true (g_file_set_contents (sdb_type, "5\n", -1, NULL));
+
+    g_autofree gchar *sdc_dir = g_build_filename (tmp_sys, "sdc", NULL);
+    g_assert_cmpint (g_mkdir_with_parents (sdc_dir, 0755), ==, 0);
+    g_autofree gchar *sdc_hidden = g_build_filename (sdc_dir, "hidden", NULL);
+    g_assert_true (g_file_set_contents (sdc_hidden, "1\n", -1, NULL));
+
+    /* Valid physical and VM disks */
+    static const gchar * const real_dirs[] = { "nvme0n1", "sda", "vda", "vdb" };
+    for (guint i = 0; i < G_N_ELEMENTS (real_dirs); i++) {
+        g_autofree gchar *d = g_build_filename (tmp_sys, real_dirs[i], NULL);
+        g_assert_cmpint (g_mkdir_with_parents (d, 0755), ==, 0);
+    }
+
+    GList *scanned = puls_disk_manager_scan_sys_block_dir (tmp_sys);
+    g_assert_cmpuint (g_list_length (scanned), ==, 4);
+    g_assert_cmpstr (g_list_nth_data (scanned, 0), ==, "/dev/nvme0n1");
+    g_assert_cmpstr (g_list_nth_data (scanned, 1), ==, "/dev/sda");
+    g_assert_cmpstr (g_list_nth_data (scanned, 2), ==, "/dev/vda");
+    g_assert_cmpstr (g_list_nth_data (scanned, 3), ==, "/dev/vdb");
+    g_list_free_full (scanned, g_free);
+
+    remove_temp_tree (tmp_sys);
+
+    /* 4. Live host /sys/block scan must contain zero loop/zram/dm/sr entries */
+    GList *host_devs = puls_disk_manager_scan_sys_block_dir ("/sys/block");
+    for (GList *l = host_devs; l != NULL; l = l->next) {
+        const gchar *p = l->data;
+        g_assert_false (g_str_has_prefix (p, "/dev/loop"));
+        g_assert_false (g_str_has_prefix (p, "/dev/zram"));
+        g_assert_false (g_str_has_prefix (p, "/dev/dm-"));
+        g_assert_false (g_str_has_prefix (p, "/dev/ram"));
+        g_assert_false (g_str_has_prefix (p, "/dev/sr"));
+    }
+    g_list_free_full (host_devs, g_free);
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -1588,6 +1721,7 @@ main (int argc, char *argv[])
     g_test_add_func ("/basic/phase2-final-integration", test_phase2_final_integration);
     g_test_add_func ("/basic/hotplug-monitoring", test_hotplug_monitoring);
     g_test_add_func ("/basic/nvme-topology-separation", test_nvme_topology_separation);
+    g_test_add_func ("/basic/pseudo-device-filter", test_pseudo_device_filter);
 
     int result = g_test_run ();
 
