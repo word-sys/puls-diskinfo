@@ -166,6 +166,7 @@ struct _PulsSmartData {
     gchar             *usb_bridge_chip;
 
     gchar             *controller_path;
+    gchar             *scsi_generic_path;
     guint32            nvme_nsid;
     gchar             *nvme_subsys_nqn;
     gchar             *nvme_wwid;
@@ -213,6 +214,7 @@ puls_smart_data_finalize (GObject *object)
 
     g_free (self->usb_bridge_chip);
     g_free (self->controller_path);
+    g_free (self->scsi_generic_path);
     g_free (self->nvme_subsys_nqn);
     g_free (self->nvme_wwid);
 
@@ -283,6 +285,7 @@ puls_smart_data_init (PulsSmartData *self)
     self->usb_speed                = PULS_USB_SPEED_UNKNOWN;
     self->usb_bridge_chip          = NULL;
     self->controller_path          = NULL;
+    self->scsi_generic_path        = NULL;
     self->nvme_nsid                = 0;
     self->nvme_subsys_nqn          = NULL;
     self->nvme_wwid                = NULL;
@@ -312,6 +315,7 @@ puls_smart_data_new (void)
 
 IMPL_STRING_ACCESSOR (device_path)
 IMPL_STRING_ACCESSOR (controller_path)
+IMPL_STRING_ACCESSOR (scsi_generic_path)
 IMPL_STRING_ACCESSOR (nvme_subsys_nqn)
 IMPL_STRING_ACCESSOR (nvme_wwid)
 IMPL_STRING_ACCESSOR (model_name)

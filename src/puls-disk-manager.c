@@ -441,6 +441,11 @@ puls_smart_data_fill_sysfs_fallbacks (PulsSmartData *data)
             }
             puls_nvme_topology_clear (&topo);
         }
+    } else if (dtype != PULS_DRIVE_TYPE_VIRTUAL &&
+               puls_smart_data_get_scsi_generic_path (data) == NULL) {
+        g_autofree gchar *sg_path = puls_scsi_block_to_generic (dev_path);
+        if (sg_path != NULL)
+            puls_smart_data_set_scsi_generic_path (data, sg_path);
     }
 
     const gchar *iface = puls_smart_data_get_interface_type (data);
@@ -610,6 +615,31 @@ build_probed_smart_data (const gchar *dev_path,
     return data;
 }
 
+static gboolean
+smart_json_has_usable_info (const gchar *json)
+{
+    if (json == NULL || *json == '\0')
+        return FALSE;
+
+    return (strstr (json, "\"smart_status\"") != NULL ||
+            strstr (json, "\"ata_smart_attributes\"") != NULL ||
+            strstr (json, "\"nvme_smart_health_information_log\"") != NULL ||
+            strstr (json, "\"scsi_start_stop_cycle_counter\"") != NULL);
+}
+
+static gchar *
+resolve_sg_passthrough_device (const gchar *dev_path)
+{
+    if (dev_path == NULL || g_str_has_prefix (dev_path, "/dev/nvme"))
+        return NULL;
+
+    g_autofree gchar *sg_path = puls_scsi_block_to_generic (dev_path);
+    if (sg_path != NULL && g_file_test (sg_path, G_FILE_TEST_EXISTS))
+        return g_steal_pointer (&sg_path);
+
+    return NULL;
+}
+
 static void
 probe_and_add_device_with_cache (PulsDiskManager *self,
                                  const gchar     *dev_path,
@@ -631,6 +661,23 @@ probe_and_add_device_with_cache (PulsDiskManager *self,
             GError *error = NULL;
             owned_json = puls_run_smartctl_sync (query_dev, &error);
             g_clear_error (&error);
+
+            if (!smart_json_has_usable_info (owned_json)) {
+                g_autofree gchar *sg_dev = resolve_sg_passthrough_device (dev_path);
+                if (sg_dev != NULL) {
+                    GError *sg_err = NULL;
+                    gchar *sg_json = puls_run_smartctl_sync (sg_dev, &sg_err);
+                    g_clear_error (&sg_err);
+                    if (smart_json_has_usable_info (sg_json)) {
+                        PULS_LOG_INFO ("SCSI generic passthrough succeeded for %s via %s", dev_path, sg_dev);
+                        g_free (owned_json);
+                        owned_json = sg_json;
+                    } else {
+                        g_free (sg_json);
+                    }
+                }
+            }
+
             json = owned_json;
             if (controller_json_cache != NULL) {
                 g_hash_table_insert (controller_json_cache,
@@ -751,6 +798,7 @@ puls_disk_manager_get_smart_data (PulsDiskManager *self,
 typedef struct {
     PulsDiskManager *manager;
     gchar *device_path;
+    gboolean tried_sg_fallback;
 } RefreshData;
 
 static void
@@ -771,6 +819,18 @@ on_smartctl_done (GObject      *source G_GNUC_UNUSED,
 
     g_autofree gchar *json = puls_run_smartctl_finish (result, &error);
     g_clear_error (&error);
+
+    if (!rd->tried_sg_fallback && !smart_json_has_usable_info (json)) {
+        g_autofree gchar *sg_dev = resolve_sg_passthrough_device (rd->device_path);
+        if (sg_dev != NULL) {
+            rd->tried_sg_fallback = TRUE;
+            puls_run_smartctl_async (sg_dev,
+                                     g_task_get_cancellable (task),
+                                     on_smartctl_done,
+                                     task);
+            return;
+        }
+    }
 
     PulsSmartData *data = build_probed_smart_data (rd->device_path, json);
 

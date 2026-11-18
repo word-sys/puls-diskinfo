@@ -1694,6 +1694,160 @@ test_pseudo_device_filter (void)
     g_list_free_full (host_devs, g_free);
 }
 
+static void
+test_scsi_generic_mapping (void)
+{
+    /* 1. Name & device path validation */
+    g_assert_true  (puls_scsi_is_generic_name ("sg0"));
+    g_assert_true  (puls_scsi_is_generic_name ("/dev/sg0"));
+    g_assert_true  (puls_scsi_is_generic_name ("sg12"));
+    g_assert_false (puls_scsi_is_generic_name ("sg"));
+    g_assert_false (puls_scsi_is_generic_name ("sg0a"));
+    g_assert_false (puls_scsi_is_generic_name ("/dev/sda"));
+    g_assert_false (puls_scsi_is_generic_name ("/dev/sg0/extra"));
+    g_assert_false (puls_scsi_is_generic_name (""));
+    g_assert_false (puls_scsi_is_generic_name (NULL));
+
+    g_assert_true  (puls_device_path_is_valid ("/dev/sg0"));
+    g_assert_false (puls_device_path_is_valid ("/dev/sg"));
+    g_assert_false (puls_device_path_is_valid ("/dev/sg0p1"));
+
+    /* 2. SCSI H:B:T:L address parsing */
+    g_autofree gchar *hbtl = NULL;
+    g_assert_true (puls_scsi_parse_hbtl_address ("/sys/devices/pci0000:00/host2/target2:0:1/2:0:1:0", &hbtl));
+    g_assert_cmpstr (hbtl, ==, "2:0:1:0");
+    g_clear_pointer (&hbtl, g_free);
+    g_assert_true (puls_scsi_parse_hbtl_address ("0:0:0:0", &hbtl));
+    g_assert_cmpstr (hbtl, ==, "0:0:0:0");
+    g_clear_pointer (&hbtl, g_free);
+    g_assert_false (puls_scsi_parse_hbtl_address ("/sys/devices/nvme0", &hbtl));
+    g_assert_null (hbtl);
+
+    /* 3. Full mock sysfs hierarchy testing standard, legacy, H:B:T:L fallback, & SES enclosure */
+    g_autofree gchar *tmp_sys = g_dir_make_tmp ("puls_scsi_sysfs_XXXXXX", NULL);
+    g_assert_nonnull (tmp_sys);
+
+    /* sg0 <-> sda (standard layout: block/sda + scsi_generic/sg0) */
+    g_autofree gchar *dev0 = g_build_filename (tmp_sys, "devices", "pci0", "host0", "target0:0:0", "0:0:0:0", NULL);
+    g_autofree gchar *dev0_blk = g_build_filename (dev0, "block", "sda", NULL);
+    g_autofree gchar *dev0_sg  = g_build_filename (dev0, "scsi_generic", "sg0", NULL);
+    g_assert_cmpint (g_mkdir_with_parents (dev0_blk, 0755), ==, 0);
+    g_assert_cmpint (g_mkdir_with_parents (dev0_sg, 0755), ==, 0);
+
+    g_autofree gchar *p_v0 = g_build_filename (dev0, "vendor", NULL);
+    g_autofree gchar *p_m0 = g_build_filename (dev0, "model", NULL);
+    g_autofree gchar *p_r0 = g_build_filename (dev0, "rev", NULL);
+    g_autofree gchar *p_t0 = g_build_filename (dev0, "type", NULL);
+    g_assert_true (g_file_set_contents (p_v0, "ATA     \n", -1, NULL));
+    g_assert_true (g_file_set_contents (p_m0, "WDC WD40EFRX    \n", -1, NULL));
+    g_assert_true (g_file_set_contents (p_r0, "82.0\n", -1, NULL));
+    g_assert_true (g_file_set_contents (p_t0, "0\n", -1, NULL));
+
+    g_autofree gchar *cls_sg0_dir = g_build_filename (tmp_sys, "class", "scsi_generic", "sg0", NULL);
+    g_autofree gchar *cls_sg0_dev = g_build_filename (cls_sg0_dir, "device", NULL);
+    g_assert_cmpint (g_mkdir_with_parents (cls_sg0_dir, 0755), ==, 0);
+    g_assert_cmpint (symlink ("../../../devices/pci0/host0/target0:0:0/0:0:0:0", cls_sg0_dev), ==, 0);
+
+    g_autofree gchar *blk_sda_dir = g_build_filename (tmp_sys, "block", "sda", NULL);
+    g_autofree gchar *blk_sda_dev = g_build_filename (blk_sda_dir, "device", NULL);
+    g_assert_cmpint (g_mkdir_with_parents (blk_sda_dir, 0755), ==, 0);
+    g_assert_cmpint (symlink ("../../devices/pci0/host0/target0:0:0/0:0:0:0", blk_sda_dev), ==, 0);
+
+    /* sg1 <-> sdb (legacy layout: block:sdb symlink + generic symlink) */
+    g_autofree gchar *dev1 = g_build_filename (tmp_sys, "devices", "pci0", "host1", "target1:0:2", "1:0:2:0", NULL);
+    g_assert_cmpint (g_mkdir_with_parents (dev1, 0755), ==, 0);
+    g_autofree gchar *cls_sg1_dir = g_build_filename (tmp_sys, "class", "scsi_generic", "sg1", NULL);
+    g_autofree gchar *cls_sg1_dev = g_build_filename (cls_sg1_dir, "device", NULL);
+    g_assert_cmpint (g_mkdir_with_parents (cls_sg1_dir, 0755), ==, 0);
+    g_assert_cmpint (symlink ("../../../devices/pci0/host1/target1:0:2/1:0:2:0", cls_sg1_dev), ==, 0);
+
+    g_autofree gchar *blk_sdb_dir = g_build_filename (tmp_sys, "block", "sdb", NULL);
+    g_autofree gchar *blk_sdb_dev = g_build_filename (blk_sdb_dir, "device", NULL);
+    g_assert_cmpint (g_mkdir_with_parents (blk_sdb_dir, 0755), ==, 0);
+    g_assert_cmpint (symlink ("../../devices/pci0/host1/target1:0:2/1:0:2:0", blk_sdb_dev), ==, 0);
+
+    g_autofree gchar *legacy_blk_link = g_build_filename (dev1, "block:sdb", NULL);
+    g_autofree gchar *legacy_gen_link = g_build_filename (dev1, "generic", NULL);
+    g_assert_cmpint (symlink ("../../../../block/sdb", legacy_blk_link), ==, 0);
+    g_assert_cmpint (symlink ("../../../../class/scsi_generic/sg1", legacy_gen_link), ==, 0);
+
+    /* sg2: SAS enclosure SES device (type 13, no block device) */
+    g_autofree gchar *dev2 = g_build_filename (tmp_sys, "devices", "pci0", "host2", "target2:0:10", "2:0:10:0", NULL);
+    g_assert_cmpint (g_mkdir_with_parents (dev2, 0755), ==, 0);
+    g_autofree gchar *p_t2 = g_build_filename (dev2, "type", NULL);
+    g_assert_true (g_file_set_contents (p_t2, "13\n", -1, NULL));
+    g_autofree gchar *cls_sg2_dir = g_build_filename (tmp_sys, "class", "scsi_generic", "sg2", NULL);
+    g_autofree gchar *cls_sg2_dev = g_build_filename (cls_sg2_dir, "device", NULL);
+    g_assert_cmpint (g_mkdir_with_parents (cls_sg2_dir, 0755), ==, 0);
+    g_assert_cmpint (symlink ("../../../devices/pci0/host2/target2:0:10/2:0:10:0", cls_sg2_dev), ==, 0);
+
+    /* sg3 <-> sdc via H:B:T:L class scan fallback (no scsi_generic subdir or generic link) */
+    g_autofree gchar *dev3 = g_build_filename (tmp_sys, "devices", "pci0", "host2", "target2:0:11", "2:0:11:0", NULL);
+    g_autofree gchar *dev3_blk = g_build_filename (dev3, "block", "sdc", NULL);
+    g_assert_cmpint (g_mkdir_with_parents (dev3_blk, 0755), ==, 0);
+    g_autofree gchar *cls_sg3_dir = g_build_filename (tmp_sys, "class", "scsi_generic", "sg3", NULL);
+    g_autofree gchar *cls_sg3_dev = g_build_filename (cls_sg3_dir, "device", NULL);
+    g_assert_cmpint (g_mkdir_with_parents (cls_sg3_dir, 0755), ==, 0);
+    g_assert_cmpint (symlink ("../../../devices/pci0/host2/target2:0:11/2:0:11:0", cls_sg3_dev), ==, 0);
+    g_autofree gchar *blk_sdc_dir = g_build_filename (tmp_sys, "block", "sdc", NULL);
+    g_autofree gchar *blk_sdc_dev = g_build_filename (blk_sdc_dir, "device", NULL);
+    g_assert_cmpint (g_mkdir_with_parents (blk_sdc_dir, 0755), ==, 0);
+    g_assert_cmpint (symlink ("../../devices/pci0/host2/target2:0:11/2:0:11:0", blk_sdc_dev), ==, 0);
+
+    /* Verify bidirectional resolution */
+    g_autofree gchar *b0 = puls_scsi_generic_to_block_from_sysfs (tmp_sys, "/dev/sg0");
+    g_autofree gchar *g0 = puls_scsi_block_to_generic_from_sysfs (tmp_sys, "/dev/sda");
+    g_assert_cmpstr (b0, ==, "/dev/sda");
+    g_assert_cmpstr (g0, ==, "/dev/sg0");
+
+    g_autofree gchar *b1 = puls_scsi_generic_to_block_from_sysfs (tmp_sys, "sg1");
+    g_autofree gchar *g1 = puls_scsi_block_to_generic_from_sysfs (tmp_sys, "sdb");
+    g_assert_cmpstr (b1, ==, "/dev/sdb");
+    g_assert_cmpstr (g1, ==, "/dev/sg1");
+
+    g_autofree gchar *b2 = puls_scsi_generic_to_block_from_sysfs (tmp_sys, "/dev/sg2");
+    g_assert_null (b2);
+
+    g_autofree gchar *b3 = puls_scsi_generic_to_block_from_sysfs (tmp_sys, "/dev/sg3");
+    g_autofree gchar *g3 = puls_scsi_block_to_generic_from_sysfs (tmp_sys, "/dev/sdc");
+    g_assert_cmpstr (b3, ==, "/dev/sdc");
+    g_assert_cmpstr (g3, ==, "/dev/sg3");
+
+    /* Verify full info struct population */
+    PulsScsiGenericInfo info = { 0 };
+    g_assert_true (puls_scsi_read_generic_info_from_sysfs (tmp_sys, "/dev/sg0", &info));
+    g_assert_cmpstr (info.sg_name, ==, "sg0");
+    g_assert_cmpstr (info.sg_path, ==, "/dev/sg0");
+    g_assert_cmpstr (info.block_name, ==, "sda");
+    g_assert_cmpstr (info.block_path, ==, "/dev/sda");
+    g_assert_cmpstr (info.scsi_address, ==, "0:0:0:0");
+    g_assert_cmpstr (info.vendor, ==, "ATA");
+    g_assert_cmpstr (info.model, ==, "WDC WD40EFRX");
+    g_assert_cmpstr (info.rev, ==, "82.0");
+    g_assert_cmpint (info.scsi_type, ==, 0);
+    puls_scsi_generic_info_clear (&info);
+
+    /* Verify sorted mapping enumeration */
+    GList *mappings = puls_scsi_list_generic_mappings_from_sysfs (tmp_sys);
+    g_assert_cmpuint (g_list_length (mappings), ==, 4);
+    PulsScsiGenericInfo *m0 = g_list_nth_data (mappings, 0);
+    PulsScsiGenericInfo *m2 = g_list_nth_data (mappings, 2);
+    g_assert_cmpstr (m0->sg_name, ==, "sg0");
+    g_assert_cmpstr (m0->block_path, ==, "/dev/sda");
+    g_assert_cmpstr (m2->sg_name, ==, "sg2");
+    g_assert_cmpint (m2->scsi_type, ==, 13);
+    g_assert_null (m2->block_path);
+    g_list_free_full (mappings, (GDestroyNotify)puls_scsi_generic_info_free);
+
+    /* 4. PulsSmartData accessor check */
+    g_autoptr(PulsSmartData) sd = puls_smart_data_new ();
+    g_assert_null (puls_smart_data_get_scsi_generic_path (sd));
+    puls_smart_data_set_scsi_generic_path (sd, "/dev/sg0");
+    g_assert_cmpstr (puls_smart_data_get_scsi_generic_path (sd), ==, "/dev/sg0");
+
+    remove_temp_tree (tmp_sys);
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -1722,6 +1876,7 @@ main (int argc, char *argv[])
     g_test_add_func ("/basic/hotplug-monitoring", test_hotplug_monitoring);
     g_test_add_func ("/basic/nvme-topology-separation", test_nvme_topology_separation);
     g_test_add_func ("/basic/pseudo-device-filter", test_pseudo_device_filter);
+    g_test_add_func ("/basic/scsi-generic-mapping", test_scsi_generic_mapping);
 
     int result = g_test_run ();
 

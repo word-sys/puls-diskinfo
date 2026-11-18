@@ -77,6 +77,11 @@ run_headless_scan (gboolean json_output)
                 json_builder_set_member_name (builder, "nvme_nsid");
                 json_builder_add_int_value (builder, (gint64)puls_smart_data_get_nvme_nsid (data));
             }
+            const gchar *sg_path = puls_smart_data_get_scsi_generic_path (data);
+            if (sg_path != NULL) {
+                json_builder_set_member_name (builder, "scsi_generic_path");
+                json_builder_add_string_value (builder, sg_path);
+            }
             const gchar *nqn = puls_smart_data_get_nvme_subsys_nqn (data);
             if (nqn != NULL) {
                 json_builder_set_member_name (builder, "nvme_subsys_nqn");
@@ -196,6 +201,9 @@ run_headless_scan (gboolean json_output)
             else
                 g_print ("  Controller:    %s\n", ctrl_path);
         }
+        const gchar *sg_path = puls_smart_data_get_scsi_generic_path (data);
+        if (sg_path != NULL)
+            g_print ("  SCSI Generic:  %s\n", sg_path);
         const gchar *wwid = puls_smart_data_get_nvme_wwid (data);
         if (wwid != NULL)
             g_print ("  NVMe WWID:     %s\n", wwid);

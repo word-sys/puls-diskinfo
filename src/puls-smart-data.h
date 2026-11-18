@@ -141,9 +141,10 @@ G_DECLARE_FINAL_TYPE (PulsSmartData, puls_smart_data, PULS, SMART_DATA, GObject)
 PulsSmartData   *puls_smart_data_new            (void);
 
 /* Identity & Topology */
-const gchar     *puls_smart_data_get_device_path     (PulsSmartData *self);
-const gchar     *puls_smart_data_get_controller_path (PulsSmartData *self);
-guint32          puls_smart_data_get_nvme_nsid       (PulsSmartData *self);
+const gchar     *puls_smart_data_get_device_path       (PulsSmartData *self);
+const gchar     *puls_smart_data_get_controller_path   (PulsSmartData *self);
+const gchar     *puls_smart_data_get_scsi_generic_path (PulsSmartData *self);
+guint32          puls_smart_data_get_nvme_nsid         (PulsSmartData *self);
 const gchar     *puls_smart_data_get_nvme_subsys_nqn (PulsSmartData *self);
 const gchar     *puls_smart_data_get_nvme_wwid       (PulsSmartData *self);
 const gchar     *puls_smart_data_get_model_name      (PulsSmartData *self);
@@ -155,9 +156,10 @@ gint             puls_smart_data_get_rotation_rpm    (PulsSmartData *self);
 PulsDriveType    puls_smart_data_get_drive_type      (PulsSmartData *self);
 PulsTransportProtocol puls_smart_data_get_transport_protocol (PulsSmartData *self);
 
-void puls_smart_data_set_device_path     (PulsSmartData *self, const gchar *val);
-void puls_smart_data_set_controller_path (PulsSmartData *self, const gchar *val);
-void puls_smart_data_set_nvme_nsid       (PulsSmartData *self, guint32 nsid);
+void puls_smart_data_set_device_path       (PulsSmartData *self, const gchar *val);
+void puls_smart_data_set_controller_path   (PulsSmartData *self, const gchar *val);
+void puls_smart_data_set_scsi_generic_path (PulsSmartData *self, const gchar *val);
+void puls_smart_data_set_nvme_nsid         (PulsSmartData *self, guint32 nsid);
 void puls_smart_data_set_nvme_subsys_nqn (PulsSmartData *self, const gchar *val);
 void puls_smart_data_set_nvme_wwid       (PulsSmartData *self, const gchar *val);
 void puls_smart_data_set_model_name      (PulsSmartData *self, const gchar *val);

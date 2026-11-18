@@ -197,6 +197,38 @@ gboolean puls_nvme_read_topology_from_dir (const gchar       *block_dir,
 gboolean puls_nvme_read_topology          (const gchar       *device_path,
                                            PulsNvmeTopology  *out_topo);
 
+/* SCSI Generic (/dev/sg*) <-> Block (/dev/sd*) Mapping */
+typedef struct {
+    gchar *sg_name;        /* e.g. "sg0" */
+    gchar *sg_path;        /* e.g. "/dev/sg0" */
+    gchar *block_name;     /* e.g. "sda" */
+    gchar *block_path;     /* e.g. "/dev/sda" */
+    gchar *scsi_address;   /* H:B:T:L tuple e.g. "0:0:0:0" */
+    gchar *vendor;         /* SCSI vendor string */
+    gchar *model;          /* SCSI model string */
+    gchar *rev;            /* SCSI revision string */
+    gint   scsi_type;      /* SCSI peripheral device type (-1 if unknown) */
+} PulsScsiGenericInfo;
+
+void     puls_scsi_generic_info_clear               (PulsScsiGenericInfo *info);
+void     puls_scsi_generic_info_free                (PulsScsiGenericInfo *info);
+gboolean puls_scsi_is_generic_name                  (const gchar         *name_or_path);
+gboolean puls_scsi_parse_hbtl_address               (const gchar         *sysfs_path,
+                                                     gchar              **out_hbtl);
+gchar   *puls_scsi_generic_to_block_from_sysfs      (const gchar         *sysfs_root,
+                                                     const gchar         *sg_device);
+gchar   *puls_scsi_generic_to_block                 (const gchar         *sg_device);
+gchar   *puls_scsi_block_to_generic_from_sysfs      (const gchar         *sysfs_root,
+                                                     const gchar         *block_device);
+gchar   *puls_scsi_block_to_generic                 (const gchar         *block_device);
+gboolean puls_scsi_read_generic_info_from_sysfs     (const gchar         *sysfs_root,
+                                                     const gchar         *sg_device,
+                                                     PulsScsiGenericInfo *out_info);
+gboolean puls_scsi_read_generic_info                (const gchar         *sg_device,
+                                                     PulsScsiGenericInfo *out_info);
+GList   *puls_scsi_list_generic_mappings_from_sysfs (const gchar         *sysfs_root);
+GList   *puls_scsi_list_generic_mappings            (void);
+
 /* USB Speed and Bridge Controller Inspector */
 typedef struct {
     gchar       *device_dir;       /* USB device directory in sysfs */

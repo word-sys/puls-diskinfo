@@ -409,7 +409,8 @@ puls_device_path_is_valid (const gchar *path)
         g_str_has_prefix (path, "/dev/nvme") ||
         g_str_has_prefix (path, "/dev/hd") ||
         g_str_has_prefix (path, "/dev/vd") ||
-        g_str_has_prefix (path, "/dev/mmcblk"))
+        g_str_has_prefix (path, "/dev/mmcblk") ||
+        (g_str_has_prefix (path, "/dev/sg") && puls_scsi_is_generic_name (path)))
         return TRUE;
 
     return FALSE;
@@ -2342,5 +2343,452 @@ puls_nvme_read_topology (const gchar      *device_path,
     }
 
     return TRUE;
+}
+
+/**
+ * puls_scsi_generic_info_clear:
+ * @info: A #PulsScsiGenericInfo struct.
+ *
+ * Frees owned fields in @info and resets it to defaults.
+ */
+void
+puls_scsi_generic_info_clear (PulsScsiGenericInfo *info)
+{
+    if (info == NULL)
+        return;
+
+    g_free (info->sg_name);
+    g_free (info->sg_path);
+    g_free (info->block_name);
+    g_free (info->block_path);
+    g_free (info->scsi_address);
+    g_free (info->vendor);
+    g_free (info->model);
+    g_free (info->rev);
+    memset (info, 0, sizeof (*info));
+    info->scsi_type = -1;
+}
+
+/**
+ * puls_scsi_generic_info_free:
+ * @info: A heap-allocated #PulsScsiGenericInfo.
+ *
+ * Clears and frees @info.
+ */
+void
+puls_scsi_generic_info_free (PulsScsiGenericInfo *info)
+{
+    if (info == NULL)
+        return;
+    puls_scsi_generic_info_clear (info);
+    g_free (info);
+}
+
+/**
+ * puls_scsi_is_generic_name:
+ * @name_or_path: Device name (`sg0`) or path (`/dev/sg0`).
+ *
+ * Returns: %TRUE if @name_or_path matches a valid SCSI generic node (`sg<N>`).
+ */
+gboolean
+puls_scsi_is_generic_name (const gchar *name_or_path)
+{
+    if (name_or_path == NULL || *name_or_path == '\0')
+        return FALSE;
+
+    const gchar *base = g_str_has_prefix (name_or_path, "/dev/")
+                        ? (name_or_path + 5)
+                        : name_or_path;
+    if (strchr (base, '/') != NULL)
+        return FALSE;
+
+    if (!g_str_has_prefix (base, "sg"))
+        return FALSE;
+
+    const gchar *p = base + 2;
+    if (!g_ascii_isdigit (*p))
+        return FALSE;
+
+    while (g_ascii_isdigit (*p))
+        p++;
+
+    return (*p == '\0');
+}
+
+/**
+ * puls_scsi_parse_hbtl_address:
+ * @sysfs_path: Sysfs device path or SCSI tuple (e.g. `.../0:0:0:0`).
+ * @out_hbtl: (out) (optional): Location to store parsed `H:B:T:L` string.
+ *
+ * Extracts a 4-part SCSI `Host:Bus:Target:Lun` tuple from @sysfs_path.
+ *
+ * Returns: %TRUE if a valid `H:B:T:L` tuple was found.
+ */
+gboolean
+puls_scsi_parse_hbtl_address (const gchar  *sysfs_path,
+                              gchar       **out_hbtl)
+{
+    if (out_hbtl)
+        *out_hbtl = NULL;
+
+    if (sysfs_path == NULL || *sysfs_path == '\0')
+        return FALSE;
+
+    g_autofree gchar *base = g_path_get_basename (sysfs_path);
+    const gchar *p = base;
+    gint parts = 0;
+
+    for (gint i = 0; i < 4; i++) {
+        if (!g_ascii_isdigit (*p))
+            return FALSE;
+        while (g_ascii_isdigit (*p))
+            p++;
+        parts++;
+        if (i < 3) {
+            if (*p != ':')
+                return FALSE;
+            p++;
+        }
+    }
+
+    if (*p != '\0' || parts != 4)
+        return FALSE;
+
+    if (out_hbtl)
+        *out_hbtl = g_strdup (base);
+
+    return TRUE;
+}
+
+static gchar *
+resolve_sg_device_dir (const gchar *sysfs_root,
+                       const gchar *sg_name)
+{
+    g_autofree gchar *dev_link = g_build_filename (sysfs_root, "class", "scsi_generic",
+                                                   sg_name, "device", NULL);
+    gchar *resolved = puls_sysfs_resolve_link (dev_link);
+    if (resolved != NULL)
+        return resolved;
+
+    if (g_file_test (dev_link, G_FILE_TEST_IS_DIR))
+        return g_steal_pointer (&dev_link);
+
+    return NULL;
+}
+
+static gchar *
+find_first_child_matching (const gchar *dir_path,
+                           gboolean   (*predicate)(const gchar *))
+{
+    if (dir_path == NULL || !g_file_test (dir_path, G_FILE_TEST_IS_DIR))
+        return NULL;
+
+    GDir *dir = g_dir_open (dir_path, 0, NULL);
+    if (dir == NULL)
+        return NULL;
+
+    GList *matches = NULL;
+    const gchar *entry;
+    while ((entry = g_dir_read_name (dir)) != NULL) {
+        if (predicate == NULL || predicate (entry))
+            matches = g_list_append (matches, g_strdup (entry));
+    }
+    g_dir_close (dir);
+
+    if (matches == NULL)
+        return NULL;
+
+    matches = g_list_sort (matches, (GCompareFunc)g_strcmp0);
+    gchar *best = g_strdup (matches->data);
+    g_list_free_full (matches, g_free);
+    return best;
+}
+
+static gboolean
+is_scsi_block_entry (const gchar *entry)
+{
+    return (entry != NULL && *entry != '\0' && entry[0] != '.' &&
+            strchr (entry, '/') == NULL);
+}
+
+/**
+ * puls_scsi_generic_to_block_from_sysfs:
+ * @sysfs_root: Sysfs root directory (typically `"/sys"`).
+ * @sg_device: SCSI generic device name or path (e.g. `"/dev/sg0"` or `"sg0"`).
+ *
+ * Looks up the block device path (`/dev/sdX`) bound to SCSI generic device
+ * @sg_device under @sysfs_root.
+ *
+ * Returns: (nullable) (transfer full): `/dev/<block>` path, or %NULL if unmapped.
+ */
+gchar *
+puls_scsi_generic_to_block_from_sysfs (const gchar *sysfs_root,
+                                       const gchar *sg_device)
+{
+    if (sysfs_root == NULL || !puls_scsi_is_generic_name (sg_device))
+        return NULL;
+
+    const gchar *sg_name = g_str_has_prefix (sg_device, "/dev/") ? (sg_device + 5) : sg_device;
+    g_autofree gchar *dev_dir = resolve_sg_device_dir (sysfs_root, sg_name);
+    if (dev_dir == NULL)
+        return NULL;
+
+    /* Standard sysfs layout: <scsi_device>/block/<sdX> */
+    g_autofree gchar *block_sub = g_build_filename (dev_dir, "block", NULL);
+    g_autofree gchar *block_name = find_first_child_matching (block_sub, is_scsi_block_entry);
+    if (block_name != NULL)
+        return g_strdup_printf ("/dev/%s", block_name);
+
+    /* Legacy sysfs layout: <scsi_device>/block:<sdX> symlink */
+    GDir *dir = g_dir_open (dev_dir, 0, NULL);
+    if (dir != NULL) {
+        const gchar *entry;
+        while ((entry = g_dir_read_name (dir)) != NULL) {
+            if (g_str_has_prefix (entry, "block:") && strlen (entry) > 6) {
+                gchar *res = g_strdup_printf ("/dev/%s", entry + 6);
+                g_dir_close (dir);
+                return res;
+            }
+        }
+        g_dir_close (dir);
+    }
+
+    return NULL;
+}
+
+/**
+ * puls_scsi_generic_to_block:
+ * @sg_device: SCSI generic device name or path (e.g. `"/dev/sg0"`).
+ *
+ * Convenience wrapper querying `"/sys"`.
+ *
+ * Returns: (nullable) (transfer full): Corresponding block device path or %NULL.
+ */
+gchar *
+puls_scsi_generic_to_block (const gchar *sg_device)
+{
+    return puls_scsi_generic_to_block_from_sysfs ("/sys", sg_device);
+}
+
+/**
+ * puls_scsi_block_to_generic_from_sysfs:
+ * @sysfs_root: Sysfs root directory (typically `"/sys"`).
+ * @block_device: Block device name or path (e.g. `"/dev/sda"` or `"sda"`).
+ *
+ * Resolves the SCSI generic character device (`/dev/sgX`) corresponding to
+ * block device @block_device under @sysfs_root.
+ *
+ * Returns: (nullable) (transfer full): `/dev/sgX` path, or %NULL if unavailable.
+ */
+gchar *
+puls_scsi_block_to_generic_from_sysfs (const gchar *sysfs_root,
+                                       const gchar *block_device)
+{
+    if (sysfs_root == NULL || block_device == NULL)
+        return NULL;
+
+    g_autofree gchar *clean_name = puls_sanitize_device_name (block_device);
+    if (clean_name == NULL)
+        return NULL;
+
+    g_autofree gchar *dev_link = g_build_filename (sysfs_root, "block", clean_name, "device", NULL);
+    g_autofree gchar *real_dev = puls_sysfs_resolve_link (dev_link);
+    const gchar *dev_dir = real_dev ? real_dev : dev_link;
+
+    if (!g_file_test (dev_dir, G_FILE_TEST_IS_DIR))
+        return NULL;
+
+    /* Candidate 1: <block>/device/scsi_generic/sgX directory */
+    g_autofree gchar *sg_sub = g_build_filename (dev_dir, "scsi_generic", NULL);
+    g_autofree gchar *sg_name = find_first_child_matching (sg_sub, puls_scsi_is_generic_name);
+    if (sg_name != NULL)
+        return g_strdup_printf ("/dev/%s", sg_name);
+
+    /* Candidate 2: legacy <block>/device/generic symlink */
+    g_autofree gchar *gen_link = g_build_filename (dev_dir, "generic", NULL);
+    g_autofree gchar *gen_target = puls_sysfs_resolve_link (gen_link);
+    if (gen_target != NULL) {
+        g_autofree gchar *base = g_path_get_basename (gen_target);
+        if (puls_scsi_is_generic_name (base))
+            return g_strdup_printf ("/dev/%s", base);
+    }
+
+    /* Candidate 3: match canonical sysfs device path or H:B:T:L under class/scsi_generic */
+    g_autofree gchar *target_hbtl = NULL;
+    puls_scsi_parse_hbtl_address (dev_dir, &target_hbtl);
+
+    g_autofree gchar *class_dir = g_build_filename (sysfs_root, "class", "scsi_generic", NULL);
+    GDir *dir = g_dir_open (class_dir, 0, NULL);
+    if (dir == NULL)
+        return NULL;
+
+    const gchar *entry;
+    while ((entry = g_dir_read_name (dir)) != NULL) {
+        if (!puls_scsi_is_generic_name (entry))
+            continue;
+
+        g_autofree gchar *sg_dev_dir = resolve_sg_device_dir (sysfs_root, entry);
+        if (sg_dev_dir == NULL)
+            continue;
+
+        gboolean matched = (real_dev != NULL && g_strcmp0 (sg_dev_dir, real_dev) == 0);
+
+        if (!matched && target_hbtl != NULL) {
+            g_autofree gchar *sg_hbtl = NULL;
+            if (puls_scsi_parse_hbtl_address (sg_dev_dir, &sg_hbtl) &&
+                g_strcmp0 (sg_hbtl, target_hbtl) == 0)
+                matched = TRUE;
+        }
+
+        if (matched) {
+            gchar *result = g_strdup_printf ("/dev/%s", entry);
+            g_dir_close (dir);
+            return result;
+        }
+    }
+
+    g_dir_close (dir);
+    return NULL;
+}
+
+/**
+ * puls_scsi_block_to_generic:
+ * @block_device: Block device name or path (e.g. `"/dev/sda"`).
+ *
+ * Convenience wrapper querying `"/sys"`.
+ *
+ * Returns: (nullable) (transfer full): Corresponding `/dev/sgX` path or %NULL.
+ */
+gchar *
+puls_scsi_block_to_generic (const gchar *block_device)
+{
+    return puls_scsi_block_to_generic_from_sysfs ("/sys", block_device);
+}
+
+/**
+ * puls_scsi_read_generic_info_from_sysfs:
+ * @sysfs_root: Sysfs root directory (typically `"/sys"`).
+ * @sg_device: SCSI generic device name or path (`"sg0"` or `"/dev/sg0"`).
+ * @out_info: Output #PulsScsiGenericInfo struct.
+ *
+ * Populates SCSI generic to block mapping and SCSI device attributes (`H:B:T:L`,
+ * vendor, model, revision, SCSI type) from sysfs.
+ *
+ * Returns: %TRUE if @sg_device exists under @sysfs_root.
+ */
+gboolean
+puls_scsi_read_generic_info_from_sysfs (const gchar         *sysfs_root,
+                                        const gchar         *sg_device,
+                                        PulsScsiGenericInfo *out_info)
+{
+    g_return_val_if_fail (out_info != NULL, FALSE);
+
+    memset (out_info, 0, sizeof (*out_info));
+    out_info->scsi_type = -1;
+
+    if (sysfs_root == NULL || !puls_scsi_is_generic_name (sg_device))
+        return FALSE;
+
+    const gchar *sg_name = g_str_has_prefix (sg_device, "/dev/") ? (sg_device + 5) : sg_device;
+    g_autofree gchar *sg_class_entry = g_build_filename (sysfs_root, "class", "scsi_generic", sg_name, NULL);
+    if (!g_file_test (sg_class_entry, G_FILE_TEST_EXISTS))
+        return FALSE;
+
+    out_info->sg_name = g_strdup (sg_name);
+    out_info->sg_path = g_strdup_printf ("/dev/%s", sg_name);
+    out_info->block_path = puls_scsi_generic_to_block_from_sysfs (sysfs_root, sg_name);
+    if (out_info->block_path != NULL)
+        out_info->block_name = g_path_get_basename (out_info->block_path);
+
+    g_autofree gchar *dev_dir = resolve_sg_device_dir (sysfs_root, sg_name);
+    if (dev_dir != NULL) {
+        puls_scsi_parse_hbtl_address (dev_dir, &out_info->scsi_address);
+        out_info->vendor = read_optional_trimmed_attr (dev_dir, "vendor", 64);
+        out_info->model  = read_optional_trimmed_attr (dev_dir, "model", 128);
+        out_info->rev    = read_optional_trimmed_attr (dev_dir, "rev", 64);
+
+        g_autofree gchar *type_path = g_build_filename (dev_dir, "type", NULL);
+        gboolean ok = FALSE;
+        gint64 tval = puls_sysfs_read_int64 (type_path, -1, &ok);
+        if (ok && tval >= 0)
+            out_info->scsi_type = (gint)tval;
+    }
+
+    return TRUE;
+}
+
+/**
+ * puls_scsi_read_generic_info:
+ * @sg_device: SCSI generic device name or path.
+ * @out_info: Output #PulsScsiGenericInfo struct.
+ *
+ * Convenience wrapper reading from `"/sys"`.
+ */
+gboolean
+puls_scsi_read_generic_info (const gchar         *sg_device,
+                             PulsScsiGenericInfo *out_info)
+{
+    return puls_scsi_read_generic_info_from_sysfs ("/sys", sg_device, out_info);
+}
+
+static gint
+compare_sg_info_by_name (gconstpointer a, gconstpointer b)
+{
+    const PulsScsiGenericInfo *ia = a;
+    const PulsScsiGenericInfo *ib = b;
+    return g_strcmp0 (ia->sg_name, ib->sg_name);
+}
+
+/**
+ * puls_scsi_list_generic_mappings_from_sysfs:
+ * @sysfs_root: Sysfs root directory.
+ *
+ * Enumerates all `sg*` entries under `@sysfs_root/class/scsi_generic`.
+ *
+ * Returns: (element-type PulsScsiGenericInfo) (transfer full): List of
+ * #PulsScsiGenericInfo structs freed via puls_scsi_generic_info_free().
+ */
+GList *
+puls_scsi_list_generic_mappings_from_sysfs (const gchar *sysfs_root)
+{
+    if (sysfs_root == NULL)
+        return NULL;
+
+    g_autofree gchar *class_dir = g_build_filename (sysfs_root, "class", "scsi_generic", NULL);
+    GDir *dir = g_dir_open (class_dir, 0, NULL);
+    if (dir == NULL)
+        return NULL;
+
+    GList *list = NULL;
+    const gchar *entry;
+    while ((entry = g_dir_read_name (dir)) != NULL) {
+        if (!puls_scsi_is_generic_name (entry))
+            continue;
+
+        PulsScsiGenericInfo *info = g_new0 (PulsScsiGenericInfo, 1);
+        info->scsi_type = -1;
+        if (puls_scsi_read_generic_info_from_sysfs (sysfs_root, entry, info)) {
+            list = g_list_append (list, info);
+        } else {
+            puls_scsi_generic_info_free (info);
+        }
+    }
+
+    g_dir_close (dir);
+    list = g_list_sort (list, compare_sg_info_by_name);
+    return list;
+}
+
+/**
+ * puls_scsi_list_generic_mappings:
+ *
+ * Enumerates all SCSI generic mappings from `"/sys"`.
+ *
+ * Returns: (element-type PulsScsiGenericInfo) (transfer full): Sorted list of mappings.
+ */
+GList *
+puls_scsi_list_generic_mappings (void)
+{
+    return puls_scsi_list_generic_mappings_from_sysfs ("/sys");
 }
 

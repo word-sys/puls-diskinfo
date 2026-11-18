@@ -52,6 +52,14 @@ is_valid_device (const char *path)
         strncmp (name, "mmcblk", 6) == 0)
         return 1;
 
+    if (strncmp (name, "sg", 2) == 0 && isdigit ((unsigned char)name[2])) {
+        for (const char *p = name + 2; *p != '\0'; p++) {
+            if (!isdigit ((unsigned char)*p))
+                return 0;
+        }
+        return 1;
+    }
+
     return 0;
 }
 

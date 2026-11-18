@@ -1648,6 +1648,7 @@ puls_disk_info_view_set_data (PulsDiskInfoView *self,
 
     const gchar *dev_path = puls_smart_data_get_device_path (data);
     const gchar *ctrl_path = puls_smart_data_get_controller_path (data);
+    const gchar *sg_path = puls_smart_data_get_scsi_generic_path (data);
     guint32 nsid = puls_smart_data_get_nvme_nsid (data);
     if (dev_path && ctrl_path && nsid > 0) {
         g_autofree gchar *path_display = g_strdup_printf ("%s (Controller: %s, NSID %u)",
@@ -1656,6 +1657,10 @@ puls_disk_info_view_set_data (PulsDiskInfoView *self,
     } else if (dev_path && ctrl_path) {
         g_autofree gchar *path_display = g_strdup_printf ("%s (Controller: %s)",
                                                           dev_path, ctrl_path);
+        gtk_label_set_text (GTK_LABEL (self->device_path_label), path_display);
+    } else if (dev_path && sg_path) {
+        g_autofree gchar *path_display = g_strdup_printf ("%s (SG: %s)",
+                                                          dev_path, sg_path);
         gtk_label_set_text (GTK_LABEL (self->device_path_label), path_display);
     } else {
         gtk_label_set_text (GTK_LABEL (self->device_path_label), dev_path ? dev_path : "N/A");
