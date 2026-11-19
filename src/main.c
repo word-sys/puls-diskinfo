@@ -82,6 +82,21 @@ run_headless_scan (gboolean json_output)
                 json_builder_set_member_name (builder, "scsi_generic_path");
                 json_builder_add_string_value (builder, sg_path);
             }
+            const gchar *raid_status = puls_smart_data_get_raid_member_status (data);
+            if (raid_status != NULL) {
+                const gchar *raid_arr = puls_smart_data_get_raid_array_path (data);
+                const gchar *raid_lvl = puls_smart_data_get_raid_level (data);
+                if (raid_arr != NULL) {
+                    json_builder_set_member_name (builder, "raid_array_path");
+                    json_builder_add_string_value (builder, raid_arr);
+                }
+                if (raid_lvl != NULL) {
+                    json_builder_set_member_name (builder, "raid_level");
+                    json_builder_add_string_value (builder, raid_lvl);
+                }
+                json_builder_set_member_name (builder, "raid_member_status");
+                json_builder_add_string_value (builder, raid_status);
+            }
             const gchar *nqn = puls_smart_data_get_nvme_subsys_nqn (data);
             if (nqn != NULL) {
                 json_builder_set_member_name (builder, "nvme_subsys_nqn");
@@ -204,6 +219,9 @@ run_headless_scan (gboolean json_output)
         const gchar *sg_path = puls_smart_data_get_scsi_generic_path (data);
         if (sg_path != NULL)
             g_print ("  SCSI Generic:  %s\n", sg_path);
+        const gchar *raid_status = puls_smart_data_get_raid_member_status (data);
+        if (raid_status != NULL)
+            g_print ("  RAID Status:   %s\n", raid_status);
         const gchar *wwid = puls_smart_data_get_nvme_wwid (data);
         if (wwid != NULL)
             g_print ("  NVMe WWID:     %s\n", wwid);

@@ -229,6 +229,33 @@ gboolean puls_scsi_read_generic_info                (const gchar         *sg_dev
 GList   *puls_scsi_list_generic_mappings_from_sysfs (const gchar         *sysfs_root);
 GList   *puls_scsi_list_generic_mappings            (void);
 
+/* Software RAID (mdadm) Member Resolution */
+typedef struct {
+    gchar *array_name;     /* e.g. "md0" */
+    gchar *array_path;     /* e.g. "/dev/md0" */
+    gchar *level;          /* Normalized level e.g. "RAID1", "RAID5", "RAID10" */
+    gchar *array_state;    /* e.g. "clean", "active" */
+    gchar *member_device;  /* Slave name e.g. "sda1" or "sda" */
+    gchar *member_state;   /* e.g. "in_sync", "spare", "faulty" */
+    gchar *sync_action;    /* e.g. "idle", "resync", "recover" */
+    gint   raid_disks;     /* Total array disk slots (-1 if unknown) */
+    gint   degraded_count; /* Number of degraded/missing disks (-1 if unknown) */
+    gchar *status_text;    /* Formatted e.g. "Member of /dev/md0 [RAID1]" */
+} PulsRaidMemberInfo;
+
+void     puls_raid_member_info_clear           (PulsRaidMemberInfo       *info);
+void     puls_raid_member_info_free            (PulsRaidMemberInfo       *info);
+gboolean puls_raid_is_md_device_name           (const gchar              *name);
+gchar   *puls_raid_format_member_status        (const PulsRaidMemberInfo *info);
+gboolean puls_raid_detect_member_from_sysfs    (const gchar              *sys_block_dir,
+                                                const gchar              *device_path,
+                                                PulsRaidMemberInfo       *out_info);
+gboolean puls_raid_detect_member               (const gchar              *device_path,
+                                                PulsRaidMemberInfo       *out_info);
+GList   *puls_raid_list_memberships_from_sysfs (const gchar              *sys_block_dir,
+                                                const gchar              *device_path);
+GList   *puls_raid_list_memberships            (const gchar              *device_path);
+
 /* USB Speed and Bridge Controller Inspector */
 typedef struct {
     gchar       *device_dir;       /* USB device directory in sysfs */

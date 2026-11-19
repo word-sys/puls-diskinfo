@@ -2792,3 +2792,298 @@ puls_scsi_list_generic_mappings (void)
     return puls_scsi_list_generic_mappings_from_sysfs ("/sys");
 }
 
+/**
+ * puls_raid_member_info_clear:
+ * @info: A #PulsRaidMemberInfo struct.
+ *
+ * Frees owned fields in @info and resets numeric fields to defaults.
+ */
+void
+puls_raid_member_info_clear (PulsRaidMemberInfo *info)
+{
+    if (info == NULL)
+        return;
+
+    g_free (info->array_name);
+    g_free (info->array_path);
+    g_free (info->level);
+    g_free (info->array_state);
+    g_free (info->member_device);
+    g_free (info->member_state);
+    g_free (info->sync_action);
+    g_free (info->status_text);
+    memset (info, 0, sizeof (*info));
+    info->raid_disks = -1;
+    info->degraded_count = -1;
+}
+
+/**
+ * puls_raid_member_info_free:
+ * @info: Heap-allocated #PulsRaidMemberInfo.
+ *
+ * Clears and frees @info.
+ */
+void
+puls_raid_member_info_free (PulsRaidMemberInfo *info)
+{
+    if (info == NULL)
+        return;
+    puls_raid_member_info_clear (info);
+    g_free (info);
+}
+
+/**
+ * puls_raid_is_md_device_name:
+ * @name: Block device name or path (e.g. `md0`, `md127`, `md_d0`).
+ *
+ * Returns: %TRUE if @name identifies a Linux software RAID (md) array node.
+ */
+gboolean
+puls_raid_is_md_device_name (const gchar *name)
+{
+    if (name == NULL || *name == '\0')
+        return FALSE;
+
+    const gchar *base = g_str_has_prefix (name, "/dev/") ? (name + 5) : name;
+    if (strchr (base, '/') != NULL)
+        return FALSE;
+
+    if (!g_str_has_prefix (base, "md"))
+        return FALSE;
+
+    const gchar *p = base + 2;
+    if (g_str_has_prefix (p, "_d"))
+        p += 2;
+
+    if (!g_ascii_isdigit (*p))
+        return FALSE;
+
+    while (g_ascii_isdigit (*p))
+        p++;
+
+    return (*p == '\0');
+}
+
+static gchar *
+normalize_raid_level (const gchar *raw_level)
+{
+    if (raw_level == NULL || *raw_level == '\0')
+        return NULL;
+
+    return g_ascii_strup (raw_level, -1);
+}
+
+/**
+ * puls_raid_format_member_status:
+ * @info: Populated #PulsRaidMemberInfo.
+ *
+ * Formats a concise human-readable RAID membership summary, such as
+ * `"Member of /dev/md0 [RAID1]"` or `"Member of /dev/md0 [RAID5, Degraded]"`.
+ *
+ * Returns: (nullable) (transfer full): Newly allocated status string.
+ */
+gchar *
+puls_raid_format_member_status (const PulsRaidMemberInfo *info)
+{
+    if (info == NULL || info->array_path == NULL)
+        return NULL;
+
+    const gchar *qualifier = NULL;
+    if (info->member_state != NULL && strstr (info->member_state, "faulty") != NULL)
+        qualifier = "Faulty";
+    else if (info->member_state != NULL && strstr (info->member_state, "spare") != NULL)
+        qualifier = "Spare";
+    else if (info->degraded_count > 0)
+        qualifier = "Degraded";
+    else if (info->sync_action != NULL &&
+             (g_strcmp0 (info->sync_action, "resync") == 0 ||
+              g_strcmp0 (info->sync_action, "recover") == 0 ||
+              g_strcmp0 (info->sync_action, "reshape") == 0))
+        qualifier = "Rebuilding";
+
+    if (info->level != NULL && qualifier != NULL)
+        return g_strdup_printf ("Member of %s [%s, %s]", info->array_path, info->level, qualifier);
+    if (info->level != NULL)
+        return g_strdup_printf ("Member of %s [%s]", info->array_path, info->level);
+    if (qualifier != NULL)
+        return g_strdup_printf ("Member of %s [%s]", info->array_path, qualifier);
+
+    return g_strdup_printf ("Member of %s", info->array_path);
+}
+
+static PulsRaidMemberInfo *
+read_md_membership_for_array (const gchar *md_dir,
+                              const gchar *md_name,
+                              const gchar *disk_name)
+{
+    g_autofree gchar *slaves_dir = g_build_filename (md_dir, "slaves", NULL);
+    GDir *sdir = g_dir_open (slaves_dir, 0, NULL);
+    if (sdir == NULL)
+        return NULL;
+
+    g_autofree gchar *matched_slave = NULL;
+    const gchar *slave;
+    while ((slave = g_dir_read_name (sdir)) != NULL) {
+        if (device_name_is_partition_of (slave, disk_name)) {
+            matched_slave = g_strdup (slave);
+            break;
+        }
+    }
+    g_dir_close (sdir);
+
+    if (matched_slave == NULL)
+        return NULL;
+
+    PulsRaidMemberInfo *info = g_new0 (PulsRaidMemberInfo, 1);
+    info->raid_disks = -1;
+    info->degraded_count = -1;
+    info->array_name = g_strdup (md_name);
+    info->array_path = g_strdup_printf ("/dev/%s", md_name);
+    info->member_device = g_steal_pointer (&matched_slave);
+
+    g_autofree gchar *md_sub = g_build_filename (md_dir, "md", NULL);
+    if (g_file_test (md_sub, G_FILE_TEST_IS_DIR)) {
+        g_autofree gchar *raw_level = read_optional_trimmed_attr (md_sub, "level", 64);
+        info->level = normalize_raid_level (raw_level);
+        info->array_state = read_optional_trimmed_attr (md_sub, "array_state", 64);
+        info->sync_action = read_optional_trimmed_attr (md_sub, "sync_action", 64);
+
+        g_autofree gchar *rd_path = g_build_filename (md_sub, "raid_disks", NULL);
+        gboolean rd_ok = FALSE;
+        gint64 rd_val = puls_sysfs_read_int64 (rd_path, -1, &rd_ok);
+        if (rd_ok && rd_val >= 0)
+            info->raid_disks = (gint)rd_val;
+
+        g_autofree gchar *deg_path = g_build_filename (md_sub, "degraded", NULL);
+        gboolean deg_ok = FALSE;
+        gint64 deg_val = puls_sysfs_read_int64 (deg_path, -1, &deg_ok);
+        if (deg_ok && deg_val >= 0)
+            info->degraded_count = (gint)deg_val;
+
+        g_autofree gchar *dev_state_sub = g_strdup_printf ("dev-%s", info->member_device);
+        g_autofree gchar *dev_state_dir = g_build_filename (md_sub, dev_state_sub, NULL);
+        info->member_state = read_optional_trimmed_attr (dev_state_dir, "state", 64);
+    }
+
+    info->status_text = puls_raid_format_member_status (info);
+    return info;
+}
+
+static gint
+compare_raid_info_by_array (gconstpointer a, gconstpointer b)
+{
+    const PulsRaidMemberInfo *ra = a;
+    const PulsRaidMemberInfo *rb = b;
+    return g_strcmp0 (ra->array_name, rb->array_name);
+}
+
+/**
+ * puls_raid_list_memberships_from_sysfs:
+ * @sys_block_dir: Path following `/sys/block` layout.
+ * @device_path: Disk name or path (e.g. `"/dev/sda"` or `"sda"`).
+ *
+ * Scans `@sys_block_dir/md<N>/slaves/` for arrays containing @device_path or any
+ * of its partitions.
+ *
+ * Returns: (element-type PulsRaidMemberInfo) (transfer full): Sorted list of
+ * #PulsRaidMemberInfo structs freed via puls_raid_member_info_free().
+ */
+GList *
+puls_raid_list_memberships_from_sysfs (const gchar *sys_block_dir,
+                                       const gchar *device_path)
+{
+    if (sys_block_dir == NULL || device_path == NULL)
+        return NULL;
+
+    g_autofree gchar *disk_name = puls_sanitize_device_name (device_path);
+    if (disk_name == NULL || puls_raid_is_md_device_name (disk_name))
+        return NULL;
+
+    GDir *dir = g_dir_open (sys_block_dir, 0, NULL);
+    if (dir == NULL)
+        return NULL;
+
+    GList *results = NULL;
+    const gchar *entry;
+    while ((entry = g_dir_read_name (dir)) != NULL) {
+        if (!puls_raid_is_md_device_name (entry))
+            continue;
+
+        g_autofree gchar *md_dir = g_build_filename (sys_block_dir, entry, NULL);
+        PulsRaidMemberInfo *info = read_md_membership_for_array (md_dir, entry, disk_name);
+        if (info != NULL)
+            results = g_list_append (results, info);
+    }
+
+    g_dir_close (dir);
+    results = g_list_sort (results, compare_raid_info_by_array);
+    return results;
+}
+
+/**
+ * puls_raid_list_memberships:
+ * @device_path: Disk name or path (e.g. `"/dev/sda"`).
+ *
+ * Convenience wrapper scanning `"/sys/block"`.
+ */
+GList *
+puls_raid_list_memberships (const gchar *device_path)
+{
+    return puls_raid_list_memberships_from_sysfs ("/sys/block", device_path);
+}
+
+/**
+ * puls_raid_detect_member_from_sysfs:
+ * @sys_block_dir: Path following `/sys/block` layout.
+ * @device_path: Disk name or path (e.g. `"/dev/sda"`).
+ * @out_info: Output #PulsRaidMemberInfo struct.
+ *
+ * Detects primary Linux software RAID (`mdadm`) membership for @device_path.
+ *
+ * Returns: %TRUE if @device_path is a member of at least one `md*` array.
+ */
+gboolean
+puls_raid_detect_member_from_sysfs (const gchar        *sys_block_dir,
+                                    const gchar        *device_path,
+                                    PulsRaidMemberInfo *out_info)
+{
+    g_return_val_if_fail (out_info != NULL, FALSE);
+
+    memset (out_info, 0, sizeof (*out_info));
+    out_info->raid_disks = -1;
+    out_info->degraded_count = -1;
+
+    GList *list = puls_raid_list_memberships_from_sysfs (sys_block_dir, device_path);
+    if (list == NULL)
+        return FALSE;
+
+    PulsRaidMemberInfo *first = list->data;
+    out_info->array_name     = g_strdup (first->array_name);
+    out_info->array_path     = g_strdup (first->array_path);
+    out_info->level          = g_strdup (first->level);
+    out_info->array_state    = g_strdup (first->array_state);
+    out_info->member_device  = g_strdup (first->member_device);
+    out_info->member_state   = g_strdup (first->member_state);
+    out_info->sync_action    = g_strdup (first->sync_action);
+    out_info->raid_disks     = first->raid_disks;
+    out_info->degraded_count = first->degraded_count;
+    out_info->status_text    = g_strdup (first->status_text);
+
+    g_list_free_full (list, (GDestroyNotify)puls_raid_member_info_free);
+    return TRUE;
+}
+
+/**
+ * puls_raid_detect_member:
+ * @device_path: Disk name or path (e.g. `"/dev/sda"`).
+ * @out_info: Output #PulsRaidMemberInfo struct.
+ *
+ * Convenience wrapper querying `"/sys/block"`.
+ */
+gboolean
+puls_raid_detect_member (const gchar        *device_path,
+                         PulsRaidMemberInfo *out_info)
+{
+    return puls_raid_detect_member_from_sysfs ("/sys/block", device_path, out_info);
+}
+

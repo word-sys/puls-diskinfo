@@ -1649,21 +1649,29 @@ puls_disk_info_view_set_data (PulsDiskInfoView *self,
     const gchar *dev_path = puls_smart_data_get_device_path (data);
     const gchar *ctrl_path = puls_smart_data_get_controller_path (data);
     const gchar *sg_path = puls_smart_data_get_scsi_generic_path (data);
+    const gchar *raid_status = puls_smart_data_get_raid_member_status (data);
     guint32 nsid = puls_smart_data_get_nvme_nsid (data);
+    g_autofree gchar *base_display = NULL;
     if (dev_path && ctrl_path && nsid > 0) {
-        g_autofree gchar *path_display = g_strdup_printf ("%s (Controller: %s, NSID %u)",
-                                                          dev_path, ctrl_path, nsid);
-        gtk_label_set_text (GTK_LABEL (self->device_path_label), path_display);
+        base_display = g_strdup_printf ("%s (Controller: %s, NSID %u)",
+                                        dev_path, ctrl_path, nsid);
     } else if (dev_path && ctrl_path) {
-        g_autofree gchar *path_display = g_strdup_printf ("%s (Controller: %s)",
-                                                          dev_path, ctrl_path);
-        gtk_label_set_text (GTK_LABEL (self->device_path_label), path_display);
+        base_display = g_strdup_printf ("%s (Controller: %s)",
+                                        dev_path, ctrl_path);
     } else if (dev_path && sg_path) {
-        g_autofree gchar *path_display = g_strdup_printf ("%s (SG: %s)",
-                                                          dev_path, sg_path);
-        gtk_label_set_text (GTK_LABEL (self->device_path_label), path_display);
+        base_display = g_strdup_printf ("%s (SG: %s)",
+                                        dev_path, sg_path);
     } else {
-        gtk_label_set_text (GTK_LABEL (self->device_path_label), dev_path ? dev_path : "N/A");
+        base_display = g_strdup (dev_path ? dev_path : "N/A");
+    }
+
+    if (raid_status != NULL && raid_status[0] != '\0') {
+        g_autofree gchar *with_raid = g_strdup_printf ("%s — %s", base_display, raid_status);
+        gtk_label_set_text (GTK_LABEL (self->device_path_label), with_raid);
+        gtk_widget_set_tooltip_text (self->device_path_label, with_raid);
+    } else {
+        gtk_label_set_text (GTK_LABEL (self->device_path_label), base_display);
+        gtk_widget_set_tooltip_text (self->device_path_label, base_display);
     }
 
     gint r_rpm = puls_smart_data_get_rotation_rpm (data);

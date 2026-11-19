@@ -448,6 +448,31 @@ puls_smart_data_fill_sysfs_fallbacks (PulsSmartData *data)
             puls_smart_data_set_scsi_generic_path (data, sg_path);
     }
 
+    if (puls_smart_data_get_raid_member_status (data) == NULL) {
+        GList *memberships = puls_raid_list_memberships (dev_path);
+        if (memberships != NULL) {
+            PulsRaidMemberInfo *first = memberships->data;
+            if (first->array_path != NULL)
+                puls_smart_data_set_raid_array_path (data, first->array_path);
+            if (first->level != NULL)
+                puls_smart_data_set_raid_level (data, first->level);
+
+            g_autoptr(GString) combined = g_string_new (NULL);
+            for (GList *ml = memberships; ml != NULL; ml = ml->next) {
+                PulsRaidMemberInfo *mi = ml->data;
+                if (mi->status_text != NULL) {
+                    if (combined->len > 0)
+                        g_string_append (combined, ", ");
+                    g_string_append (combined, mi->status_text);
+                }
+            }
+            if (combined->len > 0)
+                puls_smart_data_set_raid_member_status (data, combined->str);
+
+            g_list_free_full (memberships, (GDestroyNotify)puls_raid_member_info_free);
+        }
+    }
+
     const gchar *iface = puls_smart_data_get_interface_type (data);
     if (dtype == PULS_DRIVE_TYPE_USB || transport == PULS_TRANSPORT_USB) {
         if (iface == NULL || strlen (iface) == 0 || g_strcmp0 (iface, "Unknown") == 0 || g_ascii_strcasecmp (iface, "usb") == 0) {

@@ -1848,6 +1848,145 @@ test_scsi_generic_mapping (void)
     remove_temp_tree (tmp_sys);
 }
 
+static void
+create_mock_md_array (const gchar *sys_block_dir,
+                      const gchar *md_name,
+                      const gchar *level,
+                      const gchar *array_state,
+                      const gchar *raid_disks,
+                      const gchar *degraded,
+                      const gchar *sync_action)
+{
+    g_autofree gchar *md_sub = g_build_filename (sys_block_dir, md_name, "md", NULL);
+    g_autofree gchar *slaves = g_build_filename (sys_block_dir, md_name, "slaves", NULL);
+    g_assert_cmpint (g_mkdir_with_parents (md_sub, 0755), ==, 0);
+    g_assert_cmpint (g_mkdir_with_parents (slaves, 0755), ==, 0);
+
+    if (level) {
+        g_autofree gchar *p = g_build_filename (md_sub, "level", NULL);
+        g_assert_true (g_file_set_contents (p, level, -1, NULL));
+    }
+    if (array_state) {
+        g_autofree gchar *p = g_build_filename (md_sub, "array_state", NULL);
+        g_assert_true (g_file_set_contents (p, array_state, -1, NULL));
+    }
+    if (raid_disks) {
+        g_autofree gchar *p = g_build_filename (md_sub, "raid_disks", NULL);
+        g_assert_true (g_file_set_contents (p, raid_disks, -1, NULL));
+    }
+    if (degraded) {
+        g_autofree gchar *p = g_build_filename (md_sub, "degraded", NULL);
+        g_assert_true (g_file_set_contents (p, degraded, -1, NULL));
+    }
+    if (sync_action) {
+        g_autofree gchar *p = g_build_filename (md_sub, "sync_action", NULL);
+        g_assert_true (g_file_set_contents (p, sync_action, -1, NULL));
+    }
+}
+
+static void
+add_mock_md_slave (const gchar *sys_block_dir,
+                   const gchar *md_name,
+                   const gchar *slave_name,
+                   const gchar *member_state)
+{
+    g_autofree gchar *slave_entry = g_build_filename (sys_block_dir, md_name, "slaves", slave_name, NULL);
+    g_assert_cmpint (g_mkdir_with_parents (slave_entry, 0755), ==, 0);
+
+    if (member_state) {
+        g_autofree gchar *dev_sub = g_strdup_printf ("dev-%s", slave_name);
+        g_autofree gchar *dev_dir = g_build_filename (sys_block_dir, md_name, "md", dev_sub, NULL);
+        g_assert_cmpint (g_mkdir_with_parents (dev_dir, 0755), ==, 0);
+        g_autofree gchar *state_file = g_build_filename (dev_dir, "state", NULL);
+        g_assert_true (g_file_set_contents (state_file, member_state, -1, NULL));
+    }
+}
+
+static void
+test_mdadm_raid_member_resolution (void)
+{
+    /* 1. md device name validation */
+    g_assert_true  (puls_raid_is_md_device_name ("md0"));
+    g_assert_true  (puls_raid_is_md_device_name ("/dev/md127"));
+    g_assert_true  (puls_raid_is_md_device_name ("md_d0"));
+    g_assert_false (puls_raid_is_md_device_name ("md"));
+    g_assert_false (puls_raid_is_md_device_name ("md0p1"));
+    g_assert_false (puls_raid_is_md_device_name ("sda"));
+    g_assert_false (puls_raid_is_md_device_name ("nvme0n1"));
+    g_assert_false (puls_raid_is_md_device_name (""));
+    g_assert_false (puls_raid_is_md_device_name (NULL));
+
+    /* 2. Build mock /sys/block with md0 (RAID1), md1 (Degraded RAID5 + spare), md2 (NVMe RAID10 resync) */
+    g_autofree gchar *tmp_sys = g_dir_make_tmp ("puls_mdadm_sysfs_XXXXXX", NULL);
+    g_assert_nonnull (tmp_sys);
+
+    create_mock_md_array (tmp_sys, "md0", "raid1\n", "clean\n", "2\n", "0\n", "idle\n");
+    add_mock_md_slave (tmp_sys, "md0", "sda1", "in_sync\n");
+    add_mock_md_slave (tmp_sys, "md0", "sdb1", "in_sync\n");
+
+    create_mock_md_array (tmp_sys, "md1", "raid5\n", "active\n", "3\n", "1\n", "idle\n");
+    add_mock_md_slave (tmp_sys, "md1", "sda2", "in_sync\n");
+    add_mock_md_slave (tmp_sys, "md1", "sdc", "spare\n");
+
+    create_mock_md_array (tmp_sys, "md2", "raid10\n", "active\n", "4\n", "0\n", "resync\n");
+    add_mock_md_slave (tmp_sys, "md2", "nvme0n1p2", "in_sync\n");
+
+    /* 3. Verify primary detection on /dev/sda -> /dev/md0 [RAID1] */
+    PulsRaidMemberInfo info = { 0 };
+    g_assert_true (puls_raid_detect_member_from_sysfs (tmp_sys, "/dev/sda", &info));
+    g_assert_cmpstr (info.array_name, ==, "md0");
+    g_assert_cmpstr (info.array_path, ==, "/dev/md0");
+    g_assert_cmpstr (info.level, ==, "RAID1");
+    g_assert_cmpstr (info.array_state, ==, "clean");
+    g_assert_cmpstr (info.member_device, ==, "sda1");
+    g_assert_cmpstr (info.member_state, ==, "in_sync");
+    g_assert_cmpint (info.raid_disks, ==, 2);
+    g_assert_cmpint (info.degraded_count, ==, 0);
+    g_assert_cmpstr (info.status_text, ==, "Member of /dev/md0 [RAID1]");
+    puls_raid_member_info_clear (&info);
+
+    /* 4. Multi-array membership listing on /dev/sda (md0 + md1) */
+    GList *sda_list = puls_raid_list_memberships_from_sysfs (tmp_sys, "/dev/sda");
+    g_assert_cmpuint (g_list_length (sda_list), ==, 2);
+    PulsRaidMemberInfo *m0 = g_list_nth_data (sda_list, 0);
+    PulsRaidMemberInfo *m1 = g_list_nth_data (sda_list, 1);
+    g_assert_cmpstr (m0->status_text, ==, "Member of /dev/md0 [RAID1]");
+    g_assert_cmpstr (m1->status_text, ==, "Member of /dev/md1 [RAID5, Degraded]");
+    g_list_free_full (sda_list, (GDestroyNotify)puls_raid_member_info_free);
+
+    /* 5. Whole-disk spare slave (/dev/sdc -> /dev/md1 [RAID5, Spare]) */
+    g_assert_true (puls_raid_detect_member_from_sysfs (tmp_sys, "/dev/sdc", &info));
+    g_assert_cmpstr (info.member_device, ==, "sdc");
+    g_assert_cmpstr (info.member_state, ==, "spare");
+    g_assert_cmpstr (info.status_text, ==, "Member of /dev/md1 [RAID5, Spare]");
+    puls_raid_member_info_clear (&info);
+
+    /* 6. NVMe partition slave rebuilding (/dev/nvme0n1 -> /dev/md2 [RAID10, Rebuilding]) */
+    g_assert_true (puls_raid_detect_member_from_sysfs (tmp_sys, "/dev/nvme0n1", &info));
+    g_assert_cmpstr (info.array_path, ==, "/dev/md2");
+    g_assert_cmpstr (info.member_device, ==, "nvme0n1p2");
+    g_assert_cmpstr (info.status_text, ==, "Member of /dev/md2 [RAID10, Rebuilding]");
+    puls_raid_member_info_clear (&info);
+
+    /* 7. Non-member disk returns FALSE */
+    g_assert_false (puls_raid_detect_member_from_sysfs (tmp_sys, "/dev/sdd", &info));
+    g_assert_false (puls_raid_detect_member_from_sysfs (tmp_sys, "/dev/md0", &info));
+
+    /* 8. PulsSmartData RAID accessors */
+    g_autoptr(PulsSmartData) sd = puls_smart_data_new ();
+    g_assert_null (puls_smart_data_get_raid_array_path (sd));
+    g_assert_null (puls_smart_data_get_raid_level (sd));
+    g_assert_null (puls_smart_data_get_raid_member_status (sd));
+    puls_smart_data_set_raid_array_path (sd, "/dev/md0");
+    puls_smart_data_set_raid_level (sd, "RAID1");
+    puls_smart_data_set_raid_member_status (sd, "Member of /dev/md0 [RAID1]");
+    g_assert_cmpstr (puls_smart_data_get_raid_array_path (sd), ==, "/dev/md0");
+    g_assert_cmpstr (puls_smart_data_get_raid_level (sd), ==, "RAID1");
+    g_assert_cmpstr (puls_smart_data_get_raid_member_status (sd), ==, "Member of /dev/md0 [RAID1]");
+
+    remove_temp_tree (tmp_sys);
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -1877,6 +2016,7 @@ main (int argc, char *argv[])
     g_test_add_func ("/basic/nvme-topology-separation", test_nvme_topology_separation);
     g_test_add_func ("/basic/pseudo-device-filter", test_pseudo_device_filter);
     g_test_add_func ("/basic/scsi-generic-mapping", test_scsi_generic_mapping);
+    g_test_add_func ("/basic/mdadm-raid-member-resolution", test_mdadm_raid_member_resolution);
 
     int result = g_test_run ();
 

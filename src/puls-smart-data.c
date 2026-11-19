@@ -170,6 +170,9 @@ struct _PulsSmartData {
     guint32            nvme_nsid;
     gchar             *nvme_subsys_nqn;
     gchar             *nvme_wwid;
+    gchar             *raid_array_path;
+    gchar             *raid_level;
+    gchar             *raid_member_status;
 };
 
 G_DEFINE_TYPE (PulsSmartData, puls_smart_data, G_TYPE_OBJECT)
@@ -217,6 +220,9 @@ puls_smart_data_finalize (GObject *object)
     g_free (self->scsi_generic_path);
     g_free (self->nvme_subsys_nqn);
     g_free (self->nvme_wwid);
+    g_free (self->raid_array_path);
+    g_free (self->raid_level);
+    g_free (self->raid_member_status);
 
     G_OBJECT_CLASS (puls_smart_data_parent_class)->finalize (object);
 }
@@ -289,6 +295,9 @@ puls_smart_data_init (PulsSmartData *self)
     self->nvme_nsid                = 0;
     self->nvme_subsys_nqn          = NULL;
     self->nvme_wwid                = NULL;
+    self->raid_array_path          = NULL;
+    self->raid_level               = NULL;
+    self->raid_member_status       = NULL;
 }
 
 
@@ -318,6 +327,9 @@ IMPL_STRING_ACCESSOR (controller_path)
 IMPL_STRING_ACCESSOR (scsi_generic_path)
 IMPL_STRING_ACCESSOR (nvme_subsys_nqn)
 IMPL_STRING_ACCESSOR (nvme_wwid)
+IMPL_STRING_ACCESSOR (raid_array_path)
+IMPL_STRING_ACCESSOR (raid_level)
+IMPL_STRING_ACCESSOR (raid_member_status)
 IMPL_STRING_ACCESSOR (model_name)
 IMPL_STRING_ACCESSOR (serial_number)
 IMPL_STRING_ACCESSOR (firmware_version)
