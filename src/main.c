@@ -97,6 +97,21 @@ run_headless_scan (gboolean json_output)
                 json_builder_set_member_name (builder, "raid_member_status");
                 json_builder_add_string_value (builder, raid_status);
             }
+            const gchar *zfs_status = puls_smart_data_get_zfs_member_status (data);
+            if (zfs_status != NULL) {
+                const gchar *zfs_pool = puls_smart_data_get_zfs_pool_name (data);
+                const gchar *zfs_vdev = puls_smart_data_get_zfs_vdev_type (data);
+                if (zfs_pool != NULL) {
+                    json_builder_set_member_name (builder, "zfs_pool_name");
+                    json_builder_add_string_value (builder, zfs_pool);
+                }
+                if (zfs_vdev != NULL) {
+                    json_builder_set_member_name (builder, "zfs_vdev_type");
+                    json_builder_add_string_value (builder, zfs_vdev);
+                }
+                json_builder_set_member_name (builder, "zfs_member_status");
+                json_builder_add_string_value (builder, zfs_status);
+            }
             const gchar *nqn = puls_smart_data_get_nvme_subsys_nqn (data);
             if (nqn != NULL) {
                 json_builder_set_member_name (builder, "nvme_subsys_nqn");
@@ -222,6 +237,9 @@ run_headless_scan (gboolean json_output)
         const gchar *raid_status = puls_smart_data_get_raid_member_status (data);
         if (raid_status != NULL)
             g_print ("  RAID Status:   %s\n", raid_status);
+        const gchar *zfs_status = puls_smart_data_get_zfs_member_status (data);
+        if (zfs_status != NULL)
+            g_print ("  ZFS Status:    %s\n", zfs_status);
         const gchar *wwid = puls_smart_data_get_nvme_wwid (data);
         if (wwid != NULL)
             g_print ("  NVMe WWID:     %s\n", wwid);

@@ -173,6 +173,9 @@ struct _PulsSmartData {
     gchar             *raid_array_path;
     gchar             *raid_level;
     gchar             *raid_member_status;
+    gchar             *zfs_pool_name;
+    gchar             *zfs_vdev_type;
+    gchar             *zfs_member_status;
 };
 
 G_DEFINE_TYPE (PulsSmartData, puls_smart_data, G_TYPE_OBJECT)
@@ -223,6 +226,9 @@ puls_smart_data_finalize (GObject *object)
     g_free (self->raid_array_path);
     g_free (self->raid_level);
     g_free (self->raid_member_status);
+    g_free (self->zfs_pool_name);
+    g_free (self->zfs_vdev_type);
+    g_free (self->zfs_member_status);
 
     G_OBJECT_CLASS (puls_smart_data_parent_class)->finalize (object);
 }
@@ -298,6 +304,9 @@ puls_smart_data_init (PulsSmartData *self)
     self->raid_array_path          = NULL;
     self->raid_level               = NULL;
     self->raid_member_status       = NULL;
+    self->zfs_pool_name            = NULL;
+    self->zfs_vdev_type            = NULL;
+    self->zfs_member_status        = NULL;
 }
 
 
@@ -330,6 +339,9 @@ IMPL_STRING_ACCESSOR (nvme_wwid)
 IMPL_STRING_ACCESSOR (raid_array_path)
 IMPL_STRING_ACCESSOR (raid_level)
 IMPL_STRING_ACCESSOR (raid_member_status)
+IMPL_STRING_ACCESSOR (zfs_pool_name)
+IMPL_STRING_ACCESSOR (zfs_vdev_type)
+IMPL_STRING_ACCESSOR (zfs_member_status)
 IMPL_STRING_ACCESSOR (model_name)
 IMPL_STRING_ACCESSOR (serial_number)
 IMPL_STRING_ACCESSOR (firmware_version)

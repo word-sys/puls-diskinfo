@@ -3087,3 +3087,373 @@ puls_raid_detect_member (const gchar        *device_path,
     return puls_raid_detect_member_from_sysfs ("/sys/block", device_path, out_info);
 }
 
+/**
+ * puls_zfs_member_info_clear:
+ * @info: A #PulsZfsMemberInfo struct.
+ *
+ * Frees owned fields in @info and resets it to zero.
+ */
+void
+puls_zfs_member_info_clear (PulsZfsMemberInfo *info)
+{
+    if (info == NULL)
+        return;
+
+    g_free (info->pool_name);
+    g_free (info->pool_state);
+    g_free (info->vdev_type);
+    g_free (info->member_name);
+    g_free (info->member_state);
+    g_free (info->status_text);
+    memset (info, 0, sizeof (*info));
+}
+
+/**
+ * puls_zfs_member_info_free:
+ * @info: Heap-allocated #PulsZfsMemberInfo.
+ *
+ * Clears and frees @info.
+ */
+void
+puls_zfs_member_info_free (PulsZfsMemberInfo *info)
+{
+    if (info == NULL)
+        return;
+    puls_zfs_member_info_clear (info);
+    g_free (info);
+}
+
+/**
+ * puls_zfs_format_member_status:
+ * @info: Populated #PulsZfsMemberInfo.
+ *
+ * Formats a concise ZFS membership summary, such as
+ * `"ZFS Pool: tank [RAIDZ1, ONLINE]"` or `"ZFS Pool: rpool [MIRROR, DEGRADED]"`.
+ *
+ * Returns: (nullable) (transfer full): Newly allocated status string.
+ */
+gchar *
+puls_zfs_format_member_status (const PulsZfsMemberInfo *info)
+{
+    if (info == NULL || info->pool_name == NULL)
+        return NULL;
+
+    const gchar *state = (info->member_state && info->member_state[0] != '\0')
+                         ? info->member_state
+                         : info->pool_state;
+
+    if (info->vdev_type != NULL && state != NULL)
+        return g_strdup_printf ("ZFS Pool: %s [%s, %s]", info->pool_name, info->vdev_type, state);
+    if (info->vdev_type != NULL)
+        return g_strdup_printf ("ZFS Pool: %s [%s]", info->pool_name, info->vdev_type);
+    if (state != NULL)
+        return g_strdup_printf ("ZFS Pool: %s [%s]", info->pool_name, state);
+
+    return g_strdup_printf ("ZFS Pool: %s", info->pool_name);
+}
+
+static gboolean
+buffer_contains_bytes (const guint8 *haystack,
+                       gsize         haystack_len,
+                       const gchar  *needle)
+{
+    gsize needle_len = strlen (needle);
+    if (needle_len == 0 || haystack_len < needle_len)
+        return FALSE;
+
+    for (gsize i = 0; i <= haystack_len - needle_len; i++) {
+        if (memcmp (haystack + i, needle, needle_len) == 0)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+/**
+ * puls_zfs_has_label_signature:
+ * @data: Raw bytes from a ZFS vdev label or disk header region.
+ * @len: Length of @data in bytes.
+ *
+ * Checks for OpenZFS on-disk signatures: either a 64-bit uberblock magic
+ * (`0x0000000000bab10c` in little-endian or big-endian byte order) or the
+ * paired XDR nvlist vdev label keys (`pool_guid` and `vdev_tree`).
+ *
+ * Returns: %TRUE if a valid ZFS disk/label signature is detected.
+ */
+gboolean
+puls_zfs_has_label_signature (const guint8 *data,
+                              gsize         len)
+{
+    if (data == NULL || len < 8)
+        return FALSE;
+
+    static const guint8 ub_magic_le[8] = { 0x0c, 0xb1, 0xba, 0x00, 0x00, 0x00, 0x00, 0x00 };
+    static const guint8 ub_magic_be[8] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0xba, 0xb1, 0x0c };
+
+    for (gsize off = 0; off + 8 <= len; off += 8) {
+        if (memcmp (data + off, ub_magic_le, 8) == 0 ||
+            memcmp (data + off, ub_magic_be, 8) == 0)
+            return TRUE;
+    }
+
+    if (buffer_contains_bytes (data, len, "pool_guid") &&
+        buffer_contains_bytes (data, len, "vdev_tree"))
+        return TRUE;
+
+    return FALSE;
+}
+
+static const gchar *
+classify_zfs_vdev_group (const gchar *token)
+{
+    if (g_strcmp0 (token, "logs") == 0)
+        return "LOG";
+    if (g_strcmp0 (token, "cache") == 0)
+        return "CACHE";
+    if (g_strcmp0 (token, "spares") == 0)
+        return "SPARE";
+    if (g_strcmp0 (token, "special") == 0)
+        return "SPECIAL";
+    if (g_strcmp0 (token, "dedup") == 0)
+        return "DEDUP";
+    if (g_str_has_prefix (token, "mirror-"))
+        return "MIRROR";
+    if (g_str_has_prefix (token, "raidz3-"))
+        return "RAIDZ3";
+    if (g_str_has_prefix (token, "raidz2-"))
+        return "RAIDZ2";
+    if (g_str_has_prefix (token, "raidz1-") || g_str_has_prefix (token, "raidz-"))
+        return "RAIDZ1";
+    if (g_str_has_prefix (token, "draid"))
+        return "DRAID";
+    return NULL;
+}
+
+static gboolean
+zfs_member_matches_disk (const gchar *member_token,
+                         const gchar *by_id_dir,
+                         const gchar *disk_name)
+{
+    if (member_token == NULL || disk_name == NULL)
+        return FALSE;
+
+    /* 1. Direct block/partition name match (e.g. /dev/sda1, sda1, nvme0n1p3) */
+    const gchar *leaf = strrchr (member_token, '/');
+    leaf = leaf ? leaf + 1 : member_token;
+    if (device_name_is_partition_of (leaf, disk_name))
+        return TRUE;
+
+    /* 2. Direct symlink resolution when full path exists (e.g. /dev/disk/by-id/...) */
+    if (g_path_is_absolute (member_token)) {
+        g_autofree gchar *resolved = puls_sysfs_resolve_link (member_token);
+        if (resolved != NULL) {
+            g_autofree gchar *res_base = g_path_get_basename (resolved);
+            if (device_name_is_partition_of (res_base, disk_name))
+                return TRUE;
+        }
+    }
+
+    /* 3. Resolve leaf name inside by_id_dir (supports bare IDs & mock by-id dirs) */
+    if (by_id_dir != NULL && *leaf != '\0') {
+        g_autofree gchar *candidate = g_build_filename (by_id_dir, leaf, NULL);
+        g_autofree gchar *resolved = puls_sysfs_resolve_link (candidate);
+        if (resolved != NULL) {
+            g_autofree gchar *res_base = g_path_get_basename (resolved);
+            if (device_name_is_partition_of (res_base, disk_name))
+                return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
+/**
+ * puls_zfs_list_memberships_from_status:
+ * @zpool_status_text: Output text from `zpool status` / `zpool status -P`.
+ * @by_id_dir: (nullable): Directory containing `/dev/disk/by-id` symlinks.
+ * @device_path: Physical disk name or path (e.g. `"/dev/sda"`).
+ *
+ * Parses @zpool_status_text and resolves leaf vdev entries (including `/dev/disk/by-id/`
+ * symlinks) to identify all ZFS pool memberships for @device_path.
+ *
+ * Returns: (element-type PulsZfsMemberInfo) (transfer full): List of memberships.
+ */
+GList *
+puls_zfs_list_memberships_from_status (const gchar *zpool_status_text,
+                                       const gchar *by_id_dir,
+                                       const gchar *device_path)
+{
+    if (zpool_status_text == NULL || device_path == NULL)
+        return NULL;
+
+    g_autofree gchar *disk_name = puls_sanitize_device_name (device_path);
+    if (disk_name == NULL)
+        return NULL;
+
+    GList *results = NULL;
+    g_auto(GStrv) lines = g_strsplit (zpool_status_text, "\n", -1);
+
+    g_autofree gchar *current_pool = NULL;
+    g_autofree gchar *current_pool_state = NULL;
+    const gchar *current_vdev = "STRIPE";
+    gboolean in_config = FALSE;
+
+    for (guint i = 0; lines[i] != NULL; i++) {
+        g_autofree gchar *trimmed = g_strdup (lines[i]);
+        g_strstrip (trimmed);
+
+        if (trimmed[0] == '\0')
+            continue;
+
+        if (g_str_has_prefix (trimmed, "pool:")) {
+            g_free (current_pool);
+            current_pool = g_strdup (trimmed + 5);
+            g_strstrip (current_pool);
+            g_clear_pointer (&current_pool_state, g_free);
+            current_vdev = "STRIPE";
+            in_config = FALSE;
+            continue;
+        }
+
+        if (g_str_has_prefix (trimmed, "state:")) {
+            g_free (current_pool_state);
+            current_pool_state = g_strdup (trimmed + 6);
+            g_strstrip (current_pool_state);
+            continue;
+        }
+
+        if (g_str_has_prefix (trimmed, "config:")) {
+            in_config = TRUE;
+            continue;
+        }
+
+        if (g_str_has_prefix (trimmed, "errors:")) {
+            in_config = FALSE;
+            continue;
+        }
+
+        if (!in_config || current_pool == NULL)
+            continue;
+
+        if (g_str_has_prefix (trimmed, "NAME") && strstr (trimmed, "STATE") != NULL)
+            continue;
+
+        g_auto(GStrv) raw_tokens = g_strsplit_set (trimmed, " \t", -1);
+        const gchar *toks[6] = { NULL };
+        guint n_toks = 0;
+        for (guint t = 0; raw_tokens[t] != NULL && n_toks < 5; t++) {
+            if (raw_tokens[t][0] != '\0')
+                toks[n_toks++] = raw_tokens[t];
+        }
+
+        if (n_toks == 0)
+            continue;
+
+        const gchar *name_tok = toks[0];
+        if (g_strcmp0 (name_tok, current_pool) == 0) {
+            current_vdev = "STRIPE";
+            continue;
+        }
+
+        const gchar *group = classify_zfs_vdev_group (name_tok);
+        if (group != NULL) {
+            current_vdev = group;
+            continue;
+        }
+
+        if (zfs_member_matches_disk (name_tok, by_id_dir, disk_name)) {
+            PulsZfsMemberInfo *info = g_new0 (PulsZfsMemberInfo, 1);
+            info->pool_name = g_strdup (current_pool);
+            info->pool_state = g_strdup (current_pool_state);
+            info->vdev_type = g_strdup (current_vdev);
+            info->member_name = g_strdup (name_tok);
+            info->member_state = (n_toks >= 2) ? g_strdup (toks[1]) : g_strdup (current_pool_state);
+            info->read_errors  = (n_toks >= 3) ? g_ascii_strtoull (toks[2], NULL, 10) : 0;
+            info->write_errors = (n_toks >= 4) ? g_ascii_strtoull (toks[3], NULL, 10) : 0;
+            info->cksum_errors = (n_toks >= 5) ? g_ascii_strtoull (toks[4], NULL, 10) : 0;
+            info->status_text = puls_zfs_format_member_status (info);
+            results = g_list_append (results, info);
+        }
+    }
+
+    return results;
+}
+
+/**
+ * puls_zfs_detect_member_from_status:
+ * @zpool_status_text: Output from `zpool status`.
+ * @by_id_dir: (nullable): Directory containing `/dev/disk/by-id` symlinks.
+ * @device_path: Physical disk name or path (e.g. `"/dev/sda"`).
+ * @out_info: Output #PulsZfsMemberInfo struct.
+ *
+ * Returns: %TRUE if @device_path belongs to at least one ZFS pool in @zpool_status_text.
+ */
+gboolean
+puls_zfs_detect_member_from_status (const gchar       *zpool_status_text,
+                                    const gchar       *by_id_dir,
+                                    const gchar       *device_path,
+                                    PulsZfsMemberInfo *out_info)
+{
+    g_return_val_if_fail (out_info != NULL, FALSE);
+
+    memset (out_info, 0, sizeof (*out_info));
+
+    GList *list = puls_zfs_list_memberships_from_status (zpool_status_text, by_id_dir, device_path);
+    if (list == NULL)
+        return FALSE;
+
+    PulsZfsMemberInfo *first = list->data;
+    out_info->pool_name    = g_strdup (first->pool_name);
+    out_info->pool_state   = g_strdup (first->pool_state);
+    out_info->vdev_type    = g_strdup (first->vdev_type);
+    out_info->member_name  = g_strdup (first->member_name);
+    out_info->member_state = g_strdup (first->member_state);
+    out_info->read_errors  = first->read_errors;
+    out_info->write_errors = first->write_errors;
+    out_info->cksum_errors = first->cksum_errors;
+    out_info->status_text  = g_strdup (first->status_text);
+
+    g_list_free_full (list, (GDestroyNotify)puls_zfs_member_info_free);
+    return TRUE;
+}
+
+/**
+ * puls_zfs_detect_member:
+ * @device_path: Physical disk name or path (e.g. `"/dev/sda"`).
+ * @out_info: Output #PulsZfsMemberInfo struct.
+ *
+ * Queries `zpool status -P` if `zpool` is installed and matches physical vdev
+ * entries against @device_path and `/dev/disk/by-id`.
+ *
+ * Returns: %TRUE if @device_path is detected as a ZFS pool member.
+ */
+gboolean
+puls_zfs_detect_member (const gchar       *device_path,
+                        PulsZfsMemberInfo *out_info)
+{
+    g_return_val_if_fail (out_info != NULL, FALSE);
+
+    memset (out_info, 0, sizeof (*out_info));
+
+    if (device_path == NULL)
+        return FALSE;
+
+    g_autofree gchar *zpool_bin = g_find_program_in_path ("zpool");
+    if (zpool_bin == NULL)
+        return FALSE;
+
+    const gchar *argv[] = { zpool_bin, "status", "-P", NULL };
+    g_autofree gchar *stdout_buf = NULL;
+    g_autofree gchar *stderr_buf = NULL;
+    gint exit_status = 0;
+
+    if (!g_spawn_sync (NULL, (gchar **)argv, NULL, G_SPAWN_DEFAULT,
+                       NULL, NULL, &stdout_buf, &stderr_buf, &exit_status, NULL))
+        return FALSE;
+
+    if (exit_status != 0 || stdout_buf == NULL || stdout_buf[0] == '\0')
+        return FALSE;
+
+    return puls_zfs_detect_member_from_status (stdout_buf, "/dev/disk/by-id",
+                                               device_path, out_info);
+}
+

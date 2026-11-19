@@ -1650,29 +1650,29 @@ puls_disk_info_view_set_data (PulsDiskInfoView *self,
     const gchar *ctrl_path = puls_smart_data_get_controller_path (data);
     const gchar *sg_path = puls_smart_data_get_scsi_generic_path (data);
     const gchar *raid_status = puls_smart_data_get_raid_member_status (data);
+    const gchar *zfs_status = puls_smart_data_get_zfs_member_status (data);
     guint32 nsid = puls_smart_data_get_nvme_nsid (data);
-    g_autofree gchar *base_display = NULL;
+    g_autoptr(GString) display = g_string_new (NULL);
     if (dev_path && ctrl_path && nsid > 0) {
-        base_display = g_strdup_printf ("%s (Controller: %s, NSID %u)",
-                                        dev_path, ctrl_path, nsid);
+        g_string_append_printf (display, "%s (Controller: %s, NSID %u)",
+                                dev_path, ctrl_path, nsid);
     } else if (dev_path && ctrl_path) {
-        base_display = g_strdup_printf ("%s (Controller: %s)",
-                                        dev_path, ctrl_path);
+        g_string_append_printf (display, "%s (Controller: %s)",
+                                dev_path, ctrl_path);
     } else if (dev_path && sg_path) {
-        base_display = g_strdup_printf ("%s (SG: %s)",
-                                        dev_path, sg_path);
+        g_string_append_printf (display, "%s (SG: %s)",
+                                dev_path, sg_path);
     } else {
-        base_display = g_strdup (dev_path ? dev_path : "N/A");
+        g_string_append (display, dev_path ? dev_path : "N/A");
     }
 
-    if (raid_status != NULL && raid_status[0] != '\0') {
-        g_autofree gchar *with_raid = g_strdup_printf ("%s — %s", base_display, raid_status);
-        gtk_label_set_text (GTK_LABEL (self->device_path_label), with_raid);
-        gtk_widget_set_tooltip_text (self->device_path_label, with_raid);
-    } else {
-        gtk_label_set_text (GTK_LABEL (self->device_path_label), base_display);
-        gtk_widget_set_tooltip_text (self->device_path_label, base_display);
-    }
+    if (raid_status != NULL && raid_status[0] != '\0')
+        g_string_append_printf (display, " — %s", raid_status);
+    if (zfs_status != NULL && zfs_status[0] != '\0')
+        g_string_append_printf (display, " — %s", zfs_status);
+
+    gtk_label_set_text (GTK_LABEL (self->device_path_label), display->str);
+    gtk_widget_set_tooltip_text (self->device_path_label, display->str);
 
     gint r_rpm = puls_smart_data_get_rotation_rpm (data);
     if (r_rpm == 0) {

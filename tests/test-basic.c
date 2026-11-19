@@ -1987,6 +1987,141 @@ test_mdadm_raid_member_resolution (void)
     remove_temp_tree (tmp_sys);
 }
 
+static void
+test_zfs_pool_member_detection (void)
+{
+    /* 1. ZFS disk / vdev label signature identification */
+    guint8 buf[256];
+    memset (buf, 0, sizeof (buf));
+    g_assert_false (puls_zfs_has_label_signature (buf, sizeof (buf)));
+    g_assert_false (puls_zfs_has_label_signature (NULL, 0));
+
+    /* Little-endian ZFS uberblock magic 0x0000000000bab10c */
+    buf[64] = 0x0c; buf[65] = 0xb1; buf[66] = 0xba; buf[67] = 0x00;
+    g_assert_true (puls_zfs_has_label_signature (buf, sizeof (buf)));
+
+    /* Big-endian ZFS uberblock magic */
+    memset (buf, 0, sizeof (buf));
+    buf[128 + 5] = 0xba; buf[128 + 6] = 0xb1; buf[128 + 7] = 0x0c;
+    g_assert_true (puls_zfs_has_label_signature (buf, sizeof (buf)));
+
+    /* Paired XDR nvlist vdev label keys */
+    const gchar *nvlist_partial = "version\0pool_guid\0";
+    g_assert_false (puls_zfs_has_label_signature ((const guint8 *)nvlist_partial, 18));
+    const gchar *nvlist_valid = "\0\0\0\x09pool_guid\0\0\0\x09vdev_tree\0";
+    g_assert_true (puls_zfs_has_label_signature ((const guint8 *)nvlist_valid, 27));
+
+    /* 2. Mock /dev/disk/by-id directory & multi-pool zpool status parsing */
+    g_autofree gchar *tmp_root = g_dir_make_tmp ("puls_zfs_dev_XXXXXX", NULL);
+    g_assert_nonnull (tmp_root);
+    g_autofree gchar *by_id_dir = g_build_filename (tmp_root, "disk", "by-id", NULL);
+    g_assert_cmpint (g_mkdir_with_parents (by_id_dir, 0755), ==, 0);
+
+    /* Create real targets for realpath/puls_sysfs_resolve_link to resolve */
+    g_autofree gchar *fake_sda1 = g_build_filename (tmp_root, "sda1", NULL);
+    g_autofree gchar *fake_sdc  = g_build_filename (tmp_root, "sdc", NULL);
+    g_assert_true (g_file_set_contents (fake_sda1, "", 0, NULL));
+    g_assert_true (g_file_set_contents (fake_sdc,  "", 0, NULL));
+
+    g_autofree gchar *link_ata = g_build_filename (by_id_dir, "ata-WDC_WD40EFRX_WD1234-part1", NULL);
+    g_autofree gchar *link_wwn = g_build_filename (by_id_dir, "wwn-0x5000c500deadbeef", NULL);
+    g_assert_cmpint (symlink ("../../sda1", link_ata), ==, 0);
+    g_assert_cmpint (symlink ("../../sdc",  link_wwn), ==, 0);
+
+    const gchar *mock_status =
+        "  pool: tank\n"
+        " state: DEGRADED\n"
+        "config:\n"
+        "\n"
+        "\tNAME                                           STATE     READ WRITE CKSUM\n"
+        "\ttank                                           DEGRADED     0     0     0\n"
+        "\t  raidz1-0                                     DEGRADED     0     0     0\n"
+        "\t    /dev/disk/by-id/ata-WDC_WD40EFRX_WD1234-part1  ONLINE   0     0     0\n"
+        "\t    /dev/sdb1                                  DEGRADED     2     1     5\n"
+        "\t    /dev/nvme0n1p3                             ONLINE       0     0     0\n"
+        "\tlogs\n"
+        "\t  /dev/nvme1n1p1                               ONLINE       0     0     0\n"
+        "\tcache\n"
+        "\t  /dev/nvme1n1p2                               ONLINE       0     0     0\n"
+        "\tspares\n"
+        "\t  wwn-0x5000c500deadbeef                       AVAIL\n"
+        "\n"
+        "errors: No known data errors\n"
+        "\n"
+        "  pool: rpool\n"
+        " state: ONLINE\n"
+        "config:\n"
+        "\tNAME             STATE     READ WRITE CKSUM\n"
+        "\trpool            ONLINE       0     0     0\n"
+        "\t  mirror-0       ONLINE       0     0     0\n"
+        "\t    /dev/nvme0n1p4 ONLINE     0     0     0\n"
+        "errors: No known data errors\n";
+
+    /* /dev/sda matched via /dev/disk/by-id symlink */
+    PulsZfsMemberInfo info = { 0 };
+    g_assert_true (puls_zfs_detect_member_from_status (mock_status, by_id_dir, "/dev/sda", &info));
+    g_assert_cmpstr (info.pool_name, ==, "tank");
+    g_assert_cmpstr (info.pool_state, ==, "DEGRADED");
+    g_assert_cmpstr (info.vdev_type, ==, "RAIDZ1");
+    g_assert_cmpstr (info.member_state, ==, "ONLINE");
+    g_assert_cmpstr (info.status_text, ==, "ZFS Pool: tank [RAIDZ1, ONLINE]");
+    puls_zfs_member_info_clear (&info);
+
+    /* /dev/sdb matched directly with error counters */
+    g_assert_true (puls_zfs_detect_member_from_status (mock_status, by_id_dir, "/dev/sdb", &info));
+    g_assert_cmpstr (info.vdev_type, ==, "RAIDZ1");
+    g_assert_cmpstr (info.member_state, ==, "DEGRADED");
+    g_assert_cmpuint (info.read_errors, ==, 2);
+    g_assert_cmpuint (info.write_errors, ==, 1);
+    g_assert_cmpuint (info.cksum_errors, ==, 5);
+    g_assert_cmpstr (info.status_text, ==, "ZFS Pool: tank [RAIDZ1, DEGRADED]");
+    puls_zfs_member_info_clear (&info);
+
+    /* /dev/sdc matched via bare wwn-* symlink under by_id_dir as SPARE */
+    g_assert_true (puls_zfs_detect_member_from_status (mock_status, by_id_dir, "/dev/sdc", &info));
+    g_assert_cmpstr (info.vdev_type, ==, "SPARE");
+    g_assert_cmpstr (info.member_state, ==, "AVAIL");
+    g_assert_cmpstr (info.status_text, ==, "ZFS Pool: tank [SPARE, AVAIL]");
+    puls_zfs_member_info_clear (&info);
+
+    /* /dev/nvme1n1 has both LOG and CACHE vdev partitions */
+    GList *nvme1_list = puls_zfs_list_memberships_from_status (mock_status, by_id_dir, "/dev/nvme1n1");
+    g_assert_cmpuint (g_list_length (nvme1_list), ==, 2);
+    PulsZfsMemberInfo *z0 = g_list_nth_data (nvme1_list, 0);
+    PulsZfsMemberInfo *z1 = g_list_nth_data (nvme1_list, 1);
+    g_assert_cmpstr (z0->vdev_type, ==, "LOG");
+    g_assert_cmpstr (z1->vdev_type, ==, "CACHE");
+    g_list_free_full (nvme1_list, (GDestroyNotify)puls_zfs_member_info_free);
+
+    /* /dev/nvme0n1 participates in both tank (RAIDZ1) and rpool (MIRROR) */
+    GList *nvme0_list = puls_zfs_list_memberships_from_status (mock_status, by_id_dir, "/dev/nvme0n1");
+    g_assert_cmpuint (g_list_length (nvme0_list), ==, 2);
+    PulsZfsMemberInfo *p0 = g_list_nth_data (nvme0_list, 0);
+    PulsZfsMemberInfo *p1 = g_list_nth_data (nvme0_list, 1);
+    g_assert_cmpstr (p0->pool_name, ==, "tank");
+    g_assert_cmpstr (p0->vdev_type, ==, "RAIDZ1");
+    g_assert_cmpstr (p1->pool_name, ==, "rpool");
+    g_assert_cmpstr (p1->vdev_type, ==, "MIRROR");
+    g_list_free_full (nvme0_list, (GDestroyNotify)puls_zfs_member_info_free);
+
+    /* Non-member disk returns FALSE */
+    g_assert_false (puls_zfs_detect_member_from_status (mock_status, by_id_dir, "/dev/sde", &info));
+
+    /* 3. PulsSmartData ZFS accessors */
+    g_autoptr(PulsSmartData) sd = puls_smart_data_new ();
+    g_assert_null (puls_smart_data_get_zfs_pool_name (sd));
+    g_assert_null (puls_smart_data_get_zfs_vdev_type (sd));
+    g_assert_null (puls_smart_data_get_zfs_member_status (sd));
+    puls_smart_data_set_zfs_pool_name (sd, "tank");
+    puls_smart_data_set_zfs_vdev_type (sd, "RAIDZ1");
+    puls_smart_data_set_zfs_member_status (sd, "ZFS Pool: tank [RAIDZ1, ONLINE]");
+    g_assert_cmpstr (puls_smart_data_get_zfs_pool_name (sd), ==, "tank");
+    g_assert_cmpstr (puls_smart_data_get_zfs_vdev_type (sd), ==, "RAIDZ1");
+    g_assert_cmpstr (puls_smart_data_get_zfs_member_status (sd), ==, "ZFS Pool: tank [RAIDZ1, ONLINE]");
+
+    remove_temp_tree (tmp_root);
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -2017,6 +2152,7 @@ main (int argc, char *argv[])
     g_test_add_func ("/basic/pseudo-device-filter", test_pseudo_device_filter);
     g_test_add_func ("/basic/scsi-generic-mapping", test_scsi_generic_mapping);
     g_test_add_func ("/basic/mdadm-raid-member-resolution", test_mdadm_raid_member_resolution);
+    g_test_add_func ("/basic/zfs-pool-member-detection", test_zfs_pool_member_detection);
 
     int result = g_test_run ();
 

@@ -256,6 +256,34 @@ GList   *puls_raid_list_memberships_from_sysfs (const gchar              *sys_bl
                                                 const gchar              *device_path);
 GList   *puls_raid_list_memberships            (const gchar              *device_path);
 
+/* ZFS Pool Physical Member Detection */
+typedef struct {
+    gchar   *pool_name;      /* e.g. "tank", "rpool" */
+    gchar   *pool_state;     /* e.g. "ONLINE", "DEGRADED" */
+    gchar   *vdev_type;      /* e.g. "RAIDZ1", "MIRROR", "STRIPE", "LOG", "CACHE", "SPARE" */
+    gchar   *member_name;    /* Raw entry name from zpool status */
+    gchar   *member_state;   /* e.g. "ONLINE", "DEGRADED", "FAULTED", "AVAIL" */
+    guint64  read_errors;
+    guint64  write_errors;
+    guint64  cksum_errors;
+    gchar   *status_text;    /* Formatted e.g. "ZFS Pool: tank [RAIDZ1, ONLINE]" */
+} PulsZfsMemberInfo;
+
+void     puls_zfs_member_info_clear            (PulsZfsMemberInfo       *info);
+void     puls_zfs_member_info_free             (PulsZfsMemberInfo       *info);
+gchar   *puls_zfs_format_member_status         (const PulsZfsMemberInfo *info);
+gboolean puls_zfs_has_label_signature          (const guint8            *data,
+                                                gsize                    len);
+GList   *puls_zfs_list_memberships_from_status (const gchar             *zpool_status_text,
+                                                const gchar             *by_id_dir,
+                                                const gchar             *device_path);
+gboolean puls_zfs_detect_member_from_status    (const gchar             *zpool_status_text,
+                                                const gchar             *by_id_dir,
+                                                const gchar             *device_path,
+                                                PulsZfsMemberInfo       *out_info);
+gboolean puls_zfs_detect_member                (const gchar             *device_path,
+                                                PulsZfsMemberInfo       *out_info);
+
 /* USB Speed and Bridge Controller Inspector */
 typedef struct {
     gchar       *device_dir;       /* USB device directory in sysfs */

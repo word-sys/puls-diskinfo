@@ -473,6 +473,19 @@ puls_smart_data_fill_sysfs_fallbacks (PulsSmartData *data)
         }
     }
 
+    if (puls_smart_data_get_zfs_member_status (data) == NULL) {
+        PulsZfsMemberInfo zfs_info = { 0 };
+        if (puls_zfs_detect_member (dev_path, &zfs_info)) {
+            if (zfs_info.pool_name != NULL)
+                puls_smart_data_set_zfs_pool_name (data, zfs_info.pool_name);
+            if (zfs_info.vdev_type != NULL)
+                puls_smart_data_set_zfs_vdev_type (data, zfs_info.vdev_type);
+            if (zfs_info.status_text != NULL)
+                puls_smart_data_set_zfs_member_status (data, zfs_info.status_text);
+            puls_zfs_member_info_clear (&zfs_info);
+        }
+    }
+
     const gchar *iface = puls_smart_data_get_interface_type (data);
     if (dtype == PULS_DRIVE_TYPE_USB || transport == PULS_TRANSPORT_USB) {
         if (iface == NULL || strlen (iface) == 0 || g_strcmp0 (iface, "Unknown") == 0 || g_ascii_strcasecmp (iface, "usb") == 0) {
