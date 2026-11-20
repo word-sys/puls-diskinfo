@@ -50,6 +50,14 @@ typedef struct {
 
 PulsDiskManager *puls_disk_manager_new           (void);
 void             puls_disk_manager_scan           (PulsDiskManager *self);
+void             puls_disk_manager_scan_async     (PulsDiskManager     *self,
+                                                   GCancellable        *cancellable,
+                                                   GAsyncReadyCallback  callback,
+                                                   gpointer             user_data);
+gboolean         puls_disk_manager_scan_finish    (PulsDiskManager     *self,
+                                                   GAsyncResult        *result,
+                                                   GError             **error);
+gboolean         puls_disk_manager_is_scanning    (PulsDiskManager     *self);
 GList           *puls_disk_manager_get_devices    (PulsDiskManager *self);
 guint            puls_disk_manager_get_device_count (PulsDiskManager *self);
 

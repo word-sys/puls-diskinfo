@@ -48,6 +48,7 @@ struct _PulsWindow {
 
     PulsDiskManager *manager;
     PulsSettings    *settings;
+    GCancellable    *scan_cancellable;
 
     guint refresh_timer_id;
     gulong settings_changed_id;
@@ -736,9 +737,39 @@ on_disk_updated (PulsDiskManager *manager,
 }
 
 static void
+on_initial_scan_done (GObject      *source_object,
+                      GAsyncResult *result,
+                      gpointer      user_data)
+{
+    PulsDiskManager *manager = PULS_DISK_MANAGER (source_object);
+    GError *error = NULL;
+    gboolean ok = puls_disk_manager_scan_finish (manager, result, &error);
+
+    if (!ok) {
+        if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+            g_clear_error (&error);
+            return;
+        }
+        PULS_LOG_WARN ("Async disk scan finished with error: %s",
+                       error ? error->message : "unknown");
+        g_clear_error (&error);
+    }
+
+    PulsWindow *self = PULS_WINDOW (user_data);
+    if (self->manager != NULL)
+        puls_disk_manager_start_monitoring (self->manager);
+    update_status_disk_count (self);
+}
+
+static void
 puls_window_dispose (GObject *object)
 {
     PulsWindow *self = PULS_WINDOW (object);
+
+    if (self->scan_cancellable != NULL) {
+        g_cancellable_cancel (self->scan_cancellable);
+        g_clear_object (&self->scan_cancellable);
+    }
 
     if (self->refresh_timer_id > 0) {
         g_source_remove (self->refresh_timer_id);
@@ -921,14 +952,15 @@ puls_window_init (PulsWindow *self)
     gtk_label_set_xalign (GTK_LABEL (self->status_label), 0.0);
     gtk_box_append (GTK_BOX (self->status_bar), self->status_label);
 
-    puls_disk_manager_scan (self->manager);
-    puls_disk_manager_start_monitoring (self->manager);
+    self->scan_cancellable = g_cancellable_new ();
+    puls_disk_manager_scan_async (self->manager,
+                                  self->scan_cancellable,
+                                  on_initial_scan_done,
+                                  self);
 
     update_timer (self);
     self->settings_changed_id = g_signal_connect (self->settings, "changed",
                                                    G_CALLBACK (on_settings_changed), self);
-
-    update_status_disk_count (self);
 }
 
 PulsWindow *

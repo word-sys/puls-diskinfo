@@ -2318,6 +2318,137 @@ test_standby_sleep_detection (void)
                      ==, PULS_POWER_STATE_SLEEP);
 }
 
+typedef struct {
+    GMainLoop *loop;
+    gboolean   done;
+    gboolean   ok;
+    GError    *error;
+    guint      added_signals;
+    gboolean   main_thread_ticked;
+    GThread   *main_thread;
+    gboolean   signals_on_main_thread;
+} AsyncScanTestCtx;
+
+static void
+on_async_scan_disk_added (PulsDiskManager *mgr G_GNUC_UNUSED,
+                          const gchar     *device_path G_GNUC_UNUSED,
+                          gpointer         user_data)
+{
+    AsyncScanTestCtx *ctx = user_data;
+    ctx->added_signals++;
+    if (g_thread_self () != ctx->main_thread)
+        ctx->signals_on_main_thread = FALSE;
+}
+
+static gboolean
+on_async_main_thread_tick (gpointer user_data)
+{
+    AsyncScanTestCtx *ctx = user_data;
+    ctx->main_thread_ticked = TRUE;
+    return G_SOURCE_REMOVE;
+}
+
+static void
+on_async_scan_test_done (GObject      *source_object,
+                         GAsyncResult *result,
+                         gpointer      user_data)
+{
+    AsyncScanTestCtx *ctx = user_data;
+    PulsDiskManager *mgr = PULS_DISK_MANAGER (source_object);
+    ctx->ok = puls_disk_manager_scan_finish (mgr, result, &ctx->error);
+    ctx->done = TRUE;
+    g_main_loop_quit (ctx->loop);
+}
+
+static void
+test_async_scan_cancellation (void)
+{
+    /* 1. Asynchronous mock scan completes without blocking main thread */
+    g_autoptr(PulsDiskManager) mgr_mock = puls_disk_manager_new ();
+    puls_disk_manager_set_mock_mode (mgr_mock, TRUE);
+
+    AsyncScanTestCtx ctx = {
+        .loop = g_main_loop_new (NULL, FALSE),
+        .main_thread = g_thread_self (),
+        .signals_on_main_thread = TRUE,
+    };
+
+    g_signal_connect (mgr_mock, "disk-added", G_CALLBACK (on_async_scan_disk_added), &ctx);
+    g_idle_add (on_async_main_thread_tick, &ctx);
+
+    puls_disk_manager_scan_async (mgr_mock, NULL, on_async_scan_test_done, &ctx);
+    g_assert_true (puls_disk_manager_is_scanning (mgr_mock));
+
+    g_main_loop_run (ctx.loop);
+
+    g_assert_true (ctx.done);
+    g_assert_true (ctx.ok);
+    g_assert_no_error (ctx.error);
+    g_assert_true (ctx.main_thread_ticked);
+    g_assert_true (ctx.signals_on_main_thread);
+    g_assert_false (puls_disk_manager_is_scanning (mgr_mock));
+    g_assert_cmpuint (ctx.added_signals, ==, 4);
+    g_assert_cmpuint (puls_disk_manager_get_device_count (mgr_mock), ==, 4);
+    g_main_loop_unref (ctx.loop);
+
+    /* 2. Cancelled scan returns G_IO_ERROR_CANCELLED and does not mutate devices */
+    g_autoptr(PulsDiskManager) mgr_cancel = puls_disk_manager_new ();
+    puls_disk_manager_set_mock_mode (mgr_cancel, FALSE);
+    g_autoptr(GCancellable) cancellable = g_cancellable_new ();
+    g_cancellable_cancel (cancellable);
+
+    AsyncScanTestCtx cancel_ctx = {
+        .loop = g_main_loop_new (NULL, FALSE),
+        .main_thread = g_thread_self (),
+        .signals_on_main_thread = TRUE,
+    };
+
+    puls_disk_manager_scan_async (mgr_cancel, cancellable, on_async_scan_test_done, &cancel_ctx);
+    g_main_loop_run (cancel_ctx.loop);
+
+    g_assert_true (cancel_ctx.done);
+    g_assert_false (cancel_ctx.ok);
+    g_assert_error (cancel_ctx.error, G_IO_ERROR, G_IO_ERROR_CANCELLED);
+    g_clear_error (&cancel_ctx.error);
+    g_assert_false (puls_disk_manager_is_scanning (mgr_cancel));
+    g_assert_cmpuint (puls_disk_manager_get_device_count (mgr_cancel), ==, 0);
+    g_main_loop_unref (cancel_ctx.loop);
+
+    /* 3. Live non-mock async scan completes cleanly on host */
+    g_autoptr(PulsDiskManager) mgr_live = puls_disk_manager_new ();
+    puls_disk_manager_set_mock_mode (mgr_live, FALSE);
+
+    AsyncScanTestCtx live_ctx = {
+        .loop = g_main_loop_new (NULL, FALSE),
+        .main_thread = g_thread_self (),
+        .signals_on_main_thread = TRUE,
+    };
+    g_signal_connect (mgr_live, "disk-added", G_CALLBACK (on_async_scan_disk_added), &live_ctx);
+    g_idle_add (on_async_main_thread_tick, &live_ctx);
+
+    puls_disk_manager_scan_async (mgr_live, NULL, on_async_scan_test_done, &live_ctx);
+    g_main_loop_run (live_ctx.loop);
+
+    g_assert_true (live_ctx.done);
+    g_assert_true (live_ctx.ok);
+    g_assert_no_error (live_ctx.error);
+    g_assert_true (live_ctx.main_thread_ticked);
+    g_assert_true (live_ctx.signals_on_main_thread);
+    g_assert_false (puls_disk_manager_is_scanning (mgr_live));
+    if (g_file_test ("/sys/block/nvme0n1", G_FILE_TEST_IS_DIR)) {
+        g_assert_nonnull (puls_disk_manager_get_smart_data (mgr_live, "/dev/nvme0n1"));
+    }
+    g_main_loop_unref (live_ctx.loop);
+
+    /* 4. Fire-and-forget async scan (NULL callback) completes cleanly */
+    g_autoptr(PulsDiskManager) mgr_ff = puls_disk_manager_new ();
+    puls_disk_manager_set_mock_mode (mgr_ff, TRUE);
+    puls_disk_manager_scan_async (mgr_ff, NULL, NULL, NULL);
+    while (puls_disk_manager_is_scanning (mgr_ff))
+        g_main_context_iteration (NULL, TRUE);
+    g_assert_cmpuint (puls_disk_manager_get_device_count (mgr_ff), ==, 4);
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -2351,6 +2482,7 @@ main (int argc, char *argv[])
     g_test_add_func ("/basic/zfs-pool-member-detection", test_zfs_pool_member_detection);
     g_test_add_func ("/basic/form-factor-detection-engine", test_form_factor_detection_engine);
     g_test_add_func ("/basic/standby-sleep-detection", test_standby_sleep_detection);
+    g_test_add_func ("/basic/async-scan-cancellation", test_async_scan_cancellation);
 
     int result = g_test_run ();
 

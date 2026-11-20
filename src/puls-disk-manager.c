@@ -51,6 +51,8 @@ struct _PulsDiskManager {
     GSocket *udev_socket;
     GSource *udev_source;
     guint rescan_timeout_id;
+    GCancellable *hotplug_scan_cancellable;
+    gint active_scans;
 };
 
 G_DEFINE_TYPE (PulsDiskManager, puls_disk_manager, G_TYPE_OBJECT)
@@ -281,6 +283,8 @@ puls_disk_manager_init (PulsDiskManager *self)
     self->udev_socket = NULL;
     self->udev_source = NULL;
     self->rescan_timeout_id = 0;
+    self->hotplug_scan_cancellable = NULL;
+    self->active_scans = 0;
 }
 
 void
@@ -672,18 +676,15 @@ resolve_sg_passthrough_device (const gchar *dev_path)
     return NULL;
 }
 
-static void
-probe_and_add_device_with_cache (PulsDiskManager *self,
-                                 const gchar     *dev_path,
-                                 GHashTable      *controller_json_cache)
+static PulsSmartData *
+probe_device_data_blocking (const gchar *dev_path,
+                            gboolean     mock_mode,
+                            GHashTable  *controller_json_cache)
 {
-    if (g_hash_table_contains (self->devices, dev_path))
-        return;
-
     g_autofree gchar *owned_json = NULL;
     const gchar *json = NULL;
 
-    if (!self->mock_mode) {
+    if (!mock_mode) {
         g_autofree gchar *smart_target = puls_nvme_resolve_smart_target (dev_path);
         const gchar *query_dev = smart_target ? smart_target : dev_path;
 
@@ -719,7 +720,18 @@ probe_and_add_device_with_cache (PulsDiskManager *self,
         }
     }
 
-    PulsSmartData *data = build_probed_smart_data (dev_path, json);
+    return build_probed_smart_data (dev_path, json);
+}
+
+static void
+probe_and_add_device_with_cache (PulsDiskManager *self,
+                                 const gchar     *dev_path,
+                                 GHashTable      *controller_json_cache)
+{
+    if (g_hash_table_contains (self->devices, dev_path))
+        return;
+
+    PulsSmartData *data = probe_device_data_blocking (dev_path, self->mock_mode, controller_json_cache);
     g_hash_table_insert (self->devices, g_strdup (dev_path), data);
     self->device_paths = g_list_append (self->device_paths, g_strdup (dev_path));
     g_signal_emit (self, signals[SIGNAL_DISK_ADDED], 0, dev_path);
@@ -801,6 +813,225 @@ puls_disk_manager_scan (PulsDiskManager *self)
     g_hash_table_destroy (ctrl_cache);
 
     g_list_free_full (found, g_free);
+}
+
+typedef struct {
+    gboolean mock_mode;
+    GHashTable *known_paths; /* set of gchar* already tracked */
+} ScanWorkerInput;
+
+typedef struct {
+    gboolean is_mock;
+    GList *found_paths;         /* list of gchar* */
+    GHashTable *probed_devices; /* gchar* -> PulsSmartData* */
+} ScanWorkerResult;
+
+static void
+scan_worker_input_free (ScanWorkerInput *in)
+{
+    if (in == NULL)
+        return;
+    g_clear_pointer (&in->known_paths, g_hash_table_destroy);
+    g_free (in);
+}
+
+static void
+scan_worker_result_free (ScanWorkerResult *res)
+{
+    if (res == NULL)
+        return;
+    g_list_free_full (res->found_paths, g_free);
+    g_clear_pointer (&res->probed_devices, g_hash_table_destroy);
+    g_free (res);
+}
+
+static void
+scan_worker_thread_func (GTask        *task,
+                         gpointer      source_object G_GNUC_UNUSED,
+                         gpointer      task_data,
+                         GCancellable *cancellable)
+{
+    ScanWorkerInput *in = task_data;
+
+    if (g_task_return_error_if_cancelled (task))
+        return;
+
+    ScanWorkerResult *res = g_new0 (ScanWorkerResult, 1);
+    res->is_mock = in->mock_mode;
+    res->probed_devices = g_hash_table_new_full (g_str_hash, g_str_equal,
+                                                 g_free, g_object_unref);
+
+    if (in->mock_mode) {
+        g_task_return_pointer (task, res, (GDestroyNotify)scan_worker_result_free);
+        return;
+    }
+
+    res->found_paths = scan_sys_block ();
+
+    if (g_cancellable_is_cancelled (cancellable)) {
+        scan_worker_result_free (res);
+        g_task_return_error_if_cancelled (task);
+        return;
+    }
+
+    GHashTable *ctrl_cache = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
+    for (GList *l = res->found_paths; l != NULL; l = l->next) {
+        if (g_cancellable_is_cancelled (cancellable)) {
+            g_hash_table_destroy (ctrl_cache);
+            scan_worker_result_free (res);
+            g_task_return_error_if_cancelled (task);
+            return;
+        }
+
+        const gchar *dev_path = l->data;
+        if (in->known_paths != NULL && g_hash_table_contains (in->known_paths, dev_path))
+            continue;
+
+        PulsSmartData *data = probe_device_data_blocking (dev_path, FALSE, ctrl_cache);
+        g_hash_table_insert (res->probed_devices, g_strdup (dev_path), data);
+    }
+    g_hash_table_destroy (ctrl_cache);
+
+    if (g_cancellable_is_cancelled (cancellable)) {
+        scan_worker_result_free (res);
+        g_task_return_error_if_cancelled (task);
+        return;
+    }
+
+    g_task_return_pointer (task, res, (GDestroyNotify)scan_worker_result_free);
+}
+
+static void
+apply_scan_worker_result (PulsDiskManager  *self,
+                          ScanWorkerResult *res)
+{
+    if (res->is_mock) {
+        puls_mock_data_populate_manager (self);
+        return;
+    }
+
+    /* Remove devices that disappeared since the previous scan */
+    GPtrArray *stale = g_ptr_array_new_with_free_func (g_free);
+    for (GList *l = self->device_paths; l != NULL; l = l->next) {
+        const gchar *existing = l->data;
+        if (g_list_find_custom (res->found_paths, existing, (GCompareFunc)g_strcmp0) == NULL)
+            g_ptr_array_add (stale, g_strdup (existing));
+    }
+
+    for (guint i = 0; i < stale->len; i++) {
+        puls_disk_manager_remove_device (self, g_ptr_array_index (stale, i));
+    }
+    g_ptr_array_unref (stale);
+
+    /* Add newly probed devices in deterministic sorted order */
+    for (GList *l = res->found_paths; l != NULL; l = l->next) {
+        const gchar *dev_path = l->data;
+        if (g_hash_table_contains (self->devices, dev_path))
+            continue;
+
+        PulsSmartData *probed = g_hash_table_lookup (res->probed_devices, dev_path);
+        if (probed == NULL)
+            continue;
+
+        g_hash_table_insert (self->devices, g_strdup (dev_path), g_object_ref (probed));
+        self->device_paths = g_list_append (self->device_paths, g_strdup (dev_path));
+        g_signal_emit (self, signals[SIGNAL_DISK_ADDED], 0, dev_path);
+    }
+}
+
+static void
+on_scan_worker_done (GObject      *source_object,
+                     GAsyncResult *result,
+                     gpointer      user_data)
+{
+    PulsDiskManager *self = PULS_DISK_MANAGER (source_object);
+    GTask *outer_task = G_TASK (user_data);
+    GError *error = NULL;
+
+    g_atomic_int_add (&self->active_scans, -1);
+
+    ScanWorkerResult *res = g_task_propagate_pointer (G_TASK (result), &error);
+    if (error != NULL) {
+        g_task_return_error (outer_task, error);
+        g_object_unref (outer_task);
+        return;
+    }
+
+    if (res != NULL) {
+        apply_scan_worker_result (self, res);
+        scan_worker_result_free (res);
+    }
+
+    g_task_return_boolean (outer_task, TRUE);
+    g_object_unref (outer_task);
+}
+
+/**
+ * puls_disk_manager_scan_async:
+ * @self: A #PulsDiskManager.
+ * @cancellable: (nullable): Optional #GCancellable to abort background scanning.
+ * @callback: (nullable): Callback invoked on the main context once scan completes.
+ * @user_data: User data for @callback.
+ *
+ * Performs storage enumeration and SMART probing asynchronously on a worker
+ * thread without blocking the main/UI thread. Discovered devices and signals
+ * (`disk-added` / `disk-removed`) are reconciled safely on the calling context.
+ */
+void
+puls_disk_manager_scan_async (PulsDiskManager     *self,
+                              GCancellable        *cancellable,
+                              GAsyncReadyCallback  callback,
+                              gpointer             user_data)
+{
+    g_return_if_fail (PULS_IS_DISK_MANAGER (self));
+
+    GTask *outer_task = g_task_new (self, cancellable, callback, user_data);
+
+    ScanWorkerInput *in = g_new0 (ScanWorkerInput, 1);
+    in->mock_mode = self->mock_mode;
+    in->known_paths = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+    for (GList *l = self->device_paths; l != NULL; l = l->next) {
+        g_hash_table_add (in->known_paths, g_strdup (l->data));
+    }
+
+    g_atomic_int_inc (&self->active_scans);
+
+    GTask *worker_task = g_task_new (self, cancellable, on_scan_worker_done, outer_task);
+    g_task_set_task_data (worker_task, in, (GDestroyNotify)scan_worker_input_free);
+    g_task_run_in_thread (worker_task, scan_worker_thread_func);
+    g_object_unref (worker_task);
+}
+
+/**
+ * puls_disk_manager_scan_finish:
+ * @self: A #PulsDiskManager.
+ * @result: The #GAsyncResult delivered to the scan callback.
+ * @error: Return location for a #GError (e.g. %G_IO_ERROR_CANCELLED).
+ *
+ * Returns: %TRUE if the scan completed successfully, %FALSE on cancellation or error.
+ */
+gboolean
+puls_disk_manager_scan_finish (PulsDiskManager  *self,
+                               GAsyncResult     *result,
+                               GError          **error)
+{
+    g_return_val_if_fail (PULS_IS_DISK_MANAGER (self), FALSE);
+    g_return_val_if_fail (g_task_is_valid (result, self), FALSE);
+
+    return g_task_propagate_boolean (G_TASK (result), error);
+}
+
+/**
+ * puls_disk_manager_is_scanning:
+ * @self: A #PulsDiskManager.
+ *
+ * Returns: %TRUE if one or more background scans are currently in flight.
+ */
+gboolean
+puls_disk_manager_is_scanning (PulsDiskManager *self)
+{
+    g_return_val_if_fail (PULS_IS_DISK_MANAGER (self), FALSE);
+    return g_atomic_int_get (&self->active_scans) > 0;
 }
 
 GList *
@@ -1119,8 +1350,11 @@ on_debounced_rescan_timeout (gpointer user_data)
     PulsDiskManager *self = PULS_DISK_MANAGER (user_data);
     self->rescan_timeout_id = 0;
 
-    if (!self->mock_mode)
-        puls_disk_manager_scan (self);
+    if (!self->mock_mode) {
+        if (self->hotplug_scan_cancellable == NULL)
+            self->hotplug_scan_cancellable = g_cancellable_new ();
+        puls_disk_manager_scan_async (self, self->hotplug_scan_cancellable, NULL, NULL);
+    }
 
     return G_SOURCE_REMOVE;
 }
@@ -1271,6 +1505,11 @@ puls_disk_manager_stop_monitoring (PulsDiskManager *self)
     if (self->rescan_timeout_id > 0) {
         g_source_remove (self->rescan_timeout_id);
         self->rescan_timeout_id = 0;
+    }
+
+    if (self->hotplug_scan_cancellable != NULL) {
+        g_cancellable_cancel (self->hotplug_scan_cancellable);
+        g_clear_object (&self->hotplug_scan_cancellable);
     }
 
     if (self->udev_source != NULL) {
