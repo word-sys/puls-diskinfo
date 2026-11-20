@@ -284,6 +284,17 @@ gboolean puls_zfs_detect_member_from_status    (const gchar             *zpool_s
 gboolean puls_zfs_detect_member                (const gchar             *device_path,
                                                 PulsZfsMemberInfo       *out_info);
 
+/* Physical Form Factor Detection Engine */
+PulsFormFactor puls_detect_form_factor                (const gchar          *smartctl_ff,
+                                                       const gchar          *model_name,
+                                                       const gchar          *device_path,
+                                                       PulsDriveType         drive_type,
+                                                       PulsTransportProtocol transport,
+                                                       gint                  rotation_rpm,
+                                                       guint64               capacity_bytes,
+                                                       guint8                pcie_max_width);
+PulsFormFactor puls_detect_form_factor_for_smart_data (PulsSmartData        *data);
+
 /* USB Speed and Bridge Controller Inspector */
 typedef struct {
     gchar       *device_dir;       /* USB device directory in sysfs */

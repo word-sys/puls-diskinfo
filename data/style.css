@@ -288,3 +288,12 @@ button.flat.lang-toggle:hover {
     background-color: alpha(@accent_color, 0.12);
     border-color: @accent_color;
 }
+
+.form-factor-badge {
+    font-weight: 600;
+    font-size: 0.85em;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background-color: alpha(@accent_color, 0.14);
+    color: @accent_color;
+}

@@ -1644,7 +1644,19 @@ puls_disk_info_view_set_data (PulsDiskInfoView *self,
     }
 
     const gchar *ff = puls_smart_data_get_form_factor (data);
-    gtk_label_set_text (GTK_LABEL (self->form_factor_label), ff ? ff : "N/A");
+    PulsFormFactor ff_enum = puls_smart_data_get_form_factor_enum (data);
+    if (ff_enum == PULS_FORM_FACTOR_UNKNOWN)
+        ff_enum = puls_detect_form_factor_for_smart_data (data);
+
+    const gchar *ff_display = (ff_enum != PULS_FORM_FACTOR_UNKNOWN)
+                              ? puls_form_factor_to_string (ff_enum)
+                              : (ff ? ff : "N/A");
+    gtk_label_set_text (GTK_LABEL (self->form_factor_label), ff_display);
+    gtk_widget_set_halign (self->form_factor_label, GTK_ALIGN_START);
+    if (ff_enum != PULS_FORM_FACTOR_UNKNOWN)
+        gtk_widget_add_css_class (self->form_factor_label, "form-factor-badge");
+    else
+        gtk_widget_remove_css_class (self->form_factor_label, "form-factor-badge");
 
     const gchar *dev_path = puls_smart_data_get_device_path (data);
     const gchar *ctrl_path = puls_smart_data_get_controller_path (data);

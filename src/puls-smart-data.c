@@ -176,6 +176,7 @@ struct _PulsSmartData {
     gchar             *zfs_pool_name;
     gchar             *zfs_vdev_type;
     gchar             *zfs_member_status;
+    PulsFormFactor     form_factor_enum;
 };
 
 G_DEFINE_TYPE (PulsSmartData, puls_smart_data, G_TYPE_OBJECT)
@@ -307,6 +308,7 @@ puls_smart_data_init (PulsSmartData *self)
     self->zfs_pool_name            = NULL;
     self->zfs_vdev_type            = NULL;
     self->zfs_member_status        = NULL;
+    self->form_factor_enum         = PULS_FORM_FACTOR_UNKNOWN;
 }
 
 
@@ -1302,4 +1304,91 @@ puls_usb_speed_from_string (const gchar *str)
         return PULS_USB_SPEED_LOW;
 
     return PULS_USB_SPEED_UNKNOWN;
+}
+
+PulsFormFactor
+puls_smart_data_get_form_factor_enum (PulsSmartData *self)
+{
+    g_return_val_if_fail (PULS_IS_SMART_DATA (self), PULS_FORM_FACTOR_UNKNOWN);
+    return self->form_factor_enum;
+}
+
+void
+puls_smart_data_set_form_factor_enum (PulsSmartData  *self,
+                                      PulsFormFactor  ff)
+{
+    g_return_if_fail (PULS_IS_SMART_DATA (self));
+    self->form_factor_enum = ff;
+}
+
+const gchar *
+puls_form_factor_to_string (PulsFormFactor ff)
+{
+    switch (ff) {
+    case PULS_FORM_FACTOR_M2:           return "M.2";
+    case PULS_FORM_FACTOR_M2_2230:      return "M.2 2230";
+    case PULS_FORM_FACTOR_M2_2242:      return "M.2 2242";
+    case PULS_FORM_FACTOR_M2_2260:      return "M.2 2260";
+    case PULS_FORM_FACTOR_M2_2280:      return "M.2 2280";
+    case PULS_FORM_FACTOR_M2_22110:     return "M.2 22110";
+    case PULS_FORM_FACTOR_2_5_INCH:     return "2.5\"";
+    case PULS_FORM_FACTOR_3_5_INCH:     return "3.5\"";
+    case PULS_FORM_FACTOR_1_8_INCH:     return "1.8\"";
+    case PULS_FORM_FACTOR_U2_U3:        return "U.2 / U.3";
+    case PULS_FORM_FACTOR_PCIE_AIC:     return "PCIe Add-in Card";
+    case PULS_FORM_FACTOR_MSATA:        return "mSATA";
+    case PULS_FORM_FACTOR_EDSFF:        return "EDSFF";
+    case PULS_FORM_FACTOR_USB_EXTERNAL: return "USB / External";
+    case PULS_FORM_FACTOR_EMBEDDED_BGA: return "Embedded (BGA)";
+    case PULS_FORM_FACTOR_SD_CARD:      return "SD / MicroSD";
+    case PULS_FORM_FACTOR_VIRTUAL:      return "Virtual";
+    case PULS_FORM_FACTOR_UNKNOWN:
+    default:                            return "Unknown";
+    }
+}
+
+PulsFormFactor
+puls_form_factor_from_string (const gchar *str)
+{
+    if (str == NULL || str[0] == '\0')
+        return PULS_FORM_FACTOR_UNKNOWN;
+
+    g_autofree gchar *lower = g_ascii_strdown (str, -1);
+
+    if (strstr (lower, "22110"))
+        return PULS_FORM_FACTOR_M2_22110;
+    if (strstr (lower, "2280"))
+        return PULS_FORM_FACTOR_M2_2280;
+    if (strstr (lower, "2260"))
+        return PULS_FORM_FACTOR_M2_2260;
+    if (strstr (lower, "2242"))
+        return PULS_FORM_FACTOR_M2_2242;
+    if (strstr (lower, "2230"))
+        return PULS_FORM_FACTOR_M2_2230;
+    if (strstr (lower, "m.2") || strstr (lower, "ngff"))
+        return PULS_FORM_FACTOR_M2;
+    if (strstr (lower, "u.2") || strstr (lower, "u.3") || strstr (lower, "sff-8639"))
+        return PULS_FORM_FACTOR_U2_U3;
+    if (strstr (lower, "add-in") || strstr (lower, "hhhl") || strstr (lower, "aic") || strstr (lower, "pcie card"))
+        return PULS_FORM_FACTOR_PCIE_AIC;
+    if (strstr (lower, "msata"))
+        return PULS_FORM_FACTOR_MSATA;
+    if (strstr (lower, "edsff") || strstr (lower, "e1.s") || strstr (lower, "e1.l") || strstr (lower, "e3.s"))
+        return PULS_FORM_FACTOR_EDSFF;
+    if (strstr (lower, "3.5"))
+        return PULS_FORM_FACTOR_3_5_INCH;
+    if (strstr (lower, "2.5"))
+        return PULS_FORM_FACTOR_2_5_INCH;
+    if (strstr (lower, "1.8"))
+        return PULS_FORM_FACTOR_1_8_INCH;
+    if (strstr (lower, "usb") || strstr (lower, "external"))
+        return PULS_FORM_FACTOR_USB_EXTERNAL;
+    if (strstr (lower, "bga") || strstr (lower, "embedded") || strstr (lower, "emmc"))
+        return PULS_FORM_FACTOR_EMBEDDED_BGA;
+    if (strstr (lower, "microsd") || g_strcmp0 (lower, "sd") == 0 || strstr (lower, "sd card"))
+        return PULS_FORM_FACTOR_SD_CARD;
+    if (strstr (lower, "virtual"))
+        return PULS_FORM_FACTOR_VIRTUAL;
+
+    return PULS_FORM_FACTOR_UNKNOWN;
 }

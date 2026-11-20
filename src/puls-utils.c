@@ -3457,3 +3457,256 @@ puls_zfs_detect_member (const gchar       *device_path,
                                                device_path, out_info);
 }
 
+static gboolean
+contains_any_token (const gchar        *haystack_lower,
+                    const gchar * const *tokens)
+{
+    for (guint i = 0; tokens[i] != NULL; i++) {
+        if (strstr (haystack_lower, tokens[i]) != NULL)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+static PulsFormFactor
+detect_m2_size_from_model (const gchar *lower)
+{
+    if (strstr (lower, "22110"))
+        return PULS_FORM_FACTOR_M2_22110;
+    if (strstr (lower, "2280"))
+        return PULS_FORM_FACTOR_M2_2280;
+    if (strstr (lower, "2260"))
+        return PULS_FORM_FACTOR_M2_2260;
+    if (strstr (lower, "2242"))
+        return PULS_FORM_FACTOR_M2_2242;
+    if (strstr (lower, "2230"))
+        return PULS_FORM_FACTOR_M2_2230;
+
+    static const gchar * const m2_2230_models[] = {
+        "mtfdkbk", "kbg40zns", "kbg50zns", "bg4", "bg5", "bg6",
+        "sn740", "sn530", "pm991a", "bc711", "bc901", NULL
+    };
+    if (contains_any_token (lower, m2_2230_models))
+        return PULS_FORM_FACTOR_M2_2230;
+
+    static const gchar * const m2_2242_models[] = {
+        "mtfdhba", "sn520", "pm991 ", NULL
+    };
+    if (contains_any_token (lower, m2_2242_models))
+        return PULS_FORM_FACTOR_M2_2242;
+
+    static const gchar * const m2_2280_models[] = {
+        "mtfdkba", "mtfdkcd", "970 evo", "980 pro", "990 pro", "990 evo",
+        "pm9a1", "pm981", "sn850", "sn770", "sn570", "sn580",
+        "p5 plus", "p3 plus", "t500", "t700", "kc3000", "nv2",
+        "solidigm p44", "p41", "firecuda 530", "mp600", NULL
+    };
+    if (contains_any_token (lower, m2_2280_models))
+        return PULS_FORM_FACTOR_M2_2280;
+
+    return PULS_FORM_FACTOR_UNKNOWN;
+}
+
+static gboolean
+model_looks_like_35_hdd (const gchar *lower)
+{
+    static const gchar * const hdd_35_tokens[] = {
+        "ironwolf", "exos", "skyhawk", "barracuda pro", "wd red",
+        "wd gold", "wd purple", "wd black", "ultrastar", "n300",
+        "x300", "mg07", "mg08", "mg09", "mg10", NULL
+    };
+    if (contains_any_token (lower, hdd_35_tokens))
+        return TRUE;
+
+    /* Seagate 3.5" model families (ST*DM*, ST*VN*, ST*NM*, ST*VX*) */
+    if (g_str_has_prefix (lower, "st") &&
+        (strstr (lower, "dm0") || strstr (lower, "vn0") ||
+         strstr (lower, "nm0") || strstr (lower, "vx0")))
+        return TRUE;
+
+    /* WD 3.5" model families (WD*EF*, WD*EZ*, WD*FZ*, WD*PUR*) */
+    if (g_str_has_prefix (lower, "wd") &&
+        (strstr (lower, "efrx") || strstr (lower, "efax") || strstr (lower, "efpx") ||
+         strstr (lower, "ezex") || strstr (lower, "ezaz") || strstr (lower, "ezrz") ||
+         strstr (lower, "fzex") || strstr (lower, "purz") || strstr (lower, "purx")))
+        return TRUE;
+
+    return FALSE;
+}
+
+static gboolean
+model_looks_like_25_hdd (const gchar *lower)
+{
+    static const gchar * const hdd_25_tokens[] = {
+        "mobile", "mq01", "mq04", "spzx", "lpcx", "jpvx", NULL
+    };
+    if (contains_any_token (lower, hdd_25_tokens))
+        return TRUE;
+
+    if (g_str_has_prefix (lower, "st") && strstr (lower, "lm0"))
+        return TRUE;
+
+    return FALSE;
+}
+
+static PulsFormFactor
+detect_form_factor_from_model (const gchar *model_name)
+{
+    if (model_name == NULL || model_name[0] == '\0')
+        return PULS_FORM_FACTOR_UNKNOWN;
+
+    g_autofree gchar *lower = g_ascii_strdown (model_name, -1);
+
+    /* Explicit PCIe Add-in Cards (HHHL / AIC) */
+    static const gchar * const aic_tokens[] = {
+        "add-in", "hhhl", " aic", "-aic", "optane 900p", "optane 905p",
+        "optane ssd 900p", "optane ssd 905p", "p4800x", "p5800x",
+        "pm1725", "sn150", NULL
+    };
+    if (contains_any_token (lower, aic_tokens))
+        return PULS_FORM_FACTOR_PCIE_AIC;
+
+    /* Enterprise U.2 / U.3 NVMe */
+    static const gchar * const u2_tokens[] = {
+        "u.2", "u.3", "sff-8639", "p4510", "p4610", "p5510", "p5520",
+        "pm9a3", "pm983", "pm1733", "pm1735", "7450 pro", "7450 max",
+        "sn840", "sn640", "kcm6", "kcd6", "cd6", "cd8", "cm6", "cm7", NULL
+    };
+    if (contains_any_token (lower, u2_tokens))
+        return PULS_FORM_FACTOR_U2_U3;
+
+    /* EDSFF (E1.S / E1.L / E3.S) */
+    if (strstr (lower, "edsff") || strstr (lower, "e1.s") ||
+        strstr (lower, "e1.l")  || strstr (lower, "e3.s"))
+        return PULS_FORM_FACTOR_EDSFF;
+
+    /* mSATA */
+    if (strstr (lower, "msata"))
+        return PULS_FORM_FACTOR_MSATA;
+
+    /* M.2 specific sizes & known M.2 model families */
+    PulsFormFactor m2_size = detect_m2_size_from_model (lower);
+    if (m2_size != PULS_FORM_FACTOR_UNKNOWN)
+        return m2_size;
+
+    if (strstr (lower, "m.2") || strstr (lower, "ngff"))
+        return PULS_FORM_FACTOR_M2;
+
+    if (strstr (lower, "3.5") || model_looks_like_35_hdd (lower))
+        return PULS_FORM_FACTOR_3_5_INCH;
+
+    if (strstr (lower, "2.5") || model_looks_like_25_hdd (lower))
+        return PULS_FORM_FACTOR_2_5_INCH;
+
+    return PULS_FORM_FACTOR_UNKNOWN;
+}
+
+/**
+ * puls_detect_form_factor:
+ * @smartctl_ff: (nullable): Raw `form_factor` string from `smartctl`.
+ * @model_name: (nullable): Drive model string.
+ * @device_path: (nullable): Device path (e.g. `/dev/nvme0n1`, `/dev/sda`).
+ * @drive_type: Classified #PulsDriveType.
+ * @transport: Classified #PulsTransportProtocol.
+ * @rotation_rpm: Rotation speed in RPM (`0` for SSD, `-1` if unknown).
+ * @capacity_bytes: Total drive capacity in bytes (`0` if unknown).
+ * @pcie_max_width: Max PCIe link width (e.g. `4`, `8`, `16`; `0` if unknown).
+ *
+ * Combines `smartctl` form factor metadata, model heuristics, PCIe link width,
+ * transport, RPM, and capacity to determine the physical drive form factor.
+ *
+ * Returns: Classified #PulsFormFactor.
+ */
+PulsFormFactor
+puls_detect_form_factor (const gchar          *smartctl_ff,
+                         const gchar          *model_name,
+                         const gchar          *device_path,
+                         PulsDriveType         drive_type,
+                         PulsTransportProtocol transport,
+                         gint                  rotation_rpm,
+                         guint64               capacity_bytes,
+                         guint8                pcie_max_width)
+{
+    /* 1. Explicit smartctl form_factor (refine generic M.2 with model size if possible) */
+    PulsFormFactor from_smart = puls_form_factor_from_string (smartctl_ff);
+    if (from_smart == PULS_FORM_FACTOR_M2 && model_name != NULL) {
+        g_autofree gchar *lower = g_ascii_strdown (model_name, -1);
+        PulsFormFactor refined = detect_m2_size_from_model (lower);
+        if (refined != PULS_FORM_FACTOR_UNKNOWN)
+            return refined;
+    }
+    if (from_smart != PULS_FORM_FACTOR_UNKNOWN)
+        return from_smart;
+
+    /* 2. Model-name hardware heuristics */
+    PulsFormFactor from_model = detect_form_factor_from_model (model_name);
+    if (from_model != PULS_FORM_FACTOR_UNKNOWN)
+        return from_model;
+
+    /* 3. Transport, PCIe width, device path, and drive type heuristics */
+    gboolean is_nvme = (drive_type == PULS_DRIVE_TYPE_NVME_SSD ||
+                        transport == PULS_TRANSPORT_PCIE ||
+                        (device_path != NULL && strstr (device_path, "nvme") != NULL));
+
+    if (is_nvme) {
+        if (pcie_max_width >= 8)
+            return PULS_FORM_FACTOR_PCIE_AIC;
+        return PULS_FORM_FACTOR_M2;
+    }
+
+    if (drive_type == PULS_DRIVE_TYPE_USB || transport == PULS_TRANSPORT_USB)
+        return PULS_FORM_FACTOR_USB_EXTERNAL;
+
+    if (drive_type == PULS_DRIVE_TYPE_EMMC)
+        return PULS_FORM_FACTOR_EMBEDDED_BGA;
+
+    if (drive_type == PULS_DRIVE_TYPE_SD_CARD)
+        return PULS_FORM_FACTOR_SD_CARD;
+
+    if (drive_type == PULS_DRIVE_TYPE_VIRTUAL || transport == PULS_TRANSPORT_VIRTUAL)
+        return PULS_FORM_FACTOR_VIRTUAL;
+
+    if (drive_type == PULS_DRIVE_TYPE_SATA_SSD || drive_type == PULS_DRIVE_TYPE_SAS_SSD)
+        return PULS_FORM_FACTOR_2_5_INCH;
+
+    if (drive_type == PULS_DRIVE_TYPE_SATA_HDD ||
+        drive_type == PULS_DRIVE_TYPE_SAS_HDD ||
+        drive_type == PULS_DRIVE_TYPE_SSHD) {
+        if (rotation_rpm >= 7200 || capacity_bytes >= 3000000000000ULL)
+            return PULS_FORM_FACTOR_3_5_INCH;
+        if (rotation_rpm > 0 && rotation_rpm <= 5400 &&
+            capacity_bytes > 0 && capacity_bytes <= 2000000000000ULL)
+            return PULS_FORM_FACTOR_2_5_INCH;
+        return PULS_FORM_FACTOR_3_5_INCH;
+    }
+
+    return PULS_FORM_FACTOR_UNKNOWN;
+}
+
+/**
+ * puls_detect_form_factor_for_smart_data:
+ * @data: A #PulsSmartData instance.
+ *
+ * Convenience wrapper invoking puls_detect_form_factor() from @data fields.
+ *
+ * Returns: Classified #PulsFormFactor.
+ */
+PulsFormFactor
+puls_detect_form_factor_for_smart_data (PulsSmartData *data)
+{
+    g_return_val_if_fail (PULS_IS_SMART_DATA (data), PULS_FORM_FACTOR_UNKNOWN);
+
+    guint8 pcie_width = puls_smart_data_get_pcie_max_width (data);
+    if (pcie_width == 0)
+        pcie_width = puls_smart_data_get_pcie_current_width (data);
+
+    return puls_detect_form_factor (puls_smart_data_get_form_factor (data),
+                                    puls_smart_data_get_model_name (data),
+                                    puls_smart_data_get_device_path (data),
+                                    puls_smart_data_get_drive_type (data),
+                                    puls_smart_data_get_transport_protocol (data),
+                                    puls_smart_data_get_rotation_rpm (data),
+                                    puls_smart_data_get_capacity_bytes (data),
+                                    pcie_width);
+}
+

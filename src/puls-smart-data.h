@@ -74,6 +74,27 @@ typedef enum {
 } PulsSectorFormat;
 
 typedef enum {
+    PULS_FORM_FACTOR_UNKNOWN = 0,
+    PULS_FORM_FACTOR_M2,
+    PULS_FORM_FACTOR_M2_2230,
+    PULS_FORM_FACTOR_M2_2242,
+    PULS_FORM_FACTOR_M2_2260,
+    PULS_FORM_FACTOR_M2_2280,
+    PULS_FORM_FACTOR_M2_22110,
+    PULS_FORM_FACTOR_2_5_INCH,
+    PULS_FORM_FACTOR_3_5_INCH,
+    PULS_FORM_FACTOR_1_8_INCH,
+    PULS_FORM_FACTOR_U2_U3,
+    PULS_FORM_FACTOR_PCIE_AIC,
+    PULS_FORM_FACTOR_MSATA,
+    PULS_FORM_FACTOR_EDSFF,
+    PULS_FORM_FACTOR_USB_EXTERNAL,
+    PULS_FORM_FACTOR_EMBEDDED_BGA,
+    PULS_FORM_FACTOR_SD_CARD,
+    PULS_FORM_FACTOR_VIRTUAL
+} PulsFormFactor;
+
+typedef enum {
     PULS_USB_SPEED_UNKNOWN = 0,
     PULS_USB_SPEED_LOW,           /* 1.5 Mbps (USB 1.0 Low-Speed) */
     PULS_USB_SPEED_FULL,          /* 12 Mbps (USB 1.1 Full-Speed) */
@@ -186,11 +207,13 @@ void puls_smart_data_set_transport_protocol (PulsSmartData *self, PulsTransportP
 guint32          puls_smart_data_get_logical_sector_size (PulsSmartData *self);
 guint32          puls_smart_data_get_physical_sector_size (PulsSmartData *self);
 const gchar     *puls_smart_data_get_form_factor (PulsSmartData *self);
+PulsFormFactor   puls_smart_data_get_form_factor_enum (PulsSmartData *self);
 PulsSectorFormat puls_smart_data_get_sector_format (PulsSmartData *self);
 
 void puls_smart_data_set_logical_sector_size (PulsSmartData *self, guint32 val);
 void puls_smart_data_set_physical_sector_size (PulsSmartData *self, guint32 val);
 void puls_smart_data_set_form_factor (PulsSmartData *self, const gchar *val);
+void puls_smart_data_set_form_factor_enum (PulsSmartData *self, PulsFormFactor ff);
 void puls_smart_data_set_sector_format (PulsSmartData *self, PulsSectorFormat format);
 
 PulsPcieGeneration puls_smart_data_get_pcie_current_gen (PulsSmartData *self);
@@ -293,6 +316,9 @@ const gchar          *puls_pcie_generation_to_max_speed_str (PulsPcieGeneration 
 
 const gchar          *puls_sector_format_to_string       (PulsSectorFormat format);
 PulsSectorFormat      puls_sector_format_detect          (guint32 logical, guint32 physical);
+
+const gchar          *puls_form_factor_to_string         (PulsFormFactor ff);
+PulsFormFactor        puls_form_factor_from_string       (const gchar *str);
 
 const gchar          *puls_usb_speed_to_string            (PulsUsbSpeed speed);
 const gchar          *puls_usb_speed_to_generation_badge  (PulsUsbSpeed speed);

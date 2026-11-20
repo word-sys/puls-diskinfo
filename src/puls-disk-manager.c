@@ -586,25 +586,16 @@ puls_smart_data_fill_sysfs_fallbacks (PulsSmartData *data)
         puls_smart_data_set_rotation_rpm (data, 0);
     }
 
+    PulsFormFactor detected_ff = puls_detect_form_factor_for_smart_data (data);
+    puls_smart_data_set_form_factor_enum (data, detected_ff);
+
     const gchar *ff = puls_smart_data_get_form_factor (data);
-    if (ff == NULL || strlen (ff) == 0 || g_strcmp0 (ff, "Unknown") == 0) {
-        if (dtype == PULS_DRIVE_TYPE_NVME_SSD) {
-            puls_smart_data_set_form_factor (data, "M.2");
-        } else if (dtype == PULS_DRIVE_TYPE_USB) {
-            puls_smart_data_set_form_factor (data, "USB Drive / External");
-        } else if (dtype == PULS_DRIVE_TYPE_SATA_SSD || dtype == PULS_DRIVE_TYPE_SAS_SSD) {
-            puls_smart_data_set_form_factor (data, "2.5-inch");
-        } else if (dtype == PULS_DRIVE_TYPE_HDD || dtype == PULS_DRIVE_TYPE_SAS_HDD) {
-            puls_smart_data_set_form_factor (data, "3.5-inch / 2.5-inch");
-        } else if (dtype == PULS_DRIVE_TYPE_EMMC) {
-            puls_smart_data_set_form_factor (data, "Embedded (BGA)");
-        } else if (dtype == PULS_DRIVE_TYPE_SD_CARD) {
-            puls_smart_data_set_form_factor (data, "SD / MicroSD");
-        } else if (dtype == PULS_DRIVE_TYPE_VIRTUAL) {
-            puls_smart_data_set_form_factor (data, "Virtual Volume");
-        } else {
-            puls_smart_data_set_form_factor (data, "Unknown");
-        }
+    gboolean ff_missing = (ff == NULL || strlen (ff) == 0 || g_strcmp0 (ff, "Unknown") == 0);
+    gboolean ff_refined_m2 = (g_strcmp0 (ff, "M.2") == 0 &&
+                              detected_ff != PULS_FORM_FACTOR_UNKNOWN &&
+                              detected_ff != PULS_FORM_FACTOR_M2);
+    if (ff_missing || ff_refined_m2) {
+        puls_smart_data_set_form_factor (data, puls_form_factor_to_string (detected_ff));
     }
 
     if (puls_smart_data_get_temperature (data) < 0) {

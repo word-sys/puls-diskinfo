@@ -2122,6 +2122,114 @@ test_zfs_pool_member_detection (void)
     remove_temp_tree (tmp_root);
 }
 
+static void
+test_form_factor_detection_engine (void)
+{
+    /* 1. Stringifier & parser coverage */
+    g_assert_cmpstr (puls_form_factor_to_string (PULS_FORM_FACTOR_M2_2280), ==, "M.2 2280");
+    g_assert_cmpstr (puls_form_factor_to_string (PULS_FORM_FACTOR_M2_2242), ==, "M.2 2242");
+    g_assert_cmpstr (puls_form_factor_to_string (PULS_FORM_FACTOR_M2_2230), ==, "M.2 2230");
+    g_assert_cmpstr (puls_form_factor_to_string (PULS_FORM_FACTOR_2_5_INCH), ==, "2.5\"");
+    g_assert_cmpstr (puls_form_factor_to_string (PULS_FORM_FACTOR_3_5_INCH), ==, "3.5\"");
+    g_assert_cmpstr (puls_form_factor_to_string (PULS_FORM_FACTOR_U2_U3), ==, "U.2 / U.3");
+    g_assert_cmpstr (puls_form_factor_to_string (PULS_FORM_FACTOR_PCIE_AIC), ==, "PCIe Add-in Card");
+    g_assert_cmpstr (puls_form_factor_to_string (PULS_FORM_FACTOR_MSATA), ==, "mSATA");
+
+    g_assert_cmpint (puls_form_factor_from_string ("3.5 inches"), ==, PULS_FORM_FACTOR_3_5_INCH);
+    g_assert_cmpint (puls_form_factor_from_string ("2.5 inches"), ==, PULS_FORM_FACTOR_2_5_INCH);
+    g_assert_cmpint (puls_form_factor_from_string ("M.2 2280"),   ==, PULS_FORM_FACTOR_M2_2280);
+    g_assert_cmpint (puls_form_factor_from_string ("M.2 2242"),   ==, PULS_FORM_FACTOR_M2_2242);
+    g_assert_cmpint (puls_form_factor_from_string ("M.2 2230"),   ==, PULS_FORM_FACTOR_M2_2230);
+    g_assert_cmpint (puls_form_factor_from_string ("U.2"),        ==, PULS_FORM_FACTOR_U2_U3);
+    g_assert_cmpint (puls_form_factor_from_string ("HHHL AIC"),   ==, PULS_FORM_FACTOR_PCIE_AIC);
+    g_assert_cmpint (puls_form_factor_from_string (NULL),         ==, PULS_FORM_FACTOR_UNKNOWN);
+
+    /* 2. NVMe M.2 2280 / 2242 / 2230 / U.2 / PCIe Add-in Card heuristics */
+    g_assert_cmpint (
+        puls_detect_form_factor (NULL, "Samsung SSD 980 PRO 1TB", "/dev/nvme0n1",
+                                 PULS_DRIVE_TYPE_NVME_SSD, PULS_TRANSPORT_PCIE, 0, 1000204886016ULL, 4),
+        ==, PULS_FORM_FACTOR_M2_2280);
+
+    g_assert_cmpint (
+        puls_detect_form_factor ("M.2", "Micron_3400_MTFDKBA512TFH", "/dev/nvme0n1",
+                                 PULS_DRIVE_TYPE_NVME_SSD, PULS_TRANSPORT_PCIE, 0, 512110190592ULL, 4),
+        ==, PULS_FORM_FACTOR_M2_2280);
+
+    g_assert_cmpint (
+        puls_detect_form_factor (NULL, "WD PC SN740 SDDPNQD-1T00", "/dev/nvme0n1",
+                                 PULS_DRIVE_TYPE_NVME_SSD, PULS_TRANSPORT_PCIE, 0, 1024209543168ULL, 4),
+        ==, PULS_FORM_FACTOR_M2_2230);
+
+    g_assert_cmpint (
+        puls_detect_form_factor (NULL, "WD PC SN520 NVMe", "/dev/nvme0n1",
+                                 PULS_DRIVE_TYPE_NVME_SSD, PULS_TRANSPORT_PCIE, 0, 512110190592ULL, 2),
+        ==, PULS_FORM_FACTOR_M2_2242);
+
+    g_assert_cmpint (
+        puls_detect_form_factor (NULL, "Generic NVMe Drive", "/dev/nvme0n1",
+                                 PULS_DRIVE_TYPE_NVME_SSD, PULS_TRANSPORT_PCIE, 0, 512000000000ULL, 4),
+        ==, PULS_FORM_FACTOR_M2);
+
+    g_assert_cmpint (
+        puls_detect_form_factor (NULL, "INTEL SSDPE2KX040T8 P4510", "/dev/nvme1n1",
+                                 PULS_DRIVE_TYPE_NVME_SSD, PULS_TRANSPORT_PCIE, 0, 4000787030016ULL, 4),
+        ==, PULS_FORM_FACTOR_U2_U3);
+
+    g_assert_cmpint (
+        puls_detect_form_factor (NULL, "Intel Optane SSD 905P", "/dev/nvme2n1",
+                                 PULS_DRIVE_TYPE_NVME_SSD, PULS_TRANSPORT_PCIE, 0, 960197124096ULL, 4),
+        ==, PULS_FORM_FACTOR_PCIE_AIC);
+
+    /* PCIe x8/x16 width implies Add-in Card */
+    g_assert_cmpint (
+        puls_detect_form_factor (NULL, "Enterprise NVMe Card", "/dev/nvme3n1",
+                                 PULS_DRIVE_TYPE_NVME_SSD, PULS_TRANSPORT_PCIE, 0, 3200000000000ULL, 8),
+        ==, PULS_FORM_FACTOR_PCIE_AIC);
+
+    /* 3. SATA 3.5" & 2.5" & mSATA heuristics */
+    g_assert_cmpint (
+        puls_detect_form_factor ("3.5 inches", "ST4000VN008-2DR166", "/dev/sda",
+                                 PULS_DRIVE_TYPE_SATA_HDD, PULS_TRANSPORT_SATA, 5980, 4000787030016ULL, 0),
+        ==, PULS_FORM_FACTOR_3_5_INCH);
+
+    g_assert_cmpint (
+        puls_detect_form_factor (NULL, "WDC WD40EFRX-68WT0N0", "/dev/sda",
+                                 PULS_DRIVE_TYPE_SATA_HDD, PULS_TRANSPORT_SATA, 5400, 4000787030016ULL, 0),
+        ==, PULS_FORM_FACTOR_3_5_INCH);
+
+    g_assert_cmpint (
+        puls_detect_form_factor (NULL, "Generic 7200RPM HDD", "/dev/sdb",
+                                 PULS_DRIVE_TYPE_SATA_HDD, PULS_TRANSPORT_SATA, 7200, 1000204886016ULL, 0),
+        ==, PULS_FORM_FACTOR_3_5_INCH);
+
+    g_assert_cmpint (
+        puls_detect_form_factor (NULL, "ST2000LM015-2E8174", "/dev/sdc",
+                                 PULS_DRIVE_TYPE_SATA_HDD, PULS_TRANSPORT_SATA, 5400, 2000398934016ULL, 0),
+        ==, PULS_FORM_FACTOR_2_5_INCH);
+
+    g_assert_cmpint (
+        puls_detect_form_factor (NULL, "Crucial CT1000MX500SSD1", "/dev/sdd",
+                                 PULS_DRIVE_TYPE_SATA_SSD, PULS_TRANSPORT_SATA, 0, 1000204886016ULL, 0),
+        ==, PULS_FORM_FACTOR_2_5_INCH);
+
+    g_assert_cmpint (
+        puls_detect_form_factor (NULL, "Samsung SSD 860 EVO mSATA 500GB", "/dev/sde",
+                                 PULS_DRIVE_TYPE_SATA_SSD, PULS_TRANSPORT_SATA, 0, 500107862016ULL, 0),
+        ==, PULS_FORM_FACTOR_MSATA);
+
+    /* 4. PulsSmartData convenience wrapper */
+    g_autoptr(PulsSmartData) sd = puls_smart_data_new ();
+    puls_smart_data_set_device_path (sd, "/dev/nvme0n1");
+    puls_smart_data_set_model_name (sd, "Samsung SSD 990 PRO 2TB");
+    puls_smart_data_set_drive_type (sd, PULS_DRIVE_TYPE_NVME_SSD);
+    puls_smart_data_set_transport_protocol (sd, PULS_TRANSPORT_PCIE);
+    puls_smart_data_set_pcie_max_width (sd, 4);
+    PulsFormFactor ff = puls_detect_form_factor_for_smart_data (sd);
+    g_assert_cmpint (ff, ==, PULS_FORM_FACTOR_M2_2280);
+    puls_smart_data_set_form_factor_enum (sd, ff);
+    g_assert_cmpint (puls_smart_data_get_form_factor_enum (sd), ==, PULS_FORM_FACTOR_M2_2280);
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -2153,6 +2261,7 @@ main (int argc, char *argv[])
     g_test_add_func ("/basic/scsi-generic-mapping", test_scsi_generic_mapping);
     g_test_add_func ("/basic/mdadm-raid-member-resolution", test_mdadm_raid_member_resolution);
     g_test_add_func ("/basic/zfs-pool-member-detection", test_zfs_pool_member_detection);
+    g_test_add_func ("/basic/form-factor-detection-engine", test_form_factor_detection_engine);
 
     int result = g_test_run ();
 
