@@ -345,9 +345,11 @@ puls_run_smartctl_finish (GAsyncResult *result, GError **error)
 }
 
 gchar *
-puls_run_smartctl_sync (const gchar *device_path, GError **error)
+puls_run_smartctl_sync_with_options (const gchar *device_path,
+                                     gboolean     check_standby,
+                                     GError     **error)
 {
-    g_autofree gchar *cmd = g_strdup_printf ("READ %s\n", device_path);
+    g_autofree gchar *cmd = puls_build_helper_read_command (device_path, check_standby);
     gchar *res = communicate_with_helper (cmd, error);
     if (res != NULL)
         return res;
@@ -355,13 +357,20 @@ puls_run_smartctl_sync (const gchar *device_path, GError **error)
     if (error)
         g_clear_error (error);
 
-    g_autofree gchar *cmdline = g_strdup_printf ("smartctl -a -j %s", device_path);
+    g_autofree gchar *cmdline = puls_build_smartctl_read_command (device_path, check_standby);
     gchar *stdout_buf = NULL;
     gchar *stderr_buf = NULL;
     gint exit_status = 0;
     g_spawn_command_line_sync (cmdline, &stdout_buf, &stderr_buf, &exit_status, error);
     g_free (stderr_buf);
     return stdout_buf;
+}
+
+gchar *
+puls_run_smartctl_sync (const gchar *device_path, GError **error)
+{
+    gboolean use_standby = puls_should_use_standby_check (device_path);
+    return puls_run_smartctl_sync_with_options (device_path, use_standby, error);
 }
 
 gboolean
@@ -3708,5 +3717,176 @@ puls_detect_form_factor_for_smart_data (PulsSmartData *data)
                                     puls_smart_data_get_rotation_rpm (data),
                                     puls_smart_data_get_capacity_bytes (data),
                                     pcie_width);
+}
+
+/**
+ * puls_should_use_standby_check_for_type:
+ * @device_path: Block device path (e.g. `/dev/sda`, `/dev/nvme0n1`).
+ * @drive_type: Classified #PulsDriveType.
+ * @is_rotational: Whether the device has spinning platters.
+ *
+ * Returns: %TRUE if `-n standby` should be passed to `smartctl` to avoid
+ * spinning up a sleeping mechanical drive.
+ */
+gboolean
+puls_should_use_standby_check_for_type (const gchar   *device_path,
+                                        PulsDriveType  drive_type,
+                                        gboolean       is_rotational)
+{
+    if (device_path == NULL || *device_path == '\0')
+        return FALSE;
+
+    g_autofree gchar *clean = puls_sanitize_device_name (device_path);
+    if (clean != NULL &&
+        (g_str_has_prefix (clean, "nvme") || g_str_has_prefix (clean, "mmcblk")))
+        return FALSE;
+
+    if (puls_drive_type_is_rotational (drive_type))
+        return TRUE;
+
+    if (drive_type == PULS_DRIVE_TYPE_NVME_SSD ||
+        drive_type == PULS_DRIVE_TYPE_SATA_SSD ||
+        drive_type == PULS_DRIVE_TYPE_SAS_SSD  ||
+        drive_type == PULS_DRIVE_TYPE_EMMC     ||
+        drive_type == PULS_DRIVE_TYPE_SD_CARD  ||
+        drive_type == PULS_DRIVE_TYPE_VIRTUAL)
+        return FALSE;
+
+    return is_rotational;
+}
+
+/**
+ * puls_should_use_standby_check:
+ * @device_path: Block device path (e.g. `/dev/sda`).
+ *
+ * Inspects sysfs `queue/rotational` for @device_path to decide whether
+ * `smartctl` should be invoked with `-n standby`.
+ *
+ * Returns: %TRUE for rotational mechanical drives, %FALSE for SSDs/NVMe/virtual.
+ */
+gboolean
+puls_should_use_standby_check (const gchar *device_path)
+{
+    if (device_path == NULL || *device_path == '\0')
+        return FALSE;
+
+    g_autofree gchar *clean = puls_sanitize_device_name (device_path);
+    if (clean == NULL)
+        return FALSE;
+
+    if (g_str_has_prefix (clean, "nvme") ||
+        g_str_has_prefix (clean, "mmcblk") ||
+        g_str_has_prefix (clean, "vd") ||
+        g_str_has_prefix (clean, "xvd"))
+        return FALSE;
+
+    /* Default to 0 when sysfs queue/rotational is absent to avoid false positives */
+    gboolean rotational = puls_sysfs_read_queue_uint64 (clean, "rotational", 0) != 0;
+    return rotational;
+}
+
+/**
+ * puls_build_smartctl_read_command:
+ * @device_path: Device node path.
+ * @check_standby: Whether to include `-n standby`.
+ *
+ * Returns: (transfer full): Command line string for `smartctl`.
+ */
+gchar *
+puls_build_smartctl_read_command (const gchar *device_path,
+                                  gboolean     check_standby)
+{
+    g_return_val_if_fail (device_path != NULL, NULL);
+
+    if (check_standby)
+        return g_strdup_printf ("smartctl -n standby -a -j %s", device_path);
+
+    return g_strdup_printf ("smartctl -a -j %s", device_path);
+}
+
+/**
+ * puls_build_helper_read_command:
+ * @device_path: Device node path.
+ * @check_standby: Whether to use `READ_STANDBY` protocol command.
+ *
+ * Returns: (transfer full): Persistent helper command line ending with `\n`.
+ */
+gchar *
+puls_build_helper_read_command (const gchar *device_path,
+                                gboolean     check_standby)
+{
+    g_return_val_if_fail (device_path != NULL, NULL);
+
+    if (check_standby)
+        return g_strdup_printf ("READ_STANDBY %s\n", device_path);
+
+    return g_strdup_printf ("READ %s\n", device_path);
+}
+
+/**
+ * puls_parse_hdparm_power_state:
+ * @hdparm_output: Output from `hdparm -C <device>`.
+ *
+ * Parses `"drive state is:  <state>"` lines into a #PulsPowerState.
+ *
+ * Returns: Parsed #PulsPowerState, or %PULS_POWER_STATE_UNKNOWN.
+ */
+PulsPowerState
+puls_parse_hdparm_power_state (const gchar *hdparm_output)
+{
+    if (hdparm_output == NULL || *hdparm_output == '\0')
+        return PULS_POWER_STATE_UNKNOWN;
+
+    const gchar *marker = strstr (hdparm_output, "drive state is:");
+    if (marker != NULL)
+        return puls_power_state_from_string (marker + 15);
+
+    return puls_power_state_from_string (hdparm_output);
+}
+
+/**
+ * puls_parse_smartctl_standby_json:
+ * @json_str: JSON output from `smartctl -n standby -a -j`.
+ *
+ * Extracts power state from `"power_mode"` or `"smartctl.messages"` (e.g.
+ * `"Device is in STANDBY mode, exit(2)"`).
+ *
+ * Returns: Parsed #PulsPowerState, or %PULS_POWER_STATE_UNKNOWN.
+ */
+PulsPowerState
+puls_parse_smartctl_standby_json (const gchar *json_str)
+{
+    if (json_str == NULL || *json_str == '\0')
+        return PULS_POWER_STATE_UNKNOWN;
+
+    const gchar *pm = strstr (json_str, "\"power_mode\"");
+    if (pm != NULL) {
+        const gchar *colon = strchr (pm + 12, ':');
+        if (colon != NULL) {
+            const gchar *q1 = strchr (colon + 1, '"');
+            if (q1 != NULL) {
+                const gchar *q2 = strchr (q1 + 1, '"');
+                if (q2 != NULL && q2 > q1 + 1) {
+                    g_autofree gchar *val = g_strndup (q1 + 1, (gsize)(q2 - q1 - 1));
+                    PulsPowerState st = puls_power_state_from_string (val);
+                    if (st != PULS_POWER_STATE_UNKNOWN)
+                        return st;
+                }
+            }
+        }
+    }
+
+    if (strstr (json_str, "STANDBY mode") != NULL ||
+        strstr (json_str, "in STANDBY") != NULL)
+        return PULS_POWER_STATE_STANDBY;
+
+    if (strstr (json_str, "SLEEP mode") != NULL ||
+        strstr (json_str, "in SLEEP") != NULL)
+        return PULS_POWER_STATE_SLEEP;
+
+    if (strstr (json_str, "ACTIVE or IDLE") != NULL)
+        return PULS_POWER_STATE_ACTIVE;
+
+    return PULS_POWER_STATE_UNKNOWN;
 }
 

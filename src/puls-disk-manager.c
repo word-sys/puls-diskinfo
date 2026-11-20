@@ -650,6 +650,9 @@ smart_json_has_usable_info (const gchar *json)
     if (json == NULL || *json == '\0')
         return FALSE;
 
+    if (puls_power_state_is_sleeping (puls_parse_smartctl_standby_json (json)))
+        return TRUE;
+
     return (strstr (json, "\"smart_status\"") != NULL ||
             strstr (json, "\"ata_smart_attributes\"") != NULL ||
             strstr (json, "\"nvme_smart_health_information_log\"") != NULL ||
@@ -857,6 +860,21 @@ on_smartctl_done (GObject      *source G_GNUC_UNUSED,
                                      g_task_get_cancellable (task),
                                      on_smartctl_done,
                                      task);
+            return;
+        }
+    }
+
+    PulsPowerState pstate = puls_parse_smartctl_standby_json (json);
+    if (puls_power_state_is_sleeping (pstate)) {
+        PulsSmartData *existing = g_hash_table_lookup (rd->manager->devices, rd->device_path);
+        if (existing != NULL) {
+            puls_smart_data_set_power_state (existing, pstate);
+            PULS_LOG_INFO ("Drive %s is in %s mode; preserving cached SMART data without spin-up",
+                           rd->device_path, puls_power_state_to_string (pstate));
+            g_signal_emit (rd->manager, signals[SIGNAL_DISK_UPDATED], 0,
+                           rd->device_path);
+            g_task_return_pointer (task, g_object_ref (existing), g_object_unref);
+            g_object_unref (task);
             return;
         }
     }

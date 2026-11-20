@@ -177,6 +177,7 @@ struct _PulsSmartData {
     gchar             *zfs_vdev_type;
     gchar             *zfs_member_status;
     PulsFormFactor     form_factor_enum;
+    PulsPowerState     power_state;
 };
 
 G_DEFINE_TYPE (PulsSmartData, puls_smart_data, G_TYPE_OBJECT)
@@ -309,6 +310,7 @@ puls_smart_data_init (PulsSmartData *self)
     self->zfs_vdev_type            = NULL;
     self->zfs_member_status        = NULL;
     self->form_factor_enum         = PULS_FORM_FACTOR_UNKNOWN;
+    self->power_state              = PULS_POWER_STATE_UNKNOWN;
 }
 
 
@@ -1391,4 +1393,58 @@ puls_form_factor_from_string (const gchar *str)
         return PULS_FORM_FACTOR_VIRTUAL;
 
     return PULS_FORM_FACTOR_UNKNOWN;
+}
+
+PulsPowerState
+puls_smart_data_get_power_state (PulsSmartData *self)
+{
+    g_return_val_if_fail (PULS_IS_SMART_DATA (self), PULS_POWER_STATE_UNKNOWN);
+    return self->power_state;
+}
+
+void
+puls_smart_data_set_power_state (PulsSmartData  *self,
+                                 PulsPowerState  state)
+{
+    g_return_if_fail (PULS_IS_SMART_DATA (self));
+    self->power_state = state;
+}
+
+const gchar *
+puls_power_state_to_string (PulsPowerState state)
+{
+    switch (state) {
+    case PULS_POWER_STATE_ACTIVE:  return "Active";
+    case PULS_POWER_STATE_IDLE:    return "Idle";
+    case PULS_POWER_STATE_STANDBY: return "Standby";
+    case PULS_POWER_STATE_SLEEP:   return "Sleep";
+    case PULS_POWER_STATE_UNKNOWN:
+    default:                       return "Unknown";
+    }
+}
+
+PulsPowerState
+puls_power_state_from_string (const gchar *str)
+{
+    if (str == NULL || str[0] == '\0')
+        return PULS_POWER_STATE_UNKNOWN;
+
+    g_autofree gchar *lower = g_ascii_strdown (str, -1);
+
+    if (strstr (lower, "standby"))
+        return PULS_POWER_STATE_STANDBY;
+    if (strstr (lower, "sleep"))
+        return PULS_POWER_STATE_SLEEP;
+    if (strstr (lower, "active"))
+        return PULS_POWER_STATE_ACTIVE;
+    if (strstr (lower, "idle"))
+        return PULS_POWER_STATE_IDLE;
+
+    return PULS_POWER_STATE_UNKNOWN;
+}
+
+gboolean
+puls_power_state_is_sleeping (PulsPowerState state)
+{
+    return (state == PULS_POWER_STATE_STANDBY || state == PULS_POWER_STATE_SLEEP);
 }

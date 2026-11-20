@@ -78,6 +78,8 @@ run_single_command (const char *device, const char *action)
 
     if (action == NULL) {
         execlp ("smartctl", "smartctl", "-a", "-j", device, (char *)NULL);
+    } else if (strcmp (action, "standby") == 0) {
+        execlp ("smartctl", "smartctl", "-n", "standby", "-a", "-j", device, (char *)NULL);
     } else if (strcmp (action, "short") == 0) {
         execlp ("smartctl", "smartctl", "-t", "short", device, (char *)NULL);
     } else if (strcmp (action, "long") == 0) {
@@ -136,6 +138,8 @@ handle_command_persistent (const char *device, const char *action)
 
         if (action == NULL) {
             execlp ("smartctl", "smartctl", "-a", "-j", device, (char *)NULL);
+        } else if (strcmp (action, "standby") == 0) {
+            execlp ("smartctl", "smartctl", "-n", "standby", "-a", "-j", device, (char *)NULL);
         } else if (strcmp (action, "short") == 0) {
             execlp ("smartctl", "smartctl", "-t", "short", device, (char *)NULL);
         } else if (strcmp (action, "long") == 0) {
@@ -216,7 +220,10 @@ main (int argc, char *argv[])
             break;
         }
 
-        if (strncmp (line, "READ ", 5) == 0) {
+        if (strncmp (line, "READ_STANDBY ", 13) == 0) {
+            const char *device = line + 13;
+            handle_command_persistent (device, "standby");
+        } else if (strncmp (line, "READ ", 5) == 0) {
             const char *device = line + 5;
             handle_command_persistent (device, NULL);
         } else if (strncmp (line, "TEST ", 5) == 0) {

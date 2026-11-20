@@ -447,6 +447,10 @@ puls_smart_parser_parse_json (const gchar *json_str,
     parse_nvme_health (root, data);
     parse_self_test_status (root, data);
 
+    PulsPowerState pstate = puls_parse_smartctl_standby_json (json_str);
+    if (pstate != PULS_POWER_STATE_UNKNOWN)
+        puls_smart_data_set_power_state (data, pstate);
+
     const gchar *device_path = puls_smart_data_get_device_path (data);
     if (device_path)
         puls_smart_data_set_drive_type (data, puls_detect_drive_type (device_path));

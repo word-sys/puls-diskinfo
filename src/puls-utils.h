@@ -67,6 +67,21 @@ gchar   *puls_run_smartctl_finish (GAsyncResult *result,
 
 gchar   *puls_run_smartctl_sync   (const gchar *device_path,
                                    GError     **error);
+gchar   *puls_run_smartctl_sync_with_options (const gchar *device_path,
+                                              gboolean     check_standby,
+                                              GError     **error);
+
+/* Drive Standby / Sleep State Detection (-n standby) */
+gboolean       puls_should_use_standby_check     (const gchar *device_path);
+gboolean       puls_should_use_standby_check_for_type (const gchar   *device_path,
+                                                       PulsDriveType  drive_type,
+                                                       gboolean       is_rotational);
+gchar         *puls_build_smartctl_read_command  (const gchar *device_path,
+                                                  gboolean     check_standby);
+gchar         *puls_build_helper_read_command    (const gchar *device_path,
+                                                  gboolean     check_standby);
+PulsPowerState puls_parse_hdparm_power_state     (const gchar *hdparm_output);
+PulsPowerState puls_parse_smartctl_standby_json  (const gchar *json_str);
 
 void     puls_run_smartctl_action_async  (const gchar          *device_path,
                                           const gchar          *action,

@@ -26,6 +26,14 @@ typedef enum {
 } PulsHealthStatus;
 
 typedef enum {
+    PULS_POWER_STATE_UNKNOWN = 0,
+    PULS_POWER_STATE_ACTIVE,
+    PULS_POWER_STATE_IDLE,
+    PULS_POWER_STATE_STANDBY,
+    PULS_POWER_STATE_SLEEP
+} PulsPowerState;
+
+typedef enum {
     PULS_DRIVE_TYPE_UNKNOWN = 0,
     PULS_DRIVE_TYPE_NVME_SSD,
     PULS_DRIVE_TYPE_SATA_SSD,
@@ -241,10 +249,12 @@ void    puls_smart_data_clear_thermal_sensors (PulsSmartData *self);
 PulsHealthStatus puls_smart_data_get_health          (PulsSmartData *self);
 gboolean         puls_smart_data_get_smart_enabled   (PulsSmartData *self);
 gint             puls_smart_data_get_temperature     (PulsSmartData *self);
+PulsPowerState   puls_smart_data_get_power_state     (PulsSmartData *self);
 
 void puls_smart_data_set_health        (PulsSmartData *self, PulsHealthStatus val);
 void puls_smart_data_set_smart_enabled (PulsSmartData *self, gboolean val);
 void puls_smart_data_set_temperature   (PulsSmartData *self, gint val);
+void puls_smart_data_set_power_state   (PulsSmartData *self, PulsPowerState state);
 
 
 guint64 puls_smart_data_get_power_on_hours      (PulsSmartData *self);
@@ -319,6 +329,10 @@ PulsSectorFormat      puls_sector_format_detect          (guint32 logical, guint
 
 const gchar          *puls_form_factor_to_string         (PulsFormFactor ff);
 PulsFormFactor        puls_form_factor_from_string       (const gchar *str);
+
+const gchar          *puls_power_state_to_string         (PulsPowerState state);
+PulsPowerState        puls_power_state_from_string       (const gchar *str);
+gboolean              puls_power_state_is_sleeping       (PulsPowerState state);
 
 const gchar          *puls_usb_speed_to_string            (PulsUsbSpeed speed);
 const gchar          *puls_usb_speed_to_generation_badge  (PulsUsbSpeed speed);

@@ -165,6 +165,11 @@ run_headless_scan (gboolean json_output)
             json_builder_add_int_value (builder, (gint64)puls_smart_data_get_power_on_hours (data));
             json_builder_set_member_name (builder, "power_cycles");
             json_builder_add_int_value (builder, (gint64)puls_smart_data_get_power_cycle_count (data));
+            PulsPowerState pstate = puls_smart_data_get_power_state (data);
+            if (pstate != PULS_POWER_STATE_UNKNOWN) {
+                json_builder_set_member_name (builder, "power_state");
+                json_builder_add_string_value (builder, puls_power_state_to_string (pstate));
+            }
 
             GList *parts = puls_get_disk_partitions (path);
             if (parts) {
@@ -285,6 +290,9 @@ run_headless_scan (gboolean json_output)
         g_print ("  Temperature:   %s\n", temp_str);
         g_print ("  Power-On Time: %s\n", hours_str);
         g_print ("  Power Cycles:  %" G_GUINT64_FORMAT "\n", puls_smart_data_get_power_cycle_count (data));
+        PulsPowerState pstate = puls_smart_data_get_power_state (data);
+        if (pstate != PULS_POWER_STATE_UNKNOWN)
+            g_print ("  Power State:   %s\n", puls_power_state_to_string (pstate));
 
         /* Partitions */
         GList *parts = puls_get_disk_partitions (path);

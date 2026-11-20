@@ -8,6 +8,7 @@
 
 #include <glib.h>
 #include "puls-smart-data.h"
+#include "puls-smart-parser.h"
 #include "puls-disk-manager.h"
 #include "puls-mock-data.h"
 #include "puls-utils.h"
@@ -2230,6 +2231,93 @@ test_form_factor_detection_engine (void)
     g_assert_cmpint (puls_smart_data_get_form_factor_enum (sd), ==, PULS_FORM_FACTOR_M2_2280);
 }
 
+static void
+test_standby_sleep_detection (void)
+{
+    /* 1. Power state enum stringification & sleep helpers */
+    g_assert_cmpstr (puls_power_state_to_string (PULS_POWER_STATE_ACTIVE),  ==, "Active");
+    g_assert_cmpstr (puls_power_state_to_string (PULS_POWER_STATE_IDLE),    ==, "Idle");
+    g_assert_cmpstr (puls_power_state_to_string (PULS_POWER_STATE_STANDBY), ==, "Standby");
+    g_assert_cmpstr (puls_power_state_to_string (PULS_POWER_STATE_SLEEP),   ==, "Sleep");
+    g_assert_cmpstr (puls_power_state_to_string (PULS_POWER_STATE_UNKNOWN), ==, "Unknown");
+
+    g_assert_cmpint (puls_power_state_from_string ("ACTIVE or IDLE"), ==, PULS_POWER_STATE_ACTIVE);
+    g_assert_cmpint (puls_power_state_from_string ("STANDBY"),        ==, PULS_POWER_STATE_STANDBY);
+    g_assert_cmpint (puls_power_state_from_string ("SLEEP"),          ==, PULS_POWER_STATE_SLEEP);
+    g_assert_cmpint (puls_power_state_from_string ("IDLE"),           ==, PULS_POWER_STATE_IDLE);
+    g_assert_cmpint (puls_power_state_from_string (NULL),             ==, PULS_POWER_STATE_UNKNOWN);
+
+    g_assert_true  (puls_power_state_is_sleeping (PULS_POWER_STATE_STANDBY));
+    g_assert_true  (puls_power_state_is_sleeping (PULS_POWER_STATE_SLEEP));
+    g_assert_false (puls_power_state_is_sleeping (PULS_POWER_STATE_ACTIVE));
+    g_assert_false (puls_power_state_is_sleeping (PULS_POWER_STATE_IDLE));
+    g_assert_false (puls_power_state_is_sleeping (PULS_POWER_STATE_UNKNOWN));
+
+    /* 2. Verify -n standby flag is passed for rotational HDDs and omitted for SSDs/NVMe */
+    gboolean hdd_standby = puls_should_use_standby_check_for_type ("/dev/sda", PULS_DRIVE_TYPE_SATA_HDD, TRUE);
+    gboolean sas_standby = puls_should_use_standby_check_for_type ("/dev/sdb", PULS_DRIVE_TYPE_SAS_HDD, TRUE);
+    gboolean sshd_standby = puls_should_use_standby_check_for_type ("/dev/sdc", PULS_DRIVE_TYPE_SSHD, TRUE);
+    gboolean nvme_standby = puls_should_use_standby_check_for_type ("/dev/nvme0n1", PULS_DRIVE_TYPE_NVME_SSD, FALSE);
+    gboolean ssd_standby = puls_should_use_standby_check_for_type ("/dev/sdd", PULS_DRIVE_TYPE_SATA_SSD, FALSE);
+    gboolean virt_standby = puls_should_use_standby_check_for_type ("/dev/vda", PULS_DRIVE_TYPE_VIRTUAL, FALSE);
+
+    g_assert_true  (hdd_standby);
+    g_assert_true  (sas_standby);
+    g_assert_true  (sshd_standby);
+    g_assert_false (nvme_standby);
+    g_assert_false (ssd_standby);
+    g_assert_false (virt_standby);
+    g_assert_false (puls_should_use_standby_check ("/dev/nvme0n1"));
+
+    g_autofree gchar *hdd_cmd = puls_build_smartctl_read_command ("/dev/sda", hdd_standby);
+    g_assert_cmpstr (hdd_cmd, ==, "smartctl -n standby -a -j /dev/sda");
+    g_assert_nonnull (strstr (hdd_cmd, "-n standby"));
+
+    g_autofree gchar *hdd_helper = puls_build_helper_read_command ("/dev/sda", hdd_standby);
+    g_assert_cmpstr (hdd_helper, ==, "READ_STANDBY /dev/sda\n");
+
+    g_autofree gchar *nvme_cmd = puls_build_smartctl_read_command ("/dev/nvme0n1", nvme_standby);
+    g_assert_cmpstr (nvme_cmd, ==, "smartctl -a -j /dev/nvme0n1");
+    g_assert_null (strstr (nvme_cmd, "-n standby"));
+
+    g_autofree gchar *nvme_helper = puls_build_helper_read_command ("/dev/nvme0n1", nvme_standby);
+    g_assert_cmpstr (nvme_helper, ==, "READ /dev/nvme0n1\n");
+
+    /* 3. Parse smartctl -n standby JSON output */
+    const gchar *standby_json =
+        "{\n"
+        "  \"device\": { \"name\": \"/dev/sda\", \"protocol\": \"ATA\" },\n"
+        "  \"power_mode\": \"STANDBY\",\n"
+        "  \"smartctl\": {\n"
+        "    \"exit_status\": 2,\n"
+        "    \"messages\": [ { \"string\": \"Device is in STANDBY mode, exit(2)\", \"severity\": \"information\" } ]\n"
+        "  }\n"
+        "}\n";
+
+    g_assert_cmpint (puls_parse_smartctl_standby_json (standby_json), ==, PULS_POWER_STATE_STANDBY);
+
+    GError *err = NULL;
+    g_autoptr(PulsSmartData) parsed = puls_smart_parser_parse_json (standby_json, &err);
+    g_assert_no_error (err);
+    g_assert_nonnull (parsed);
+    g_assert_cmpint (puls_smart_data_get_power_state (parsed), ==, PULS_POWER_STATE_STANDBY);
+
+    const gchar *msg_only_sleep =
+        "{ \"smartctl\": { \"messages\": [ { \"string\": \"Device is in SLEEP mode, exit(2)\" } ] } }";
+    g_assert_cmpint (puls_parse_smartctl_standby_json (msg_only_sleep), ==, PULS_POWER_STATE_SLEEP);
+
+    const gchar *active_json = "{ \"power_mode\": \"ACTIVE or IDLE\" }";
+    g_assert_cmpint (puls_parse_smartctl_standby_json (active_json), ==, PULS_POWER_STATE_ACTIVE);
+
+    /* 4. Parse hdparm -C output */
+    g_assert_cmpint (puls_parse_hdparm_power_state ("/dev/sda:\n drive state is:  standby\n"),
+                     ==, PULS_POWER_STATE_STANDBY);
+    g_assert_cmpint (puls_parse_hdparm_power_state ("/dev/sdb:\n drive state is:  active/idle\n"),
+                     ==, PULS_POWER_STATE_ACTIVE);
+    g_assert_cmpint (puls_parse_hdparm_power_state ("/dev/sdc:\n drive state is:  sleeping\n"),
+                     ==, PULS_POWER_STATE_SLEEP);
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -2262,6 +2350,7 @@ main (int argc, char *argv[])
     g_test_add_func ("/basic/mdadm-raid-member-resolution", test_mdadm_raid_member_resolution);
     g_test_add_func ("/basic/zfs-pool-member-detection", test_zfs_pool_member_detection);
     g_test_add_func ("/basic/form-factor-detection-engine", test_form_factor_detection_engine);
+    g_test_add_func ("/basic/standby-sleep-detection", test_standby_sleep_detection);
 
     int result = g_test_run ();
 
