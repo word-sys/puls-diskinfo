@@ -20,6 +20,11 @@
 #define PULS_HELPER_PROTO_VERSION       2U
 #define PULS_HELPER_PROTO_TAG           "v2"
 
+/* Polkit Action IDs */
+#define PULS_POLKIT_ACTION_SMART_READ     "io.github.word_sys.puls_diskinfo.smart-read"
+#define PULS_POLKIT_ACTION_SMART_SELFTEST "io.github.word_sys.puls_diskinfo.smart-selftest"
+#define PULS_POLKIT_ACTION_SURFACE_SCAN   "io.github.word_sys.puls_diskinfo.surface-scan"
+
 /* Framing limits */
 #define PULS_HELPER_MAX_LINE_LEN        4096U
 #define PULS_HELPER_MAX_PAYLOAD_LEN     (4U * 1024U * 1024U)   /* 4 MiB */

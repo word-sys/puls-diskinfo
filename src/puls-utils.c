@@ -4294,3 +4294,514 @@ puls_parse_smartctl_standby_json (const gchar *json_str)
     return PULS_POWER_STATE_UNKNOWN;
 }
 
+/* =========================================================================
+ * Polkit Policy XML Introspection & Validation
+ * ========================================================================= */
+
+/**
+ * puls_polkit_action_info_free:
+ * @info: (nullable): A #PulsPolkitActionInfo to free.
+ *
+ * Releases all memory allocated for a parsed Polkit `<action>` entry.
+ */
+void
+puls_polkit_action_info_free (PulsPolkitActionInfo *info)
+{
+    if (info == NULL)
+        return;
+
+    g_free (info->id);
+    g_free (info->description_default);
+    g_free (info->description_en);
+    g_free (info->description_tr);
+    g_free (info->message_default);
+    g_free (info->message_en);
+    g_free (info->message_tr);
+    g_free (info->icon_name);
+    g_free (info->allow_any);
+    g_free (info->allow_inactive);
+    g_free (info->allow_active);
+    g_free (info->exec_path);
+    g_free (info->allow_gui);
+    g_free (info->imply);
+    g_free (info);
+}
+
+static gboolean
+polkit_default_value_is_valid (const gchar *val)
+{
+    if (val == NULL)
+        return FALSE;
+
+    return (g_strcmp0 (val, "no") == 0 ||
+            g_strcmp0 (val, "auth_self") == 0 ||
+            g_strcmp0 (val, "auth_admin") == 0 ||
+            g_strcmp0 (val, "auth_self_keep") == 0 ||
+            g_strcmp0 (val, "auth_admin_keep") == 0 ||
+            g_strcmp0 (val, "yes") == 0);
+}
+
+static gboolean
+polkit_action_id_is_valid (const gchar *id)
+{
+    if (id == NULL || *id == '\0')
+        return FALSE;
+
+    gboolean has_dot = FALSE;
+    for (const gchar *p = id; *p != '\0'; p++) {
+        guchar c = (guchar)*p;
+        if (c == '.') {
+            has_dot = TRUE;
+            continue;
+        }
+        if (!g_ascii_isalnum (c) && c != '-' && c != '_')
+            return FALSE;
+    }
+
+    return has_dot;
+}
+
+typedef struct {
+    gboolean              saw_policyconfig;
+    gboolean              in_policyconfig;
+    gboolean              in_defaults;
+    gboolean              capture_text;
+    PulsPolkitActionInfo *current_action;
+    GPtrArray            *actions;
+    GHashTable           *seen_ids;
+    gchar                *current_lang;
+    gchar                *current_annotate_key;
+    GString              *text_buf;
+} PolkitParseCtx;
+
+static void
+polkit_xml_start_element (GMarkupParseContext  *context G_GNUC_UNUSED,
+                          const gchar          *element_name,
+                          const gchar         **attribute_names,
+                          const gchar         **attribute_values,
+                          gpointer              user_data,
+                          GError              **error)
+{
+    PolkitParseCtx *ctx = (PolkitParseCtx *)user_data;
+
+    if (g_strcmp0 (element_name, "policyconfig") == 0) {
+        if (ctx->in_policyconfig || ctx->saw_policyconfig) {
+            g_set_error_literal (error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT,
+                                 "Nested or duplicate <policyconfig> element");
+            return;
+        }
+        ctx->saw_policyconfig = TRUE;
+        ctx->in_policyconfig = TRUE;
+        return;
+    }
+
+    if (!ctx->in_policyconfig) {
+        g_set_error (error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT,
+                     "Unexpected root element <%s>; expected <policyconfig>",
+                     element_name);
+        return;
+    }
+
+    if (g_strcmp0 (element_name, "action") == 0) {
+        if (ctx->current_action != NULL) {
+            g_set_error_literal (error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT,
+                                 "Nested <action> elements are not allowed");
+            return;
+        }
+
+        const gchar *action_id = NULL;
+        for (gsize i = 0; attribute_names[i] != NULL; i++) {
+            if (g_strcmp0 (attribute_names[i], "id") == 0)
+                action_id = attribute_values[i];
+        }
+
+        if (!polkit_action_id_is_valid (action_id)) {
+            g_set_error (error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT,
+                         "Invalid or missing Polkit action id '%s'",
+                         action_id ? action_id : "(null)");
+            return;
+        }
+
+        if (g_hash_table_contains (ctx->seen_ids, action_id)) {
+            g_set_error (error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT,
+                         "Duplicate Polkit action id '%s'", action_id);
+            return;
+        }
+
+        g_hash_table_add (ctx->seen_ids, g_strdup (action_id));
+        ctx->current_action = g_new0 (PulsPolkitActionInfo, 1);
+        ctx->current_action->id = g_strdup (action_id);
+        return;
+    }
+
+    if (ctx->current_action == NULL)
+        return;
+
+    if (g_strcmp0 (element_name, "defaults") == 0) {
+        ctx->in_defaults = TRUE;
+        return;
+    }
+
+    if (g_strcmp0 (element_name, "description") == 0 ||
+        g_strcmp0 (element_name, "message") == 0) {
+        g_clear_pointer (&ctx->current_lang, g_free);
+        for (gsize i = 0; attribute_names[i] != NULL; i++) {
+            if (g_strcmp0 (attribute_names[i], "xml:lang") == 0)
+                ctx->current_lang = g_strdup (attribute_values[i]);
+        }
+        g_string_truncate (ctx->text_buf, 0);
+        ctx->capture_text = TRUE;
+        return;
+    }
+
+    if (g_strcmp0 (element_name, "annotate") == 0) {
+        const gchar *key = NULL;
+        for (gsize i = 0; attribute_names[i] != NULL; i++) {
+            if (g_strcmp0 (attribute_names[i], "key") == 0)
+                key = attribute_values[i];
+        }
+        if (key == NULL || *key == '\0') {
+            g_set_error_literal (error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT,
+                                 "<annotate> element missing required 'key' attribute");
+            return;
+        }
+        g_clear_pointer (&ctx->current_annotate_key, g_free);
+        ctx->current_annotate_key = g_strdup (key);
+        g_string_truncate (ctx->text_buf, 0);
+        ctx->capture_text = TRUE;
+        return;
+    }
+
+    if (g_strcmp0 (element_name, "icon_name") == 0 ||
+        (ctx->in_defaults &&
+         (g_strcmp0 (element_name, "allow_any") == 0 ||
+          g_strcmp0 (element_name, "allow_inactive") == 0 ||
+          g_strcmp0 (element_name, "allow_active") == 0))) {
+        g_string_truncate (ctx->text_buf, 0);
+        ctx->capture_text = TRUE;
+    }
+}
+
+static void
+polkit_xml_text (GMarkupParseContext  *context G_GNUC_UNUSED,
+                 const gchar          *text,
+                 gsize                 text_len,
+                 gpointer              user_data,
+                 GError              **error G_GNUC_UNUSED)
+{
+    PolkitParseCtx *ctx = (PolkitParseCtx *)user_data;
+    if (ctx->capture_text)
+        g_string_append_len (ctx->text_buf, text, (gssize)text_len);
+}
+
+static void
+polkit_xml_end_element (GMarkupParseContext  *context G_GNUC_UNUSED,
+                        const gchar          *element_name,
+                        gpointer              user_data,
+                        GError              **error)
+{
+    PolkitParseCtx *ctx = (PolkitParseCtx *)user_data;
+
+    if (g_strcmp0 (element_name, "policyconfig") == 0) {
+        ctx->in_policyconfig = FALSE;
+        return;
+    }
+
+    if (g_strcmp0 (element_name, "action") == 0) {
+        if (ctx->current_action != NULL) {
+            g_ptr_array_add (ctx->actions, ctx->current_action);
+            ctx->current_action = NULL;
+        }
+        return;
+    }
+
+    if (ctx->current_action == NULL)
+        return;
+
+    if (g_strcmp0 (element_name, "defaults") == 0) {
+        ctx->in_defaults = FALSE;
+        return;
+    }
+
+    if (!ctx->capture_text)
+        return;
+
+    ctx->capture_text = FALSE;
+    g_autofree gchar *val = g_strdup (ctx->text_buf->str);
+    g_strstrip (val);
+
+    if (g_strcmp0 (element_name, "description") == 0) {
+        if (ctx->current_lang == NULL) {
+            g_clear_pointer (&ctx->current_action->description_default, g_free);
+            ctx->current_action->description_default = g_steal_pointer (&val);
+        } else if (g_strcmp0 (ctx->current_lang, "en") == 0) {
+            g_clear_pointer (&ctx->current_action->description_en, g_free);
+            ctx->current_action->description_en = g_steal_pointer (&val);
+        } else if (g_strcmp0 (ctx->current_lang, "tr") == 0) {
+            g_clear_pointer (&ctx->current_action->description_tr, g_free);
+            ctx->current_action->description_tr = g_steal_pointer (&val);
+        }
+        g_clear_pointer (&ctx->current_lang, g_free);
+        return;
+    }
+
+    if (g_strcmp0 (element_name, "message") == 0) {
+        if (ctx->current_lang == NULL) {
+            g_clear_pointer (&ctx->current_action->message_default, g_free);
+            ctx->current_action->message_default = g_steal_pointer (&val);
+        } else if (g_strcmp0 (ctx->current_lang, "en") == 0) {
+            g_clear_pointer (&ctx->current_action->message_en, g_free);
+            ctx->current_action->message_en = g_steal_pointer (&val);
+        } else if (g_strcmp0 (ctx->current_lang, "tr") == 0) {
+            g_clear_pointer (&ctx->current_action->message_tr, g_free);
+            ctx->current_action->message_tr = g_steal_pointer (&val);
+        }
+        g_clear_pointer (&ctx->current_lang, g_free);
+        return;
+    }
+
+    if (g_strcmp0 (element_name, "icon_name") == 0) {
+        g_clear_pointer (&ctx->current_action->icon_name, g_free);
+        ctx->current_action->icon_name = g_steal_pointer (&val);
+        return;
+    }
+
+    if (g_strcmp0 (element_name, "allow_any") == 0 ||
+        g_strcmp0 (element_name, "allow_inactive") == 0 ||
+        g_strcmp0 (element_name, "allow_active") == 0) {
+        if (!polkit_default_value_is_valid (val)) {
+            g_set_error (error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT,
+                         "Invalid Polkit <%s> value '%s'", element_name, val);
+            return;
+        }
+        if (g_strcmp0 (element_name, "allow_any") == 0) {
+            g_clear_pointer (&ctx->current_action->allow_any, g_free);
+            ctx->current_action->allow_any = g_steal_pointer (&val);
+        } else if (g_strcmp0 (element_name, "allow_inactive") == 0) {
+            g_clear_pointer (&ctx->current_action->allow_inactive, g_free);
+            ctx->current_action->allow_inactive = g_steal_pointer (&val);
+        } else {
+            g_clear_pointer (&ctx->current_action->allow_active, g_free);
+            ctx->current_action->allow_active = g_steal_pointer (&val);
+        }
+        return;
+    }
+
+    if (g_strcmp0 (element_name, "annotate") == 0) {
+        if (g_strcmp0 (ctx->current_annotate_key, "org.freedesktop.policykit.exec.path") == 0) {
+            g_clear_pointer (&ctx->current_action->exec_path, g_free);
+            ctx->current_action->exec_path = g_steal_pointer (&val);
+        } else if (g_strcmp0 (ctx->current_annotate_key, "org.freedesktop.policykit.exec.allow_gui") == 0) {
+            g_clear_pointer (&ctx->current_action->allow_gui, g_free);
+            ctx->current_action->allow_gui = g_steal_pointer (&val);
+        } else if (g_strcmp0 (ctx->current_annotate_key, "org.freedesktop.policykit.imply") == 0) {
+            g_clear_pointer (&ctx->current_action->imply, g_free);
+            ctx->current_action->imply = g_steal_pointer (&val);
+        }
+        g_clear_pointer (&ctx->current_annotate_key, g_free);
+    }
+}
+
+/**
+ * puls_polkit_parse_policy_xml:
+ * @xml_content: Raw UTF-8 XML content of a `.policy` file.
+ * @out_actions: (out) (optional) (element-type PulsPolkitActionInfo): Parsed
+ *   array of #PulsPolkitActionInfo elements on success.
+ * @error: (out) (optional): Return location for a #GError.
+ *
+ * Parses and validates the XML structure, action IDs, `<defaults>` tokens, and
+ * `<annotate>` entries of a PolicyKit 1.0 `.policy` document.
+ *
+ * Returns: %TRUE on valid XML structure, %FALSE on parse or schema error.
+ */
+gboolean
+puls_polkit_parse_policy_xml (const gchar  *xml_content,
+                              GPtrArray   **out_actions,
+                              GError      **error)
+{
+    if (out_actions != NULL)
+        *out_actions = NULL;
+
+    if (xml_content == NULL || *xml_content == '\0') {
+        g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                             "Polkit policy XML is empty");
+        return FALSE;
+    }
+
+    PolkitParseCtx ctx = {
+        .actions  = g_ptr_array_new_with_free_func ((GDestroyNotify)puls_polkit_action_info_free),
+        .seen_ids = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL),
+        .text_buf = g_string_new (NULL),
+    };
+
+    static const GMarkupParser parser = {
+        .start_element = polkit_xml_start_element,
+        .end_element   = polkit_xml_end_element,
+        .text          = polkit_xml_text,
+        .passthrough   = NULL,
+        .error         = NULL,
+    };
+
+    GMarkupParseContext *mctx = g_markup_parse_context_new (&parser, 0, &ctx, NULL);
+    gboolean ok = g_markup_parse_context_parse (mctx, xml_content, -1, error);
+    if (ok)
+        ok = g_markup_parse_context_end_parse (mctx, error);
+    g_markup_parse_context_free (mctx);
+
+    puls_polkit_action_info_free (ctx.current_action);
+    g_hash_table_unref (ctx.seen_ids);
+    g_free (ctx.current_lang);
+    g_free (ctx.current_annotate_key);
+    g_string_free (ctx.text_buf, TRUE);
+
+    if (ok && !ctx.saw_policyconfig) {
+        g_set_error_literal (error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT,
+                             "Missing root <policyconfig> element");
+        ok = FALSE;
+    }
+
+    if (!ok) {
+        g_ptr_array_unref (ctx.actions);
+        return FALSE;
+    }
+
+    if (out_actions != NULL)
+        *out_actions = ctx.actions;
+    else
+        g_ptr_array_unref (ctx.actions);
+
+    return TRUE;
+}
+
+/**
+ * puls_polkit_validate_policy_xml:
+ * @xml_content: Raw UTF-8 XML content of a PULS DiskInfo `.policy` file.
+ * @out_actions: (out) (optional) (element-type PulsPolkitActionInfo): Parsed
+ *   action array on success.
+ * @error: (out) (optional): Return location for a #GError.
+ *
+ * Parses @xml_content and enforces PULS DiskInfo's security and localization
+ * invariants:
+ * - At least one `<action>` entry exists.
+ * - Every action includes non-empty default, English (`en`), and Turkish (`tr`)
+ *   `<description>` and `<message>` texts.
+ * - Every action enforces `<allow_active>auth_admin_keep</allow_active>` for
+ *   once-per-session administrator authentication and forbids passwordless `yes`.
+ * - Exactly one action binds `org.freedesktop.policykit.exec.path` to
+ *   `puls-diskinfo-helper` with `org.freedesktop.policykit.exec.allow_gui=false`.
+ *
+ * Returns: %TRUE if all syntax, localization, and security checks pass.
+ */
+gboolean
+puls_polkit_validate_policy_xml (const gchar  *xml_content,
+                                 GPtrArray   **out_actions,
+                                 GError      **error)
+{
+    if (out_actions != NULL)
+        *out_actions = NULL;
+
+    g_autoptr(GPtrArray) actions = NULL;
+    if (!puls_polkit_parse_policy_xml (xml_content, &actions, error))
+        return FALSE;
+
+    if (actions->len == 0) {
+        g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                             "Polkit policy defines no <action> entries");
+        return FALSE;
+    }
+
+    guint helper_exec_bindings = 0;
+
+    for (guint i = 0; i < actions->len; i++) {
+        const PulsPolkitActionInfo *act = g_ptr_array_index (actions, i);
+
+        if (act->description_default == NULL || *act->description_default == '\0' ||
+            act->description_en == NULL || *act->description_en == '\0' ||
+            act->description_tr == NULL || *act->description_tr == '\0') {
+            g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                         "Polkit action '%s' is missing required default/en/tr <description>",
+                         act->id);
+            return FALSE;
+        }
+
+        if (act->message_default == NULL || *act->message_default == '\0' ||
+            act->message_en == NULL || *act->message_en == '\0' ||
+            act->message_tr == NULL || *act->message_tr == '\0') {
+            g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                         "Polkit action '%s' is missing required default/en/tr <message>",
+                         act->id);
+            return FALSE;
+        }
+
+        if (g_strcmp0 (act->allow_active, "auth_admin_keep") != 0) {
+            g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                         "Polkit action '%s' must set <allow_active>auth_admin_keep</allow_active>",
+                         act->id);
+            return FALSE;
+        }
+
+        if (act->allow_any == NULL || g_strcmp0 (act->allow_any, "yes") == 0 ||
+            act->allow_inactive == NULL || g_strcmp0 (act->allow_inactive, "yes") == 0) {
+            g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                         "Polkit action '%s' has missing or overly permissive allow_any/allow_inactive",
+                         act->id);
+            return FALSE;
+        }
+
+        if (act->exec_path != NULL) {
+            if (!g_str_has_prefix (act->exec_path, "/") ||
+                !g_str_has_suffix (act->exec_path, "/puls-diskinfo-helper")) {
+                g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                             "Polkit action '%s' has unexpected exec.path '%s'",
+                             act->id, act->exec_path);
+                return FALSE;
+            }
+            if (g_strcmp0 (act->allow_gui, "false") != 0) {
+                g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                             "Polkit action '%s' must set exec.allow_gui=false for headless helper",
+                             act->id);
+                return FALSE;
+            }
+            helper_exec_bindings++;
+        }
+    }
+
+    if (helper_exec_bindings != 1) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                     "Expected exactly 1 helper exec.path binding in policy, found %u",
+                     helper_exec_bindings);
+        return FALSE;
+    }
+
+    if (out_actions != NULL)
+        *out_actions = g_steal_pointer (&actions);
+
+    return TRUE;
+}
+
+/**
+ * puls_polkit_validate_policy_file:
+ * @policy_path: Absolute path to a `.policy` XML file on disk.
+ * @out_actions: (out) (optional) (element-type PulsPolkitActionInfo): Parsed
+ *   action array on success.
+ * @error: (out) (optional): Return location for a #GError.
+ *
+ * Loads @policy_path and validates it via puls_polkit_validate_policy_xml().
+ *
+ * Returns: %TRUE if valid, %FALSE otherwise.
+ */
+gboolean
+puls_polkit_validate_policy_file (const gchar  *policy_path,
+                                  GPtrArray   **out_actions,
+                                  GError      **error)
+{
+    g_return_val_if_fail (policy_path != NULL, FALSE);
+
+    g_autofree gchar *contents = NULL;
+    if (!g_file_get_contents (policy_path, &contents, NULL, error))
+        return FALSE;
+
+    return puls_polkit_validate_policy_xml (contents, out_actions, error);
+}
+
+

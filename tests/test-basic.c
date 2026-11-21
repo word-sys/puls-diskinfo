@@ -3178,6 +3178,158 @@ test_helper_command_whitelist (void)
 #endif
 }
 
+static void
+test_polkit_policy_validation (void)
+{
+    g_autoptr(GError) err = NULL;
+
+#ifdef TEST_POLICY_FILE
+    /* 1. Validate the shipped io.github.word_sys.puls_diskinfo.policy file */
+    g_autoptr(GPtrArray) actions = NULL;
+    g_assert_true (puls_polkit_validate_policy_file (TEST_POLICY_FILE, &actions, &err));
+    g_assert_no_error (err);
+    g_assert_nonnull (actions);
+    g_assert_cmpuint (actions->len, ==, 3);
+
+    const PulsPolkitActionInfo *act_read = NULL;
+    const PulsPolkitActionInfo *act_selftest = NULL;
+    const PulsPolkitActionInfo *act_scan = NULL;
+
+    for (guint i = 0; i < actions->len; i++) {
+        const PulsPolkitActionInfo *a = g_ptr_array_index (actions, i);
+        g_assert_nonnull (a->id);
+        g_assert_nonnull (a->description_default);
+        g_assert_nonnull (a->description_en);
+        g_assert_nonnull (a->description_tr);
+        g_assert_nonnull (a->message_default);
+        g_assert_nonnull (a->message_en);
+        g_assert_nonnull (a->message_tr);
+        g_assert_cmpstr (a->allow_any, ==, "auth_admin");
+        g_assert_cmpstr (a->allow_inactive, ==, "auth_admin");
+        g_assert_cmpstr (a->allow_active, ==, "auth_admin_keep");
+
+        if (g_strcmp0 (a->id, PULS_POLKIT_ACTION_SMART_READ) == 0)
+            act_read = a;
+        else if (g_strcmp0 (a->id, PULS_POLKIT_ACTION_SMART_SELFTEST) == 0)
+            act_selftest = a;
+        else if (g_strcmp0 (a->id, PULS_POLKIT_ACTION_SURFACE_SCAN) == 0)
+            act_scan = a;
+    }
+
+    g_assert_nonnull (act_read);
+    g_assert_nonnull (act_selftest);
+    g_assert_nonnull (act_scan);
+
+    /* Primary action binds pkexec to puls-diskinfo-helper with allow_gui=false */
+    g_assert_cmpstr (act_read->exec_path, ==, "/usr/libexec/puls-diskinfo-helper");
+    g_assert_cmpstr (act_read->allow_gui, ==, "false");
+    g_assert_nonnull (strstr (act_read->description_tr, "S.M.A.R.T."));
+    g_assert_nonnull (strstr (act_read->message_tr, "kimlik doğrulaması"));
+
+    /* Secondary actions imply smart-read without duplicating exec.path */
+    g_assert_null (act_selftest->exec_path);
+    g_assert_cmpstr (act_selftest->imply, ==, PULS_POLKIT_ACTION_SMART_READ);
+    g_assert_nonnull (strstr (act_selftest->description_tr, "S.M.A.R.T."));
+
+    g_assert_null (act_scan->exec_path);
+    g_assert_cmpstr (act_scan->imply, ==, PULS_POLKIT_ACTION_SMART_READ);
+    g_assert_nonnull (strstr (act_scan->description_tr, "yüzey taraması"));
+#endif
+
+    /* 2. Negative security & schema validation tests */
+    /* 2a. Malformed XML */
+    g_assert_false (puls_polkit_validate_policy_xml ("<policyconfig><action></policyconfig>", NULL, &err));
+    g_assert_nonnull (err);
+    g_clear_error (&err);
+
+    /* 2b. Wrong root tag */
+    g_assert_false (puls_polkit_validate_policy_xml ("<notpolicy></notpolicy>", NULL, &err));
+    g_assert_nonnull (err);
+    g_clear_error (&err);
+
+    /* 2c. Invalid Polkit <defaults> value */
+    static const gchar *xml_bad_default =
+        "<policyconfig><action id=\"io.github.word_sys.puls_diskinfo.smart-read\">"
+        "<description>Read</description><description xml:lang=\"en\">Read</description>"
+        "<description xml:lang=\"tr\">Oku</description>"
+        "<message>Auth</message><message xml:lang=\"en\">Auth</message>"
+        "<message xml:lang=\"tr\">Doğrula</message>"
+        "<defaults><allow_any>auth_admin</allow_any><allow_inactive>auth_admin</allow_inactive>"
+        "<allow_active>allow_everyone</allow_active></defaults>"
+        "<annotate key=\"org.freedesktop.policykit.exec.path\">/usr/libexec/puls-diskinfo-helper</annotate>"
+        "<annotate key=\"org.freedesktop.policykit.exec.allow_gui\">false</annotate>"
+        "</action></policyconfig>";
+    g_assert_false (puls_polkit_validate_policy_xml (xml_bad_default, NULL, &err));
+    g_assert_nonnull (err);
+    g_clear_error (&err);
+
+    /* 2d. Passwordless <allow_active>yes</allow_active> rejected */
+    static const gchar *xml_passwordless =
+        "<policyconfig><action id=\"io.github.word_sys.puls_diskinfo.smart-read\">"
+        "<description>Read</description><description xml:lang=\"en\">Read</description>"
+        "<description xml:lang=\"tr\">Oku</description>"
+        "<message>Auth</message><message xml:lang=\"en\">Auth</message>"
+        "<message xml:lang=\"tr\">Doğrula</message>"
+        "<defaults><allow_any>auth_admin</allow_any><allow_inactive>auth_admin</allow_inactive>"
+        "<allow_active>yes</allow_active></defaults>"
+        "<annotate key=\"org.freedesktop.policykit.exec.path\">/usr/libexec/puls-diskinfo-helper</annotate>"
+        "<annotate key=\"org.freedesktop.policykit.exec.allow_gui\">false</annotate>"
+        "</action></policyconfig>";
+    g_assert_false (puls_polkit_validate_policy_xml (xml_passwordless, NULL, &err));
+    g_assert_nonnull (err);
+    g_clear_error (&err);
+
+    /* 2e. Missing Turkish (xml:lang="tr") localization rejected */
+    static const gchar *xml_no_tr =
+        "<policyconfig><action id=\"io.github.word_sys.puls_diskinfo.smart-read\">"
+        "<description>Read</description><description xml:lang=\"en\">Read</description>"
+        "<message>Auth</message><message xml:lang=\"en\">Auth</message>"
+        "<defaults><allow_any>auth_admin</allow_any><allow_inactive>auth_admin</allow_inactive>"
+        "<allow_active>auth_admin_keep</allow_active></defaults>"
+        "<annotate key=\"org.freedesktop.policykit.exec.path\">/usr/libexec/puls-diskinfo-helper</annotate>"
+        "<annotate key=\"org.freedesktop.policykit.exec.allow_gui\">false</annotate>"
+        "</action></policyconfig>";
+    g_assert_false (puls_polkit_validate_policy_xml (xml_no_tr, NULL, &err));
+    g_assert_nonnull (err);
+    g_clear_error (&err);
+
+    /* 2f. Duplicate action ID rejected */
+    static const gchar *xml_dup_id =
+        "<policyconfig>"
+        "<action id=\"io.github.word_sys.puls_diskinfo.smart-read\">"
+        "<description>A</description><description xml:lang=\"en\">A</description><description xml:lang=\"tr\">A</description>"
+        "<message>M</message><message xml:lang=\"en\">M</message><message xml:lang=\"tr\">M</message>"
+        "<defaults><allow_any>auth_admin</allow_any><allow_inactive>auth_admin</allow_inactive><allow_active>auth_admin_keep</allow_active></defaults>"
+        "<annotate key=\"org.freedesktop.policykit.exec.path\">/usr/libexec/puls-diskinfo-helper</annotate>"
+        "<annotate key=\"org.freedesktop.policykit.exec.allow_gui\">false</annotate>"
+        "</action>"
+        "<action id=\"io.github.word_sys.puls_diskinfo.smart-read\">"
+        "<description>B</description><description xml:lang=\"en\">B</description><description xml:lang=\"tr\">B</description>"
+        "<message>M</message><message xml:lang=\"en\">M</message><message xml:lang=\"tr\">M</message>"
+        "<defaults><allow_any>auth_admin</allow_any><allow_inactive>auth_admin</allow_inactive><allow_active>auth_admin_keep</allow_active></defaults>"
+        "</action>"
+        "</policyconfig>";
+    g_assert_false (puls_polkit_validate_policy_xml (xml_dup_id, NULL, &err));
+    g_assert_nonnull (err);
+    g_clear_error (&err);
+
+    /* 2g. allow_gui=true on headless helper rejected */
+    static const gchar *xml_allow_gui =
+        "<policyconfig><action id=\"io.github.word_sys.puls_diskinfo.smart-read\">"
+        "<description>Read</description><description xml:lang=\"en\">Read</description>"
+        "<description xml:lang=\"tr\">Oku</description>"
+        "<message>Auth</message><message xml:lang=\"en\">Auth</message>"
+        "<message xml:lang=\"tr\">Doğrula</message>"
+        "<defaults><allow_any>auth_admin</allow_any><allow_inactive>auth_admin</allow_inactive>"
+        "<allow_active>auth_admin_keep</allow_active></defaults>"
+        "<annotate key=\"org.freedesktop.policykit.exec.path\">/usr/libexec/puls-diskinfo-helper</annotate>"
+        "<annotate key=\"org.freedesktop.policykit.exec.allow_gui\">true</annotate>"
+        "</action></policyconfig>";
+    g_assert_false (puls_polkit_validate_policy_xml (xml_allow_gui, NULL, &err));
+    g_assert_nonnull (err);
+    g_clear_error (&err);
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -3216,6 +3368,7 @@ main (int argc, char *argv[])
     g_test_add_func ("/basic/helper-protocol-handshake", test_helper_protocol_handshake);
     g_test_add_func ("/basic/path-sanitization-anti-injection", test_path_sanitization_anti_injection);
     g_test_add_func ("/basic/helper-command-whitelist", test_helper_command_whitelist);
+    g_test_add_func ("/basic/polkit-policy-validation", test_polkit_policy_validation);
 
     int result = g_test_run ();
 

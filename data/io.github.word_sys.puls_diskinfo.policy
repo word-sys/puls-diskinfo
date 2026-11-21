@@ -6,12 +6,15 @@
 <policyconfig>
   <vendor>PULS DiskInfo</vendor>
   <vendor_url>https://github.com/word-sys/puls-diskinfo</vendor_url>
+  <icon_name>drive-harddisk-solidstate-symbolic</icon_name>
 
   <action id="io.github.word_sys.puls_diskinfo.smart-read">
-    <description>Read S.M.A.R.T. data from disks</description>
-    <description xml:lang="en">Read S.M.A.R.T. data from disk drives</description>
-    <message>Authentication is required to read disk health information</message>
-    <message xml:lang="en">Authentication is required to read disk health information</message>
+    <description>Read S.M.A.R.T. health data from storage drives</description>
+    <description xml:lang="en">Read S.M.A.R.T. health data from storage drives</description>
+    <description xml:lang="tr">Depolama sürücülerinden S.M.A.R.T. sağlık verilerini oku</description>
+    <message>Authentication is required to read S.M.A.R.T. disk health information</message>
+    <message xml:lang="en">Authentication is required to read S.M.A.R.T. disk health information</message>
+    <message xml:lang="tr">S.M.A.R.T. disk sağlık bilgilerini okumak için yönetici kimlik doğrulaması gerekiyor</message>
     <icon_name>drive-harddisk-solidstate-symbolic</icon_name>
     <defaults>
       <allow_any>auth_admin</allow_any>
@@ -19,6 +22,38 @@
       <allow_active>auth_admin_keep</allow_active>
     </defaults>
     <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/puls-diskinfo-helper</annotate>
-    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">false</annotate>
+  </action>
+
+  <action id="io.github.word_sys.puls_diskinfo.smart-selftest">
+    <description>Run or abort S.M.A.R.T. self-tests on storage drives</description>
+    <description xml:lang="en">Run or abort S.M.A.R.T. self-tests on storage drives</description>
+    <description xml:lang="tr">Depolama sürücülerinde S.M.A.R.T. kendi kendine testlerini çalıştır veya iptal et</description>
+    <message>Authentication is required to start or abort a S.M.A.R.T. disk self-test</message>
+    <message xml:lang="en">Authentication is required to start or abort a S.M.A.R.T. disk self-test</message>
+    <message xml:lang="tr">Bir S.M.A.R.T. disk kendi kendine testini başlatmak veya iptal etmek için yönetici kimlik doğrulaması gerekiyor</message>
+    <icon_name>drive-harddisk-solidstate-symbolic</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.imply">io.github.word_sys.puls_diskinfo.smart-read</annotate>
+  </action>
+
+  <action id="io.github.word_sys.puls_diskinfo.surface-scan">
+    <description>Perform a read-only surface scan on storage drives</description>
+    <description xml:lang="en">Perform a read-only surface scan on storage drives</description>
+    <description xml:lang="tr">Depolama sürücülerinde salt okunur yüzey taraması yap</description>
+    <message>Authentication is required to perform a read-only surface scan on storage drives</message>
+    <message xml:lang="en">Authentication is required to perform a read-only surface scan on storage drives</message>
+    <message xml:lang="tr">Depolama sürücülerinde salt okunur yüzey taraması yapmak için yönetici kimlik doğrulaması gerekiyor</message>
+    <icon_name>drive-harddisk-solidstate-symbolic</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.imply">io.github.word_sys.puls_diskinfo.smart-read</annotate>
   </action>
 </policyconfig>

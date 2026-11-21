@@ -102,6 +102,36 @@ gboolean       puls_helper_exchange_command      (GOutputStream    *stdin_stream
                                                   gchar           **out_err_code,
                                                   gchar           **out_payload,
                                                   GError          **error);
+
+/* Polkit Policy XML Introspection & Validation */
+typedef struct {
+    gchar *id;
+    gchar *description_default;
+    gchar *description_en;
+    gchar *description_tr;
+    gchar *message_default;
+    gchar *message_en;
+    gchar *message_tr;
+    gchar *icon_name;
+    gchar *allow_any;
+    gchar *allow_inactive;
+    gchar *allow_active;
+    gchar *exec_path;
+    gchar *allow_gui;
+    gchar *imply;
+} PulsPolkitActionInfo;
+
+void           puls_polkit_action_info_free      (PulsPolkitActionInfo *info);
+gboolean       puls_polkit_parse_policy_xml      (const gchar          *xml_content,
+                                                  GPtrArray           **out_actions,
+                                                  GError              **error);
+gboolean       puls_polkit_validate_policy_xml   (const gchar          *xml_content,
+                                                  GPtrArray           **out_actions,
+                                                  GError              **error);
+gboolean       puls_polkit_validate_policy_file  (const gchar          *policy_path,
+                                                  GPtrArray           **out_actions,
+                                                  GError              **error);
+
 PulsPowerState puls_parse_hdparm_power_state     (const gchar *hdparm_output);
 PulsPowerState puls_parse_smartctl_standby_json  (const gchar *json_str);
 
