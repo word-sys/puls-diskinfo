@@ -56,6 +56,11 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="1.1.5" date="2026-11-21">
+      <description>
+        <p>Enhanced device enumeration and hardware topology release: Real-time USB/external drive hotplug monitoring via udev netlink and GVolumeMonitor, NVMe controller vs namespace topology separation, hardened pseudo-device filtering, SCSI generic (/dev/sg*) mapping with SMART passthrough, mdadm software RAID and ZFS pool member detection, physical form factor detection badges (M.2 2280/2242/2230, 2.5", 3.5", U.2/U.3, PCIe AIC), rotational HDD standby detection (-n standby), and thread-safe asynchronous scanning with cancellation.</p>
+      </description>
+    </release>
     <release version="1.1.4" date="2026-11-11">
       <description>
         <p>System probing and hardware inspection overhaul: Unprivileged direct hwmon temperature monitoring, PCIe link speed and width negotiation inspector (PCIe Gen1-6), USB speed version categorization (USB 2.0 to USB4) with bridge controller identification, enhanced partition and multi-layer device-mapper (LUKS/LVM) mapping, dual capacity formatters (decimal SI vs binary IEC), and rich headless and JSON telemetry CLI outputs.</p>

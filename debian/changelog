@@ -1,3 +1,16 @@
+puls-diskinfo (1.1.5) bookworm; urgency=medium
+
+  * Real-time drive hotplug monitoring via kernel udev netlink and GVolumeMonitor
+  * NVMe controller vs namespace topology separation with controller SMART routing
+  * Hardened pseudo-device and virtual clutter filtering (loop, zram, dm-verity, optical)
+  * Bidirectional SCSI generic (/dev/sg*) to block (/dev/sd*) mapping and SMART passthrough
+  * Software RAID (mdadm) and ZFS pool physical member detection
+  * Physical form factor detection engine (M.2 2280/2242/2230, 2.5", 3.5", U.2/U.3, PCIe AIC)
+  * Standby/sleep state detection (-n standby) to prevent spinning up sleeping HDDs
+  * Thread-safe asynchronous disk scanning with GCancellable support
+
+ -- Barın Güzeldemirci <baringuzeldemir@gmail.com>  Sat, 21 Nov 2026 10:45:00 +0300
+
 puls-diskinfo (1.1.4) bookworm; urgency=medium
 
   * Direct unprivileged hwmon drive temperature monitoring without root privileges

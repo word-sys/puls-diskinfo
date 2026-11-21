@@ -19,11 +19,12 @@ Linux için GTK4 ve C ile geliştirilmiş, kapsamlı bir depolama sağlığı ve
 
 ## Özellikler
 
-- **Çoklu Sürücü Desteği**: Birden fazla sürücüyü (NVMe SSD, SATA SSD, SSHD, HDD, USB vb.) listeler ve izler.
+- **Çoklu Sürücü ve Anlık Tak-Çıkar (Hotplug) Desteği**: Birden fazla sürücüyü (NVMe SSD, SATA SSD, SSHD, HDD, USB, sanal makine diskleri) çekirdek udev netlink ve `GVolumeMonitor` ile anlık tak-çıkar algılama ve arayüzü dondurmayan asenkron tarama ile izler.
 - **Sağlık Göstergeleri**: S.M.A.R.T. niteliklerine dayalı net, renk kodlu sağlık rozetleri (İyi, Dikkat, Kötü).
 - **Gerçek Zamanlı Sıcaklık ve Yetkisiz `hwmon`**: Güvenli aralıklarla dinamik sıcaklık termometre göstergesi ve root yetkisi gerektirmeyen doğrudan çekirdek `hwmon` sıcaklık takibi.
-- **Donanım Topolojisi ve Veri Yolu İnceleme**: Gerçek zamanlı PCIe bağlantı hızı ve şerit genişliği (PCIe Gen 1–6, örn. PCIe 4.0 x4) ile USB hız sürümü sınıflandırması (USB 2.0 - USB4) ve köprü yonga seti tanımlama (ASMedia, Realtek, JMicron vb.).
-- **Gelişmiş Bölüm ve Bağlama Noktası Haritalayıcı**: Çok katmanlı aygıt eşleyici yapılandırmalarını (dm-crypt/LUKS, LVM) ve bağlı dosya sistemlerini eksiksiz listeler.
+- **Donanım Topolojisi, Form Faktörü ve Veri Yolu İnceleme**: NVMe denetleyici / ad alanı ayrımı (`/dev/nvme0` - `/dev/nvme0n1`), fiziksel form faktörü rozetleri (M.2 2280/2242/2230, 2.5", 3.5", U.2/U.3, PCIe AIC), PCIe bağlantı hızı ve şerit genişliği (PCIe Gen 1–6), USB hız sınıflandırması (USB 2.0 - USB4) ile köprü yonga seti tanımlama ve SCSI generic (`/dev/sg*`) SMART geçiş desteği.
+- **Yazılım RAID, ZFS ve Bölüm Haritalayıcı**: Linux `mdadm` yazılım RAID üyelerini (`Member of /dev/md0 [RAID1]`), OpenZFS havuz fiziksel vdev üyelerini (`RAIDZ`, `MIRROR`, `LOG`, `CACHE`, `SPARE`) ve çok katmanlı aygıt eşleyici (dm-crypt/LUKS, LVM) bölümlerini algılar.
+- **Uyku Korumalı HDD Sorgulama**: Mekanik HDD'leri arka plan yenilemelerinde uyandırmamak için otomatik `-n standby` kontrolü uygular.
 - **İkili Depolama Kapasitesi Biçimlendirme**: Üretici standardı Ondalık SI (GB/TB), İşletim Sistemi İkili IEC (GiB/TiB) veya İkili kipte (`512.1 GB (476.9 GiB)`) tam bayt duyarlılığı ve kalıcı kullanıcı ayarı.
 - **S.M.A.R.T. Nitelikleri Tablosu**: Tüm standart niteliklerin renk kodlu, sıralanabilir listesi ve eğilim takibi.
 - **NVMe'ye Özgü Günlükler**: NVMe SSD'ler için kapsamlı sağlık ölçümleri (kullanılabilir yedek, kullanım yüzdesi, medya hataları vb.).
@@ -123,7 +124,7 @@ Dağıtımınıza uygun en son sürümü [GitHub Sürümleri](https://github.com
 
 #### A. Debian / Ubuntu Paketi (`.deb`)
 ```bash
-sudo dpkg -i puls-diskinfo_1.1.4_amd64.deb
+sudo dpkg -i puls-diskinfo_1.1.5_amd64.deb
 # Bağımlılık eksikliği varsa:
 sudo apt-get install -f
 ```
@@ -131,15 +132,15 @@ sudo apt-get install -f
 #### B. Bağımsız Evrensel AppImage (`.AppImage`)
 Neredeyse tüm modern Linux dağıtımlarında kurulum gerektirmeden çalışır:
 ```bash
-chmod +x puls-diskinfo-1.1.4-linux-x86_64.AppImage
-./puls-diskinfo-1.1.4-linux-x86_64.AppImage
+chmod +x puls-diskinfo-1.1.5-linux-x86_64.AppImage
+./puls-diskinfo-1.1.5-linux-x86_64.AppImage
 ```
 
 #### C. Taşınabilir Sürüm Arşivi (`.tar.gz`)
 İkili dosyaları, Polkit yardımcısını, masaüstü entegrasyonunu ve otomatik kurulum betiklerini içerir:
 ```bash
-tar xzf puls-diskinfo-1.1.4-linux-x86_64.tar.gz
-cd puls-diskinfo-1.1.4-linux-x86_64
+tar xzf puls-diskinfo-1.1.5-linux-x86_64.tar.gz
+cd puls-diskinfo-1.1.5-linux-x86_64
 sudo ./install.sh
 ```
 Daha sonra kaldırmak için:
@@ -185,13 +186,13 @@ Dağıtılabilir paketler üretmek için yerleşik paketleme betiklerini kullan�
   ```bash
   ./packaging/build-binary.sh
   ```
-  `dist/puls-diskinfo-1.1.4-linux-x86_64.tar.gz` ve `.zip` üretilir.
+  `dist/puls-diskinfo-1.1.5-linux-x86_64.tar.gz` ve `.zip` üretilir.
 
 - **Evrensel AppImage Derleme**:
   ```bash
   ./packaging/build-appimage.sh
   ```
-  `dist/puls-diskinfo-1.1.4-linux-x86_64.AppImage` üretilir.
+  `dist/puls-diskinfo-1.1.5-linux-x86_64.AppImage` üretilir.
 
 ---
 

@@ -21,11 +21,12 @@ A highly detailed storage health and S.M.A.R.T. monitoring application for Linux
 
 ## Features
 
-- **Multi-Drive Support**: Enumerate and monitor multiple drives (NVMe SSD, SATA SSD, SSHD, HDD, USB, etc.).
+- **Multi-Drive & Hotplug Support**: Enumerate and monitor multiple drives (NVMe SSD, SATA SSD, SSHD, HDD, USB, VM disks) with real-time udev netlink & `GVolumeMonitor` hotplug detection and non-blocking asynchronous scanning.
 - **Health Indicators**: Clear, color-coded health badges (Good, Caution, Bad) based on S.M.A.R.T. attributes.
 - **Real-Time Temperature & Unprivileged `hwmon`**: Dynamic thermometer widget with safe ranges and direct Linux kernel `hwmon` readout without root requirements.
-- **Hardware Topology & Bus Inspection**: Real-time PCIe link speed & width negotiation (PCIe Gen 1–6, e.g. PCIe 4.0 x4) and USB speed version classification (USB 2.0 to USB4) with bridge controller IC identification (ASMedia, Realtek, JMicron, etc.).
-- **Enhanced Partition & Mount Point Mapper**: Complete partition and volume inventory with full support for multi-layer device mapper setups (dm-crypt/LUKS, LVM).
+- **Hardware Topology, Form Factor & Bus Inspection**: NVMe controller vs namespace separation (`/dev/nvme0` vs `/dev/nvme0n1`), physical form factor badges (M.2 2280/2242/2230, 2.5", 3.5", U.2/U.3, PCIe AIC), PCIe link speed & width negotiation (PCIe Gen 1–6), USB speed classification (USB 2.0 to USB4) with bridge controller IC identification, and SCSI generic (`/dev/sg*`) SMART passthrough.
+- **Software RAID, ZFS & Partition Mapper**: Detects Linux `mdadm` RAID array members (`Member of /dev/md0 [RAID1]`), OpenZFS pool physical vdevs (`RAIDZ`, `MIRROR`, `LOG`, `CACHE`, `SPARE`), and multi-layer device mapper volumes (dm-crypt/LUKS, LVM).
+- **Standby-Safe HDD Polling**: Automatically queries rotational mechanical drives with `-n standby` to avoid spinning up sleeping disks during background refreshes.
 - **Dual Storage Capacity Units**: Display storage capacity in manufacturer Decimal SI (GB/TB), OS Binary IEC (GiB/TiB), or Dual format (`512.1 GB (476.9 GiB)`) with exact byte precision and persistent user toggle.
 - **S.M.A.R.T. Attributes Table**: Color-coded, sortable list of all standard attributes with trend tracking.
 - **NVMe Specific Logs**: Comprehensive health metrics for NVMe SSDs (available spare, percentage used, media errors, controller busy time, etc.).
@@ -124,7 +125,7 @@ Download the latest release for your distribution from [GitHub Releases](https:/
 
 #### A. Debian / Ubuntu Package (`.deb`)
 ```bash
-sudo dpkg -i puls-diskinfo_1.1.4_amd64.deb
+sudo dpkg -i puls-diskinfo_1.1.5_amd64.deb
 # If dependencies are missing:
 sudo apt-get install -f
 ```
@@ -132,15 +133,15 @@ sudo apt-get install -f
 #### B. Standalone Universal AppImage (`.AppImage`)
 Runs on almost any modern Linux distribution without installation:
 ```bash
-chmod +x puls-diskinfo-1.1.4-linux-x86_64.AppImage
-./puls-diskinfo-1.1.4-linux-x86_64.AppImage
+chmod +x puls-diskinfo-1.1.5-linux-x86_64.AppImage
+./puls-diskinfo-1.1.5-linux-x86_64.AppImage
 ```
 
 #### C. Portable Release Tarball (`.tar.gz`)
 Includes binaries, Polkit helper, desktop integration, and automated install scripts:
 ```bash
-tar xzf puls-diskinfo-1.1.4-linux-x86_64.tar.gz
-cd puls-diskinfo-1.1.4-linux-x86_64
+tar xzf puls-diskinfo-1.1.5-linux-x86_64.tar.gz
+cd puls-diskinfo-1.1.5-linux-x86_64
 sudo ./install.sh
 ```
 To uninstall later:
@@ -186,13 +187,13 @@ Use the built-in packaging scripts to produce distributable packages:
   ```bash
   ./packaging/build-binary.sh
   ```
-  Generates `dist/puls-diskinfo-1.1.4-linux-x86_64.tar.gz` and `.zip`.
+  Generates `dist/puls-diskinfo-1.1.5-linux-x86_64.tar.gz` and `.zip`.
 
 - **Build Universal AppImage**:
   ```bash
   ./packaging/build-appimage.sh
   ```
-  Generates `dist/puls-diskinfo-1.1.4-linux-x86_64.AppImage`.
+  Generates `dist/puls-diskinfo-1.1.5-linux-x86_64.AppImage`.
 
 ---
 

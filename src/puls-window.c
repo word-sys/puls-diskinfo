@@ -24,7 +24,7 @@
 #include "puls-disk-info-view.h"
 
 #ifndef PULS_VERSION
-#define PULS_VERSION "1.1.4"
+#define PULS_VERSION "1.1.5"
 #endif
 
 struct _PulsWindow {

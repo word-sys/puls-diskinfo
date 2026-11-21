@@ -4,6 +4,21 @@ All notable changes to **PULS DiskInfo** will be documented in this file.
 
 ---
 
+## [1.1.5] - 2026-11-21
+
+### Added
+- **Real-Time Dynamic Hotplug Monitoring**: Integrated Linux kernel `NETLINK_KOBJECT_UEVENT` listener and GIO `GVolumeMonitor` signals in `PulsDiskManager` so newly attached or removed USB and external drives update the UI automatically without manual refresh.
+- **NVMe Controller vs Namespace Topology Separation**: Disentangled NVMe controllers (`/dev/nvme0`) from namespaces (`/dev/nvme0n1`, multipath `/dev/nvme0c0n1`), routing SMART queries and self-tests to the controller with per-scan JSON caching while anchoring capacity, queue attributes, and partition mapping to each namespace.
+- **Pseudo-Device & Virtual Disk Filter Hardening**: Expanded whole-disk filtering to cleanly exclude `loop` (snap/docker mounts), `zram`, `ram`, `dm-*` (`dm-verity`/LVM/LUKS), `sr*`/SCSI optical ROMs (`type=5`), hidden multipath paths, and eMMC boot/RPMB subdevices while preserving VM disks (`/dev/vd*`, `/dev/xvd*`).
+- **SCSI Generic (`/dev/sg*`) Block Mapping & Passthrough**: Added bidirectional `/dev/sgX` <-> `/dev/sdX` sysfs resolution with `H:B:T:L` lookup and automatic `/dev/sgX` SMART passthrough fallback for enterprise SCSI enclosures.
+- **Software RAID (`mdadm`) Member Resolution**: Scans `/sys/block/md*/slaves/` to detect RAID array membership across partitions and whole disks, displaying status such as `Member of /dev/md0 [RAID1]` (including Degraded, Spare, Faulty, and Rebuilding states).
+- **ZFS Pool Physical Member Detection**: Detects OpenZFS vdev members via `zpool status -P`, `/dev/disk/by-id/` symlink resolution, and on-disk ZFS uberblock/nvlist label signatures across `RAIDZ1–3`, `MIRROR`, `LOG`, `CACHE`, and `SPARE` vdevs.
+- **Physical Form Factor Detection Engine**: Combines `smartctl` metadata, model heuristics, PCIe link width, RPM, and capacity to classify M.2 2280/2242/2230, 2.5", 3.5", U.2/U.3, PCIe Add-in Cards, EDSFF, and mSATA drives, rendered with a `.form-factor-badge` pill in the UI.
+- **Drive Standby / Sleep State Detection (`-n standby`)**: Automatically passes `-n standby` (`READ_STANDBY` in the Polkit helper) for rotational HDDs to avoid spinning up sleeping drives during background polls while preserving cached SMART data.
+- **Thread-Safe Asynchronous Scan with Cancellation**: Added `puls_disk_manager_scan_async()` / `scan_finish()` with `GCancellable` support so GUI startup and hotplug rescans never block or stutter the main thread.
+
+---
+
 ## [1.1.4] - 2026-11-11
 
 ### Added
