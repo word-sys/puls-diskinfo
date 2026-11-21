@@ -2274,14 +2274,14 @@ test_standby_sleep_detection (void)
     g_assert_nonnull (strstr (hdd_cmd, "-n standby"));
 
     g_autofree gchar *hdd_helper = puls_build_helper_read_command ("/dev/sda", hdd_standby);
-    g_assert_cmpstr (hdd_helper, ==, "READ_STANDBY /dev/sda\n");
+    g_assert_cmpstr (hdd_helper, ==, "READ_SMART /dev/sda standby\n");
 
     g_autofree gchar *nvme_cmd = puls_build_smartctl_read_command ("/dev/nvme0n1", nvme_standby);
     g_assert_cmpstr (nvme_cmd, ==, "smartctl -a -j /dev/nvme0n1");
     g_assert_null (strstr (nvme_cmd, "-n standby"));
 
     g_autofree gchar *nvme_helper = puls_build_helper_read_command ("/dev/nvme0n1", nvme_standby);
-    g_assert_cmpstr (nvme_helper, ==, "READ /dev/nvme0n1\n");
+    g_assert_cmpstr (nvme_helper, ==, "READ_SMART /dev/nvme0n1\n");
 
     /* 3. Parse smartctl -n standby JSON output */
     const gchar *standby_json =
@@ -2564,6 +2564,142 @@ test_phase3_final_integration (void)
     }
 }
 
+static void
+test_helper_protocol_handshake (void)
+{
+    /* 1. Client command formatting */
+    g_autofree gchar *c_hello = puls_helper_format_hello (2);
+    g_autofree gchar *c_read = puls_helper_format_read_smart ("/dev/nvme0", FALSE);
+    g_autofree gchar *c_read_sb = puls_helper_format_read_smart ("/dev/sda", TRUE);
+    g_autofree gchar *c_act = puls_helper_format_action ("/dev/sda", "short");
+    g_autofree gchar *c_scan = puls_helper_format_stream_scan ("/dev/sda", 4096, 65536);
+
+    g_assert_cmpstr (c_hello,   ==, "HELLO v2\n");
+    g_assert_cmpstr (c_read,    ==, "READ_SMART /dev/nvme0\n");
+    g_assert_cmpstr (c_read_sb, ==, "READ_SMART /dev/sda standby\n");
+    g_assert_cmpstr (c_act,     ==, "ACTION /dev/sda short\n");
+    g_assert_cmpstr (c_scan,    ==, "STREAM_SCAN /dev/sda 4096 65536\n");
+
+    /* 2. Frame header parsing & bounds checks */
+    gboolean ok = FALSE;
+    gchar *err_code = NULL;
+    gsize plen = 0;
+
+    g_assert_true (puls_helper_parse_frame_header ("OK 128", &ok, &err_code, &plen));
+    g_assert_true (ok);
+    g_assert_null (err_code);
+    g_assert_cmpuint (plen, ==, 128);
+
+    g_assert_true (puls_helper_parse_frame_header ("ERR E_VERSION_MISMATCH 55", &ok, &err_code, &plen));
+    g_assert_false (ok);
+    g_assert_cmpstr (err_code, ==, "E_VERSION_MISMATCH");
+    g_assert_cmpuint (plen, ==, 55);
+    g_clear_pointer (&err_code, g_free);
+
+    g_assert_false (puls_helper_parse_frame_header ("OK -5", &ok, &err_code, &plen));
+    g_assert_false (puls_helper_parse_frame_header ("OK 999999999", &ok, &err_code, &plen));
+    g_assert_false (puls_helper_parse_frame_header ("ERR 42", &ok, &err_code, &plen));
+    g_assert_false (puls_helper_parse_frame_header ("GARBAGE", &ok, &err_code, &plen));
+    g_assert_false (puls_helper_parse_frame_header ("", &ok, &err_code, &plen));
+
+    /* 3. Live IPC handshake & version mismatch rejection against compiled helper */
+#ifdef TEST_HELPER_BIN
+    g_assert_true (g_file_test (TEST_HELPER_BIN, G_FILE_TEST_IS_EXECUTABLE));
+
+    GError *err = NULL;
+    const gchar *argv[] = { TEST_HELPER_BIN, NULL };
+    g_autoptr(GSubprocessLauncher) launcher = g_subprocess_launcher_new (
+        G_SUBPROCESS_FLAGS_STDIN_PIPE | G_SUBPROCESS_FLAGS_STDOUT_PIPE);
+    g_autoptr(GSubprocess) proc = g_subprocess_launcher_spawnv (launcher, argv, &err);
+    g_assert_no_error (err);
+    g_assert_nonnull (proc);
+
+    GOutputStream *h_in = g_subprocess_get_stdin_pipe (proc);
+    g_autoptr(GDataInputStream) h_out = g_data_input_stream_new (
+        g_subprocess_get_stdout_pipe (proc));
+
+    gchar *payload = NULL;
+
+    /* Command before handshake must be rejected */
+    g_assert_true (puls_helper_exchange_command (h_in, h_out, "READ_SMART /dev/sda\n",
+                                                 &ok, &err_code, &payload, &err));
+    g_assert_no_error (err);
+    g_assert_false (ok);
+    g_assert_cmpstr (err_code, ==, "E_HANDSHAKE_REQUIRED");
+    g_clear_pointer (&err_code, g_free);
+    g_clear_pointer (&payload, g_free);
+
+    /* Version mismatches must be rejected */
+    static const gchar * const bad_hellos[] = {
+        "HELLO v1\n", "HELLO v3\n", "HELLO\n", "HELLO bogus\n"
+    };
+    for (guint i = 0; i < G_N_ELEMENTS (bad_hellos); i++) {
+        g_assert_true (puls_helper_exchange_command (h_in, h_out, bad_hellos[i],
+                                                     &ok, &err_code, &payload, &err));
+        g_assert_no_error (err);
+        g_assert_false (ok);
+        g_assert_cmpstr (err_code, ==, "E_VERSION_MISMATCH");
+        g_clear_pointer (&err_code, g_free);
+        g_clear_pointer (&payload, g_free);
+    }
+
+    /* Valid v2 handshake succeeds */
+    g_assert_true (puls_helper_exchange_command (h_in, h_out, "HELLO v2\n",
+                                                 &ok, &err_code, &payload, &err));
+    g_assert_no_error (err);
+    g_assert_true (ok);
+    g_assert_null (err_code);
+    g_assert_nonnull (payload);
+    g_assert_nonnull (strstr (payload, "\"protocol\":\"v2\""));
+    g_assert_nonnull (strstr (payload, "\"version\":2"));
+    g_clear_pointer (&payload, g_free);
+
+    /* Post-handshake command validation */
+    g_assert_true (puls_helper_exchange_command (h_in, h_out, "UNKNOWN_FOO\n",
+                                                 &ok, &err_code, &payload, &err));
+    g_assert_no_error (err);
+    g_assert_false (ok);
+    g_assert_cmpstr (err_code, ==, "E_UNKNOWN_CMD");
+    g_clear_pointer (&err_code, g_free);
+    g_clear_pointer (&payload, g_free);
+
+    g_assert_true (puls_helper_exchange_command (h_in, h_out, "ACTION /dev/sda bogus\n",
+                                                 &ok, &err_code, &payload, &err));
+    g_assert_no_error (err);
+    g_assert_false (ok);
+    g_assert_cmpstr (err_code, ==, "E_INVALID_ACTION");
+    g_clear_pointer (&err_code, g_free);
+    g_clear_pointer (&payload, g_free);
+
+    g_assert_true (puls_helper_exchange_command (h_in, h_out, "STREAM_SCAN /dev/sda 0 0\n",
+                                                 &ok, &err_code, &payload, &err));
+    g_assert_no_error (err);
+    g_assert_false (ok);
+    g_assert_cmpstr (err_code, ==, "E_INVALID_ARG");
+    g_clear_pointer (&err_code, g_free);
+    g_clear_pointer (&payload, g_free);
+
+    g_assert_true (puls_helper_exchange_command (h_in, h_out, "READ_SMART /dev/invalid_xyz\n",
+                                                 &ok, &err_code, &payload, &err));
+    g_assert_no_error (err);
+    g_assert_false (ok);
+    g_assert_cmpstr (err_code, ==, "E_INVALID_DEVICE");
+    g_clear_pointer (&err_code, g_free);
+    g_clear_pointer (&payload, g_free);
+
+    /* Clean QUIT exits helper with status 0 */
+    g_assert_true (puls_helper_exchange_command (h_in, h_out, "QUIT\n",
+                                                 &ok, &err_code, &payload, &err));
+    g_assert_no_error (err);
+    g_assert_true (ok);
+    g_assert_cmpstr (payload, ==, "");
+    g_clear_pointer (&payload, g_free);
+
+    g_assert_true (g_subprocess_wait_check (proc, NULL, &err));
+    g_assert_no_error (err);
+#endif
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -2599,6 +2735,7 @@ main (int argc, char *argv[])
     g_test_add_func ("/basic/standby-sleep-detection", test_standby_sleep_detection);
     g_test_add_func ("/basic/async-scan-cancellation", test_async_scan_cancellation);
     g_test_add_func ("/basic/phase3-final-integration", test_phase3_final_integration);
+    g_test_add_func ("/basic/helper-protocol-handshake", test_helper_protocol_handshake);
 
     int result = g_test_run ();
 

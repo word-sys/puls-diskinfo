@@ -80,6 +80,27 @@ gchar         *puls_build_smartctl_read_command  (const gchar *device_path,
                                                   gboolean     check_standby);
 gchar         *puls_build_helper_read_command    (const gchar *device_path,
                                                   gboolean     check_standby);
+
+/* Privileged Helper IPC Protocol v2 Framing & Handshake */
+gchar         *puls_helper_format_hello          (guint        version);
+gchar         *puls_helper_format_read_smart     (const gchar *device_path,
+                                                  gboolean     check_standby);
+gchar         *puls_helper_format_action         (const gchar *device_path,
+                                                  const gchar *action);
+gchar         *puls_helper_format_stream_scan    (const gchar *device_path,
+                                                  guint64      start_offset,
+                                                  guint64      length);
+gboolean       puls_helper_parse_frame_header    (const gchar *header_line,
+                                                  gboolean    *out_ok,
+                                                  gchar      **out_err_code,
+                                                  gsize       *out_payload_len);
+gboolean       puls_helper_exchange_command      (GOutputStream    *stdin_stream,
+                                                  GDataInputStream *stdout_stream,
+                                                  const gchar      *command,
+                                                  gboolean         *out_ok,
+                                                  gchar           **out_err_code,
+                                                  gchar           **out_payload,
+                                                  GError          **error);
 PulsPowerState puls_parse_hdparm_power_state     (const gchar *hdparm_output);
 PulsPowerState puls_parse_smartctl_standby_json  (const gchar *json_str);
 

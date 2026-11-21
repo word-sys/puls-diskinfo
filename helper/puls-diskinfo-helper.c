@@ -2,10 +2,10 @@
  * puls-diskinfo-helper.c
  *
  * Privileged helper for PULS DiskInfo.
- * This small binary runs via pkexec to execute smartctl with root privileges.
- * It validates the device path and runs smartctl, outputting JSON.
+ * Runs via pkexec to execute smartctl and read-only sector probing over a
+ * strict versioned framed IPC protocol (Protocol v2).
  *
- * Copyright (C) 2026 Barın Güzeldemirci
+ * Copyright (C) 2026 Barın Güzeldemirci <baringuzeldemir@gmail.com>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,21 +13,31 @@
  * (at your option) any later version.
  */
 
+#define _POSIX_C_SOURCE 200809L
+
+#include "puls-helper-protocol.h"
+
+#include <ctype.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <inttypes.h>
+#include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <ctype.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
+#include <unistd.h>
 
 /**
  * is_valid_device:
  * @path: Device node path.
  *
- * Validate that a device path looks like a real block device.
- * Accepts: /dev/sda, /dev/nvme0n1, /dev/hda, /dev/vda, /dev/mmcblk0
- * Rejects everything else to prevent command injection.
+ * Validates that a device path looks like a real storage device node.
+ * Accepts: /dev/sda, /dev/nvme0, /dev/nvme0n1, /dev/hda, /dev/vda,
+ * /dev/mmcblk0, /dev/sg0. Rejects everything else to prevent injection.
  */
 static int
 is_valid_device (const char *path)
@@ -64,6 +74,44 @@ is_valid_device (const char *path)
 }
 
 static void
+send_frame_ok (const char *payload, size_t len)
+{
+    printf ("%s %zu\n", PULS_HELPER_RESP_OK, len);
+    if (len > 0 && payload != NULL) {
+        (void)fwrite (payload, 1, len, stdout);
+    }
+    fflush (stdout);
+}
+
+static void
+send_frame_err (const char *err_code, const char *json_payload)
+{
+    const char *msg = json_payload ? json_payload : "";
+    size_t len = strlen (msg);
+    printf ("%s %s %zu\n", PULS_HELPER_RESP_ERR, err_code, len);
+    if (len > 0) {
+        (void)fwrite (msg, 1, len, stdout);
+    }
+    fflush (stdout);
+}
+
+static int
+parse_u64_strict (const char *str, uint64_t *out_val)
+{
+    if (str == NULL || *str == '\0' || !isdigit ((unsigned char)*str))
+        return 0;
+
+    errno = 0;
+    char *end = NULL;
+    unsigned long long val = strtoull (str, &end, 10);
+    if (errno != 0 || end == str || *end != '\0')
+        return 0;
+
+    *out_val = (uint64_t)val;
+    return 1;
+}
+
+static void
 run_single_command (const char *device, const char *action)
 {
     if (!is_valid_device (device)) {
@@ -96,27 +144,34 @@ run_single_command (const char *device, const char *action)
 }
 
 static void
-handle_command_persistent (const char *device, const char *action)
+handle_smartctl_command (const char *device, const char *action)
 {
     if (!is_valid_device (device)) {
-        const char *err = "{\n  \"error\": \"Invalid device path\"\n}\n";
-        printf ("%zu\n%s", strlen(err), err);
-        fflush (stdout);
+        send_frame_err (PULS_HELPER_ERR_INVALID_DEVICE,
+                        "{\"error\":\"Invalid device path\"}\n");
+        return;
+    }
+
+    if (action != NULL &&
+        strcmp (action, "standby") != 0 &&
+        strcmp (action, "short") != 0 &&
+        strcmp (action, "long") != 0 &&
+        strcmp (action, "abort") != 0) {
+        send_frame_err (PULS_HELPER_ERR_INVALID_ACTION,
+                        "{\"error\":\"Invalid smartctl action\"}\n");
         return;
     }
 
     if (access (device, F_OK) != 0) {
-        const char *err = "{\n  \"error\": \"Device does not exist\"\n}\n";
-        printf ("%zu\n%s", strlen(err), err);
-        fflush (stdout);
+        send_frame_err (PULS_HELPER_ERR_NOT_FOUND,
+                        "{\"error\":\"Device does not exist\"}\n");
         return;
     }
 
     int pfd[2];
     if (pipe (pfd) == -1) {
-        const char *err = "{\n  \"error\": \"Failed to create pipe\"\n}\n";
-        printf ("%zu\n%s", strlen(err), err);
-        fflush (stdout);
+        send_frame_err (PULS_HELPER_ERR_INTERNAL,
+                        "{\"error\":\"Failed to create pipe\"}\n");
         return;
     }
 
@@ -124,9 +179,8 @@ handle_command_persistent (const char *device, const char *action)
     if (pid == -1) {
         close (pfd[0]);
         close (pfd[1]);
-        const char *err = "{\n  \"error\": \"Failed to fork child process\"\n}\n";
-        printf ("%zu\n%s", strlen(err), err);
-        fflush (stdout);
+        send_frame_err (PULS_HELPER_ERR_INTERNAL,
+                        "{\"error\":\"Failed to fork child process\"}\n");
         return;
     }
 
@@ -146,51 +200,248 @@ handle_command_persistent (const char *device, const char *action)
             execlp ("smartctl", "smartctl", "-t", "long", device, (char *)NULL);
         } else if (strcmp (action, "abort") == 0) {
             execlp ("smartctl", "smartctl", "-X", device, (char *)NULL);
-        } else {
-            fprintf (stderr, "Error: Invalid action: %s\n", action);
-            exit (5);
         }
         perror ("execlp");
-        exit (4);
+        _exit (4);
     }
 
     close (pfd[1]);
 
     char *buf = NULL;
-    size_t buf_size = 0;
     size_t total_read = 0;
     char chunk[4096];
     ssize_t n_read;
+    int truncated = 0;
 
     while ((n_read = read (pfd[0], chunk, sizeof (chunk))) > 0) {
-        char *new_buf = realloc (buf, buf_size + n_read + 1);
+        if (total_read + (size_t)n_read > PULS_HELPER_MAX_PAYLOAD_LEN) {
+            truncated = 1;
+            break;
+        }
+        char *new_buf = realloc (buf, total_read + (size_t)n_read + 1);
         if (!new_buf) {
             free (buf);
             close (pfd[0]);
-            const char *err = "{\n  \"error\": \"Out of memory\"\n}\n";
-            printf ("%zu\n%s", strlen(err), err);
-            fflush (stdout);
+            int status = 0;
+            waitpid (pid, &status, 0);
+            send_frame_err (PULS_HELPER_ERR_INTERNAL,
+                            "{\"error\":\"Out of memory\"}\n");
             return;
         }
         buf = new_buf;
-        memcpy (buf + total_read, chunk, n_read);
-        total_read += n_read;
-        buf_size += n_read;
+        memcpy (buf + total_read, chunk, (size_t)n_read);
+        total_read += (size_t)n_read;
     }
     close (pfd[0]);
 
-    if (buf) {
-        buf[total_read] = '\0';
-    } else {
-        buf = strdup ("");
-    }
-
-    int status;
+    int status = 0;
     waitpid (pid, &status, 0);
 
-    printf ("%zu\n%s", strlen (buf), buf);
-    fflush (stdout);
-    free (buf);
+    if (truncated) {
+        free (buf);
+        send_frame_err (PULS_HELPER_ERR_IO,
+                        "{\"error\":\"smartctl payload exceeded framing limit\"}\n");
+        return;
+    }
+
+    if (buf != NULL) {
+        buf[total_read] = '\0';
+        send_frame_ok (buf, total_read);
+        free (buf);
+    } else {
+        send_frame_ok ("", 0);
+    }
+}
+
+static void
+handle_stream_scan (const char *device, const char *start_str, const char *len_str)
+{
+    if (!is_valid_device (device)) {
+        send_frame_err (PULS_HELPER_ERR_INVALID_DEVICE,
+                        "{\"error\":\"Invalid device path\"}\n");
+        return;
+    }
+
+    uint64_t start_off = 0;
+    uint64_t read_len = 0;
+    if (!parse_u64_strict (start_str, &start_off) ||
+        !parse_u64_strict (len_str, &read_len) ||
+        read_len == 0 ||
+        read_len > PULS_HELPER_MAX_STREAM_SCAN_LEN) {
+        send_frame_err (PULS_HELPER_ERR_INVALID_ARG,
+                        "{\"error\":\"Invalid STREAM_SCAN range parameters\"}\n");
+        return;
+    }
+
+    if (access (device, F_OK) != 0) {
+        send_frame_err (PULS_HELPER_ERR_NOT_FOUND,
+                        "{\"error\":\"Device does not exist\"}\n");
+        return;
+    }
+
+    int fd = open (device, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        send_frame_err (PULS_HELPER_ERR_IO,
+                        "{\"error\":\"Failed to open device for read-only scan\"}\n");
+        return;
+    }
+
+    struct timespec ts_start, ts_end;
+    clock_gettime (CLOCK_MONOTONIC, &ts_start);
+
+    char io_buf[65536];
+    uint64_t remaining = read_len;
+    uint64_t offset = start_off;
+    uint64_t bytes_done = 0;
+    int io_failed = 0;
+
+    while (remaining > 0) {
+        size_t want = (remaining > sizeof (io_buf)) ? sizeof (io_buf) : (size_t)remaining;
+        ssize_t got = pread (fd, io_buf, want, (off_t)offset);
+        if (got < 0) {
+            if (errno == EINTR)
+                continue;
+            io_failed = 1;
+            break;
+        }
+        if (got == 0)
+            break;
+        bytes_done += (uint64_t)got;
+        offset += (uint64_t)got;
+        remaining -= (uint64_t)got;
+    }
+    close (fd);
+
+    clock_gettime (CLOCK_MONOTONIC, &ts_end);
+    double elapsed_ms = ((double)(ts_end.tv_sec - ts_start.tv_sec) * 1000.0) +
+                        ((double)(ts_end.tv_nsec - ts_start.tv_nsec) / 1000000.0);
+
+    if (io_failed) {
+        send_frame_err (PULS_HELPER_ERR_IO,
+                        "{\"error\":\"Read error during STREAM_SCAN\"}\n");
+        return;
+    }
+
+    char resp[512];
+    int n = snprintf (resp, sizeof (resp),
+                      "{\"status\":\"ok\",\"device\":\"%s\",\"start\":%" PRIu64
+                      ",\"length\":%" PRIu64 ",\"bytes_read\":%" PRIu64
+                      ",\"elapsed_ms\":%.3f}\n",
+                      device, start_off, read_len, bytes_done, elapsed_ms);
+    if (n < 0 || (size_t)n >= sizeof (resp)) {
+        send_frame_err (PULS_HELPER_ERR_INTERNAL,
+                        "{\"error\":\"Failed to format STREAM_SCAN response\"}\n");
+        return;
+    }
+
+    send_frame_ok (resp, (size_t)n);
+}
+
+static void
+handle_hello (const char *version_arg, int *handshake_done)
+{
+    if (version_arg == NULL || strcmp (version_arg, PULS_HELPER_PROTO_TAG) != 0) {
+        send_frame_err (PULS_HELPER_ERR_VERSION,
+                        "{\"error\":\"Unsupported protocol version\",\"expected\":\"" PULS_HELPER_PROTO_TAG "\"}\n");
+        return;
+    }
+
+    *handshake_done = 1;
+    const char *ok_json =
+        "{\"protocol\":\"" PULS_HELPER_PROTO_TAG "\","
+        "\"version\":2,"
+        "\"capabilities\":[\"READ_SMART\",\"ACTION\",\"STREAM_SCAN\"]}\n";
+    send_frame_ok (ok_json, strlen (ok_json));
+}
+
+static size_t
+tokenize_line (char *line, char *tokens[], size_t max_tokens)
+{
+    size_t count = 0;
+    char *p = line;
+
+    while (*p != '\0' && count < max_tokens) {
+        while (*p == ' ' || *p == '\t')
+            p++;
+        if (*p == '\0')
+            break;
+        tokens[count++] = p;
+        while (*p != '\0' && *p != ' ' && *p != '\t')
+            p++;
+        if (*p != '\0') {
+            *p = '\0';
+            p++;
+        }
+    }
+
+    return count;
+}
+
+/* Returns 0 to continue processing, 1 on QUIT. */
+static int
+dispatch_protocol_line (char *line, int *handshake_done)
+{
+    char *toks[6] = { NULL };
+    size_t n_toks = tokenize_line (line, toks, 6);
+
+    if (n_toks == 0)
+        return 0;
+
+    if (strcmp (toks[0], PULS_HELPER_CMD_QUIT) == 0) {
+        send_frame_ok ("", 0);
+        return 1;
+    }
+
+    if (strcmp (toks[0], PULS_HELPER_CMD_HELLO) == 0) {
+        if (n_toks != 2) {
+            handle_hello (NULL, handshake_done);
+        } else {
+            handle_hello (toks[1], handshake_done);
+        }
+        return 0;
+    }
+
+    if (!(*handshake_done)) {
+        send_frame_err (PULS_HELPER_ERR_HANDSHAKE_REQ,
+                        "{\"error\":\"Protocol handshake required (send HELLO " PULS_HELPER_PROTO_TAG ")\"}\n");
+        return 0;
+    }
+
+    if (strcmp (toks[0], PULS_HELPER_CMD_READ_SMART) == 0) {
+        if (n_toks == 2) {
+            handle_smartctl_command (toks[1], NULL);
+        } else if (n_toks == 3 && strcmp (toks[2], "standby") == 0) {
+            handle_smartctl_command (toks[1], "standby");
+        } else {
+            send_frame_err (PULS_HELPER_ERR_INVALID_ARG,
+                            "{\"error\":\"Usage: READ_SMART <dev> [standby]\"}\n");
+        }
+        return 0;
+    }
+
+    if (strcmp (toks[0], PULS_HELPER_CMD_ACTION) == 0) {
+        if (n_toks != 3) {
+            send_frame_err (PULS_HELPER_ERR_INVALID_ARG,
+                            "{\"error\":\"Usage: ACTION <dev> <short|long|abort>\"}\n");
+        } else {
+            handle_smartctl_command (toks[1], toks[2]);
+        }
+        return 0;
+    }
+
+    if (strcmp (toks[0], PULS_HELPER_CMD_STREAM_SCAN) == 0) {
+        if (n_toks != 4) {
+            send_frame_err (PULS_HELPER_ERR_INVALID_ARG,
+                            "{\"error\":\"Usage: STREAM_SCAN <dev> <start> <len>\"}\n");
+        } else {
+            handle_stream_scan (toks[1], toks[2], toks[3]);
+        }
+        return 0;
+    }
+
+    send_frame_err (PULS_HELPER_ERR_UNKNOWN_CMD,
+                    "{\"error\":\"Unknown command\"}\n");
+    return 0;
 }
 
 int
@@ -206,9 +457,19 @@ main (int argc, char *argv[])
     char *line = NULL;
     size_t line_cap = 0;
     ssize_t line_len;
+    int handshake_done = 0;
 
     while ((line_len = getline (&line, &line_cap, stdin)) != -1) {
-        while (line_len > 0 && (line[line_len - 1] == '\n' || line[line_len - 1] == '\r' || line[line_len - 1] == ' ')) {
+        if ((size_t)line_len > PULS_HELPER_MAX_LINE_LEN) {
+            send_frame_err (PULS_HELPER_ERR_INVALID_ARG,
+                            "{\"error\":\"Command line exceeds maximum length\"}\n");
+            continue;
+        }
+
+        while (line_len > 0 &&
+               (line[line_len - 1] == '\n' ||
+                line[line_len - 1] == '\r' ||
+                line[line_len - 1] == ' ')) {
             line[line_len - 1] = '\0';
             line_len--;
         }
@@ -216,33 +477,8 @@ main (int argc, char *argv[])
         if (line_len == 0)
             continue;
 
-        if (strcmp (line, "QUIT") == 0) {
+        if (dispatch_protocol_line (line, &handshake_done))
             break;
-        }
-
-        if (strncmp (line, "READ_STANDBY ", 13) == 0) {
-            const char *device = line + 13;
-            handle_command_persistent (device, "standby");
-        } else if (strncmp (line, "READ ", 5) == 0) {
-            const char *device = line + 5;
-            handle_command_persistent (device, NULL);
-        } else if (strncmp (line, "TEST ", 5) == 0) {
-            char *device = line + 5;
-            char *action = strchr (device, ' ');
-            if (action) {
-                *action = '\0';
-                action++;
-                handle_command_persistent (device, action);
-            } else {
-                const char *err = "{\n  \"error\": \"Missing action for TEST command\"\n}\n";
-                printf ("%zu\n%s", strlen(err), err);
-                fflush (stdout);
-            }
-        } else {
-            const char *err = "{\n  \"error\": \"Unknown command\"\n}\n";
-            printf ("%zu\n%s", strlen(err), err);
-            fflush (stdout);
-        }
     }
 
     free (line);

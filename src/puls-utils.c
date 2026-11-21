@@ -12,6 +12,7 @@
  */
 
 #include "puls-utils.h"
+#include "../helper/puls-helper-protocol.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -192,6 +193,242 @@ puls_format_number (guint64 number)
     return result;
 }
 
+/**
+ * puls_helper_format_hello:
+ * @version: Protocol major version (e.g. `2`).
+ *
+ * Formats a helper handshake command (`HELLO v<version>\n`).
+ *
+ * Returns: (transfer full): Newly allocated command line.
+ */
+gchar *
+puls_helper_format_hello (guint version)
+{
+    return g_strdup_printf ("%s v%u\n", PULS_HELPER_CMD_HELLO, version);
+}
+
+/**
+ * puls_helper_format_read_smart:
+ * @device_path: Storage device node path.
+ * @check_standby: Whether to pass standby check option.
+ *
+ * Returns: (transfer full): Framed v2 `READ_SMART` command line.
+ */
+gchar *
+puls_helper_format_read_smart (const gchar *device_path,
+                               gboolean     check_standby)
+{
+    g_return_val_if_fail (device_path != NULL, NULL);
+
+    if (check_standby)
+        return g_strdup_printf ("%s %s standby\n", PULS_HELPER_CMD_READ_SMART, device_path);
+
+    return g_strdup_printf ("%s %s\n", PULS_HELPER_CMD_READ_SMART, device_path);
+}
+
+/**
+ * puls_helper_format_action:
+ * @device_path: Storage device node path.
+ * @action: SMART action (`short`, `long`, `abort`).
+ *
+ * Returns: (transfer full): Framed v2 `ACTION` command line.
+ */
+gchar *
+puls_helper_format_action (const gchar *device_path,
+                           const gchar *action)
+{
+    g_return_val_if_fail (device_path != NULL, NULL);
+    g_return_val_if_fail (action != NULL, NULL);
+
+    return g_strdup_printf ("%s %s %s\n", PULS_HELPER_CMD_ACTION, device_path, action);
+}
+
+/**
+ * puls_helper_format_stream_scan:
+ * @device_path: Storage device node path.
+ * @start_offset: Starting byte offset.
+ * @length: Number of bytes to probe.
+ *
+ * Returns: (transfer full): Framed v2 `STREAM_SCAN` command line.
+ */
+gchar *
+puls_helper_format_stream_scan (const gchar *device_path,
+                                guint64      start_offset,
+                                guint64      length)
+{
+    g_return_val_if_fail (device_path != NULL, NULL);
+
+    return g_strdup_printf ("%s %s %" G_GUINT64_FORMAT " %" G_GUINT64_FORMAT "\n",
+                            PULS_HELPER_CMD_STREAM_SCAN, device_path, start_offset, length);
+}
+
+static gboolean
+parse_strict_size_token (const gchar *tok, gsize *out_len)
+{
+    if (tok == NULL || *tok == '\0' || !g_ascii_isdigit (*tok))
+        return FALSE;
+
+    errno = 0;
+    gchar *end = NULL;
+    guint64 val = g_ascii_strtoull (tok, &end, 10);
+    if (errno != 0 || end == tok || *end != '\0')
+        return FALSE;
+
+    if (val > PULS_HELPER_MAX_PAYLOAD_LEN)
+        return FALSE;
+
+    *out_len = (gsize)val;
+    return TRUE;
+}
+
+/**
+ * puls_helper_parse_frame_header:
+ * @header_line: Single ASCII response header line (`OK <len>` or `ERR <code> <len>`).
+ * @out_ok: (out): Set to %TRUE for `OK`, %FALSE for `ERR`.
+ * @out_err_code: (out) (optional): Error code string when `ERR`, else %NULL.
+ * @out_payload_len: (out): Exact payload length in bytes (bounded by 4 MiB).
+ *
+ * Returns: %TRUE if @header_line is a valid Protocol v2 frame header.
+ */
+gboolean
+puls_helper_parse_frame_header (const gchar  *header_line,
+                                gboolean     *out_ok,
+                                gchar       **out_err_code,
+                                gsize        *out_payload_len)
+{
+    if (out_ok)
+        *out_ok = FALSE;
+    if (out_err_code)
+        *out_err_code = NULL;
+    if (out_payload_len)
+        *out_payload_len = 0;
+
+    if (header_line == NULL || *header_line == '\0')
+        return FALSE;
+
+    g_autofree gchar *trimmed = g_strdup (header_line);
+    g_strstrip (trimmed);
+    g_auto(GStrv) parts = g_strsplit (trimmed, " ", -1);
+    guint n_parts = g_strv_length (parts);
+
+    if (n_parts == 2 && g_strcmp0 (parts[0], PULS_HELPER_RESP_OK) == 0) {
+        gsize len = 0;
+        if (!parse_strict_size_token (parts[1], &len))
+            return FALSE;
+        if (out_ok)
+            *out_ok = TRUE;
+        if (out_payload_len)
+            *out_payload_len = len;
+        return TRUE;
+    }
+
+    if (n_parts == 3 && g_strcmp0 (parts[0], PULS_HELPER_RESP_ERR) == 0 && parts[1][0] != '\0') {
+        gsize len = 0;
+        if (!parse_strict_size_token (parts[2], &len))
+            return FALSE;
+        if (out_ok)
+            *out_ok = FALSE;
+        if (out_err_code)
+            *out_err_code = g_strdup (parts[1]);
+        if (out_payload_len)
+            *out_payload_len = len;
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+/**
+ * puls_helper_exchange_command:
+ * @stdin_stream: Helper stdin pipe.
+ * @stdout_stream: Helper stdout buffered stream.
+ * @command: Full command line ending in `\n`.
+ * @out_ok: (out) (optional): %TRUE if helper returned `OK`, %FALSE for `ERR`.
+ * @out_err_code: (out) (optional): Helper error code when `ERR`.
+ * @out_payload: (out) (optional): Exact NUL-terminated payload bytes.
+ * @error: Return location for transport/framing #GError.
+ *
+ * Sends @command and reads one complete Protocol v2 response frame.
+ *
+ * Returns: %TRUE on successful transport & valid frame parsing (inspect @out_ok
+ * to distinguish `OK` from `ERR`), %FALSE on transport or framing failure.
+ */
+gboolean
+puls_helper_exchange_command (GOutputStream     *stdin_stream,
+                              GDataInputStream  *stdout_stream,
+                              const gchar       *command,
+                              gboolean          *out_ok,
+                              gchar            **out_err_code,
+                              gchar            **out_payload,
+                              GError           **error)
+{
+    g_return_val_if_fail (G_IS_OUTPUT_STREAM (stdin_stream), FALSE);
+    g_return_val_if_fail (G_IS_DATA_INPUT_STREAM (stdout_stream), FALSE);
+    g_return_val_if_fail (command != NULL, FALSE);
+
+    if (out_ok)
+        *out_ok = FALSE;
+    if (out_err_code)
+        *out_err_code = NULL;
+    if (out_payload)
+        *out_payload = NULL;
+
+    gsize bytes_written = 0;
+    if (!g_output_stream_write_all (stdin_stream, command, strlen (command),
+                                    &bytes_written, NULL, error))
+        return FALSE;
+
+    g_autofree gchar *header = g_data_input_stream_read_line (stdout_stream, NULL, NULL, error);
+    if (header == NULL) {
+        if (error && *error == NULL)
+            g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED, "Helper EOF or disconnected");
+        return FALSE;
+    }
+
+    gboolean resp_ok = FALSE;
+    g_autofree gchar *err_code = NULL;
+    gsize payload_len = 0;
+
+    if (!puls_helper_parse_frame_header (header, &resp_ok, &err_code, &payload_len)) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                     "Invalid helper protocol frame header: %s", header);
+        return FALSE;
+    }
+
+    gchar *buf = g_malloc (payload_len + 1);
+    if (payload_len > 0) {
+        gsize bytes_read = 0;
+        if (!g_input_stream_read_all (G_INPUT_STREAM (stdout_stream), buf, payload_len,
+                                      &bytes_read, NULL, error) ||
+            bytes_read != payload_len) {
+            g_free (buf);
+            if (error && *error == NULL)
+                g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED, "Short read from helper");
+            return FALSE;
+        }
+    }
+    buf[payload_len] = '\0';
+
+    if (out_ok)
+        *out_ok = resp_ok;
+    if (out_err_code)
+        *out_err_code = g_steal_pointer (&err_code);
+    if (out_payload)
+        *out_payload = buf;
+    else
+        g_free (buf);
+
+    return TRUE;
+}
+
+static void
+reset_helper_locked (void)
+{
+    g_clear_object (&helper_proc);
+    helper_stdin = NULL;
+    g_clear_object (&helper_stdout);
+}
+
 static gboolean
 ensure_helper_running (GError **error)
 {
@@ -235,6 +472,34 @@ ensure_helper_running (GError **error)
     GInputStream *raw_stdout = g_subprocess_get_stdout_pipe (helper_proc);
     helper_stdout = g_data_input_stream_new (raw_stdout);
 
+    /* Perform strict Protocol v2 version handshake */
+    g_autofree gchar *hello_cmd = puls_helper_format_hello (PULS_HELPER_PROTO_VERSION);
+    gboolean hello_ok = FALSE;
+    g_autofree gchar *hello_err = NULL;
+    g_autofree gchar *hello_payload = NULL;
+
+    if (!puls_helper_exchange_command (helper_stdin, helper_stdout, hello_cmd,
+                                       &hello_ok, &hello_err, &hello_payload, error) ||
+        !hello_ok) {
+        if (error && *error == NULL) {
+            g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
+                         "Helper protocol handshake failed (%s): %s",
+                         hello_err ? hello_err : "unknown",
+                         hello_payload ? hello_payload : "");
+        }
+        if (hello_err != NULL) {
+            PULS_LOG_WARN ("Helper Protocol %s handshake failed (%s)",
+                           PULS_HELPER_PROTO_TAG, hello_err);
+        } else {
+            PULS_LOG_DEBUG ("Helper Protocol %s handshake unavailable (transport closed)",
+                            PULS_HELPER_PROTO_TAG);
+        }
+        reset_helper_locked ();
+        g_mutex_unlock (&helper_mutex);
+        return FALSE;
+    }
+
+    PULS_LOG_DEBUG ("Helper Protocol %s handshake succeeded", PULS_HELPER_PROTO_TAG);
     g_mutex_unlock (&helper_mutex);
     return TRUE;
 }
@@ -248,54 +513,29 @@ communicate_with_helper (const gchar *command, GError **error)
 
     g_mutex_lock (&helper_mutex);
 
-    gsize bytes_written = 0;
-    gboolean ok = g_output_stream_write_all (helper_stdin, command, strlen (command), &bytes_written, NULL, error);
-    if (!ok) {
-        g_clear_object (&helper_proc);
-        helper_stdin = NULL;
-        g_clear_object (&helper_stdout);
+    gboolean resp_ok = FALSE;
+    g_autofree gchar *err_code = NULL;
+    gchar *payload = NULL;
+
+    if (!puls_helper_exchange_command (helper_stdin, helper_stdout, command,
+                                       &resp_ok, &err_code, &payload, error)) {
+        reset_helper_locked ();
         g_mutex_unlock (&helper_mutex);
         return NULL;
     }
 
-    gchar *len_str = g_data_input_stream_read_line (helper_stdout, NULL, NULL, error);
-    if (len_str == NULL) {
-        g_clear_object (&helper_proc);
-        helper_stdin = NULL;
-        g_clear_object (&helper_stdout);
-        g_mutex_unlock (&helper_mutex);
-        if (error && *error == NULL) {
-            g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED, "Helper EOF or disconnected");
-        }
-        return NULL;
-    }
-
-    gsize len = g_ascii_strtoull (len_str, NULL, 10);
-    g_free (len_str);
-
-    if (len == 0) {
-        g_mutex_unlock (&helper_mutex);
-        return g_strdup ("");
-    }
-
-    gchar *buf = g_malloc (len + 1);
-    gsize bytes_read = 0;
-    ok = g_input_stream_read_all (G_INPUT_STREAM (helper_stdout), buf, len, &bytes_read, NULL, error);
-    if (!ok || bytes_read != len) {
-        g_free (buf);
-        g_clear_object (&helper_proc);
-        helper_stdin = NULL;
-        g_clear_object (&helper_stdout);
-        g_mutex_unlock (&helper_mutex);
-        if (error && *error == NULL) {
-            g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED, "Short read from helper");
-        }
-        return NULL;
-    }
-
-    buf[len] = '\0';
     g_mutex_unlock (&helper_mutex);
-    return buf;
+
+    if (!resp_ok) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                     "Helper command rejected (%s): %s",
+                     err_code ? err_code : PULS_HELPER_ERR_INTERNAL,
+                     payload ? payload : "");
+        g_free (payload);
+        return NULL;
+    }
+
+    return payload;
 }
 
 static void
@@ -1824,7 +2064,7 @@ puls_run_smartctl_action_finish (GAsyncResult *result, GError **error)
 gchar *
 puls_run_smartctl_action_sync (const gchar *device_path, const gchar *action, GError **error)
 {
-    g_autofree gchar *cmd = g_strdup_printf ("TEST %s %s\n", device_path, action);
+    g_autofree gchar *cmd = puls_helper_format_action (device_path, action);
     gchar *res = communicate_with_helper (cmd, error);
     if (res != NULL)
         return res;
@@ -3815,12 +4055,7 @@ gchar *
 puls_build_helper_read_command (const gchar *device_path,
                                 gboolean     check_standby)
 {
-    g_return_val_if_fail (device_path != NULL, NULL);
-
-    if (check_standby)
-        return g_strdup_printf ("READ_STANDBY %s\n", device_path);
-
-    return g_strdup_printf ("READ %s\n", device_path);
+    return puls_helper_format_read_smart (device_path, check_standby);
 }
 
 /**

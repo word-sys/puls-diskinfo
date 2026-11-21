@@ -1,5 +1,6 @@
 test_c_args = [
-  '-DTEST_FIXTURES_DIR="@0@"'.format(meson.current_source_dir() / 'fixtures')
+  '-DTEST_FIXTURES_DIR="@0@"'.format(meson.current_source_dir() / 'fixtures'),
+  '-DTEST_HELPER_BIN="@0@"'.format(helper_exe.full_path()),
 ]
 
 test_basic = executable('test-basic',
@@ -8,7 +9,7 @@ test_basic = executable('test-basic',
   dependencies: puls_dep,
 )
 
-test('test-basic', test_basic)
+test('test-basic', test_basic, depends: helper_exe)
 
 test_smart_parser = executable('test-smart-parser',
   'test-smart-parser.c',
