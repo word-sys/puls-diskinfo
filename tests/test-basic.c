@@ -2449,6 +2449,121 @@ test_async_scan_cancellation (void)
     g_assert_cmpuint (puls_disk_manager_get_device_count (mgr_ff), ==, 4);
 }
 
+static void
+test_phase3_final_integration (void)
+{
+    /* 1. Full async enumeration of mock hardware configurations
+     *    (M.2 NVMe, SATA SSD, RAID SATA HDD, USB external) */
+    g_autoptr(PulsDiskManager) mgr = puls_disk_manager_new ();
+    puls_disk_manager_set_mock_mode (mgr, TRUE);
+
+    AsyncScanTestCtx scan_ctx = {
+        .loop = g_main_loop_new (NULL, FALSE),
+        .main_thread = g_thread_self (),
+        .signals_on_main_thread = TRUE,
+    };
+    g_signal_connect (mgr, "disk-added", G_CALLBACK (on_async_scan_disk_added), &scan_ctx);
+    puls_disk_manager_scan_async (mgr, NULL, on_async_scan_test_done, &scan_ctx);
+    g_main_loop_run (scan_ctx.loop);
+    g_main_loop_unref (scan_ctx.loop);
+
+    g_assert_true (scan_ctx.ok);
+    g_assert_no_error (scan_ctx.error);
+    g_assert_true (scan_ctx.signals_on_main_thread);
+    g_assert_cmpuint (puls_disk_manager_get_device_count (mgr), ==, 4);
+
+    /* Validate M.2 NVMe topology & form factor */
+    PulsSmartData *nvme = puls_disk_manager_get_smart_data (mgr, "/dev/nvme0n1");
+    g_assert_nonnull (nvme);
+    g_assert_cmpstr (puls_smart_data_get_controller_path (nvme), ==, "/dev/nvme0");
+    g_assert_cmpuint (puls_smart_data_get_nvme_nsid (nvme), ==, 1);
+    g_assert_cmpint (puls_smart_data_get_form_factor_enum (nvme), ==, PULS_FORM_FACTOR_M2_2280);
+    g_assert_cmpstr (puls_smart_data_get_form_factor (nvme), ==, "M.2 2280");
+    g_assert_false (puls_should_use_standby_check_for_type (
+        "/dev/nvme0n1", puls_smart_data_get_drive_type (nvme), FALSE));
+
+    /* Validate SATA HDD RAID membership, SCSI generic mapping, 3.5" form factor, & -n standby */
+    PulsSmartData *hdd = puls_disk_manager_get_smart_data (mgr, "/dev/sdb");
+    g_assert_nonnull (hdd);
+    g_assert_cmpstr (puls_smart_data_get_scsi_generic_path (hdd), ==, "/dev/sg1");
+    g_assert_cmpstr (puls_smart_data_get_raid_array_path (hdd), ==, "/dev/md0");
+    g_assert_cmpstr (puls_smart_data_get_raid_level (hdd), ==, "RAID1");
+    g_assert_cmpstr (puls_smart_data_get_raid_member_status (hdd), ==, "Member of /dev/md0 [RAID1]");
+    g_assert_cmpint (puls_smart_data_get_form_factor_enum (hdd), ==, PULS_FORM_FACTOR_3_5_INCH);
+    g_assert_true (puls_should_use_standby_check_for_type (
+        "/dev/sdb", puls_smart_data_get_drive_type (hdd), TRUE));
+    g_autofree gchar *hdd_cmd = puls_build_smartctl_read_command ("/dev/sdb", TRUE);
+    g_assert_cmpstr (hdd_cmd, ==, "smartctl -n standby -a -j /dev/sdb");
+
+    /* 2. Dynamic hotplug attach/detach & pseudo-device clutter filtering */
+    HotplugSignalStats hp = { 0 };
+    g_signal_connect (mgr, "disk-added", G_CALLBACK (on_test_disk_added), &hp);
+    g_signal_connect (mgr, "disk-removed", G_CALLBACK (on_test_disk_removed), &hp);
+
+    /* Clutter/pseudo uevents must be rejected */
+    const gchar ev_loop[] = "ACTION=add\0SUBSYSTEM=block\0DEVTYPE=disk\0DEVNAME=loop12\0";
+    const gchar ev_dm[]   = "ACTION=add\0SUBSYSTEM=block\0DEVTYPE=disk\0DEVNAME=dm-3\0";
+    const gchar ev_ctrl[] = "ACTION=add\0SUBSYSTEM=block\0DEVTYPE=disk\0DEVNAME=nvme2\0";
+    const gchar ev_part[] = "ACTION=add\0SUBSYSTEM=block\0DEVTYPE=partition\0DEVNAME=sdd1\0";
+    g_assert_false (puls_disk_manager_handle_uevent (mgr, ev_loop, sizeof (ev_loop)));
+    g_assert_false (puls_disk_manager_handle_uevent (mgr, ev_dm, sizeof (ev_dm)));
+    g_assert_false (puls_disk_manager_handle_uevent (mgr, ev_ctrl, sizeof (ev_ctrl)));
+    g_assert_false (puls_disk_manager_handle_uevent (mgr, ev_part, sizeof (ev_part)));
+    g_assert_cmpuint (hp.added_count, ==, 0);
+
+    /* Hotplug attach USB disk + NVMe namespace */
+    const gchar ev_sdd_add[]   = "ACTION=add\0SUBSYSTEM=block\0DEVTYPE=disk\0DEVNAME=sdd\0";
+    const gchar ev_nvme2_add[] = "ACTION=add\0SUBSYSTEM=block\0DEVTYPE=disk\0DEVNAME=nvme2n1\0";
+    g_assert_true (puls_disk_manager_handle_uevent (mgr, ev_sdd_add, sizeof (ev_sdd_add)));
+    g_assert_true (puls_disk_manager_handle_uevent (mgr, ev_nvme2_add, sizeof (ev_nvme2_add)));
+    g_assert_cmpuint (hp.added_count, ==, 2);
+    g_assert_cmpuint (puls_disk_manager_get_device_count (mgr), ==, 6);
+
+    PulsSmartData *nvme2 = puls_disk_manager_get_smart_data (mgr, "/dev/nvme2n1");
+    g_assert_nonnull (nvme2);
+    g_assert_cmpstr (puls_smart_data_get_controller_path (nvme2), ==, "/dev/nvme2");
+    g_assert_cmpuint (puls_smart_data_get_nvme_nsid (nvme2), ==, 1);
+
+    /* Hotplug detach both */
+    const gchar ev_sdd_rem[]   = "ACTION=remove\0SUBSYSTEM=block\0DEVTYPE=disk\0DEVNAME=sdd\0";
+    const gchar ev_nvme2_rem[] = "ACTION=remove\0SUBSYSTEM=block\0DEVTYPE=disk\0DEVNAME=nvme2n1\0";
+    g_assert_true (puls_disk_manager_handle_uevent (mgr, ev_sdd_rem, sizeof (ev_sdd_rem)));
+    g_assert_true (puls_disk_manager_handle_uevent (mgr, ev_nvme2_rem, sizeof (ev_nvme2_rem)));
+    g_assert_cmpuint (hp.removed_count, ==, 2);
+    g_assert_cmpuint (puls_disk_manager_get_device_count (mgr), ==, 4);
+
+    g_free (hp.last_added);
+    g_free (hp.last_removed);
+    g_free (hp.last_updated);
+
+    /* 3. Live host async scan validates end-to-end pipeline without virtual clutter */
+    g_autoptr(PulsDiskManager) mgr_live = puls_disk_manager_new ();
+    puls_disk_manager_set_mock_mode (mgr_live, FALSE);
+
+    AsyncScanTestCtx live_ctx = {
+        .loop = g_main_loop_new (NULL, FALSE),
+        .main_thread = g_thread_self (),
+        .signals_on_main_thread = TRUE,
+    };
+    puls_disk_manager_scan_async (mgr_live, NULL, on_async_scan_test_done, &live_ctx);
+    g_main_loop_run (live_ctx.loop);
+    g_main_loop_unref (live_ctx.loop);
+
+    g_assert_true (live_ctx.ok);
+    g_assert_no_error (live_ctx.error);
+    for (GList *l = puls_disk_manager_get_devices (mgr_live); l != NULL; l = l->next) {
+        const gchar *path = l->data;
+        g_assert_true (puls_disk_manager_is_real_disk_name (path));
+        PulsSmartData *d = puls_disk_manager_get_smart_data (mgr_live, path);
+        g_assert_nonnull (d);
+        g_assert_cmpint (puls_smart_data_get_form_factor_enum (d), !=, PULS_FORM_FACTOR_UNKNOWN);
+        if (puls_nvme_is_namespace_name (path)) {
+            g_assert_nonnull (puls_smart_data_get_controller_path (d));
+            g_assert_cmpuint (puls_smart_data_get_nvme_nsid (d), >=, 1);
+        }
+    }
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -2483,6 +2598,7 @@ main (int argc, char *argv[])
     g_test_add_func ("/basic/form-factor-detection-engine", test_form_factor_detection_engine);
     g_test_add_func ("/basic/standby-sleep-detection", test_standby_sleep_detection);
     g_test_add_func ("/basic/async-scan-cancellation", test_async_scan_cancellation);
+    g_test_add_func ("/basic/phase3-final-integration", test_phase3_final_integration);
 
     int result = g_test_run ();
 

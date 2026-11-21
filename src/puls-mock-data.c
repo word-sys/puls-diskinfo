@@ -58,13 +58,18 @@ create_mock_nvme_drive (void)
 {
     PulsSmartData *d = puls_smart_data_new ();
     puls_smart_data_set_device_path (d, "/dev/nvme0n1");
+    puls_smart_data_set_controller_path (d, "/dev/nvme0");
+    puls_smart_data_set_nvme_nsid (d, 1);
+    puls_smart_data_set_nvme_wwid (d, "eui.002538b511000001");
     puls_smart_data_set_model_name (d, "Samsung SSD 980 PRO 1TB");
     puls_smart_data_set_serial_number (d, "S5GXNF0R123456K");
     puls_smart_data_set_firmware_version (d, "5B2QGXA7");
     puls_smart_data_set_interface_type (d, "NVMe");
     puls_smart_data_set_transfer_mode (d, "PCIe 4.0 x4 | PCIe 4.0 x4");
     puls_smart_data_set_standard (d, "NVM Express 1.4");
-    puls_smart_data_set_form_factor (d, "M.2");
+    puls_smart_data_set_form_factor (d, "M.2 2280");
+    puls_smart_data_set_form_factor_enum (d, PULS_FORM_FACTOR_M2_2280);
+    puls_smart_data_set_power_state (d, PULS_POWER_STATE_ACTIVE);
     puls_smart_data_set_capacity_bytes (d, 1000204886016ULL);
     puls_smart_data_set_drive_type (d, PULS_DRIVE_TYPE_NVME_SSD);
     puls_smart_data_set_transport_protocol (d, PULS_TRANSPORT_PCIE);
@@ -124,13 +129,16 @@ create_mock_sata_ssd (void)
 {
     PulsSmartData *d = puls_smart_data_new ();
     puls_smart_data_set_device_path (d, "/dev/sda");
+    puls_smart_data_set_scsi_generic_path (d, "/dev/sg0");
     puls_smart_data_set_model_name (d, "Crucial CT500MX500SSD1");
     puls_smart_data_set_serial_number (d, "2145E5F67890");
     puls_smart_data_set_firmware_version (d, "M3CR043");
     puls_smart_data_set_interface_type (d, "SATA");
     puls_smart_data_set_transfer_mode (d, "SATA/600 | SATA/600");
     puls_smart_data_set_standard (d, "ACS-3 Revision 5");
-    puls_smart_data_set_form_factor (d, "2.5-inch");
+    puls_smart_data_set_form_factor (d, "2.5\"");
+    puls_smart_data_set_form_factor_enum (d, PULS_FORM_FACTOR_2_5_INCH);
+    puls_smart_data_set_power_state (d, PULS_POWER_STATE_ACTIVE);
     puls_smart_data_set_capacity_bytes (d, 500107862016ULL);
     puls_smart_data_set_drive_type (d, PULS_DRIVE_TYPE_SATA_SSD);
     puls_smart_data_set_transport_protocol (d, PULS_TRANSPORT_SATA);
@@ -175,13 +183,19 @@ create_mock_hdd (void)
 {
     PulsSmartData *d = puls_smart_data_new ();
     puls_smart_data_set_device_path (d, "/dev/sdb");
+    puls_smart_data_set_scsi_generic_path (d, "/dev/sg1");
+    puls_smart_data_set_raid_array_path (d, "/dev/md0");
+    puls_smart_data_set_raid_level (d, "RAID1");
+    puls_smart_data_set_raid_member_status (d, "Member of /dev/md0 [RAID1]");
     puls_smart_data_set_model_name (d, "Seagate ST8000VN004-2M2101");
     puls_smart_data_set_serial_number (d, "WSD1ABCD");
     puls_smart_data_set_firmware_version (d, "SC60");
     puls_smart_data_set_interface_type (d, "SATA");
     puls_smart_data_set_transfer_mode (d, "SATA/600 | SATA/600");
     puls_smart_data_set_standard (d, "ACS-4 Revision 10");
-    puls_smart_data_set_form_factor (d, "3.5-inch");
+    puls_smart_data_set_form_factor (d, "3.5\"");
+    puls_smart_data_set_form_factor_enum (d, PULS_FORM_FACTOR_3_5_INCH);
+    puls_smart_data_set_power_state (d, PULS_POWER_STATE_ACTIVE);
     puls_smart_data_set_rotation_rpm (d, 7200);
     puls_smart_data_set_capacity_bytes (d, 8001563222016ULL);
     puls_smart_data_set_drive_type (d, PULS_DRIVE_TYPE_HDD);
@@ -230,6 +244,7 @@ create_mock_usb_drive (void)
 {
     PulsSmartData *d = puls_smart_data_new ();
     puls_smart_data_set_device_path (d, "/dev/sdc");
+    puls_smart_data_set_scsi_generic_path (d, "/dev/sg2");
     puls_smart_data_set_model_name (d, "SanDisk Extreme 55AE");
     puls_smart_data_set_serial_number (d, "322109845612");
     puls_smart_data_set_firmware_version (d, "1012");
@@ -238,7 +253,9 @@ create_mock_usb_drive (void)
     puls_smart_data_set_usb_speed (d, PULS_USB_SPEED_SUPER_PLUS_X2);
     puls_smart_data_set_usb_bridge_chip (d, "ASMedia ASM2364 NVMe-USB Bridge");
     puls_smart_data_set_standard (d, "NVM Express 1.3 (via Bridge)");
-    puls_smart_data_set_form_factor (d, "USB Drive / External");
+    puls_smart_data_set_form_factor (d, "USB / External");
+    puls_smart_data_set_form_factor_enum (d, PULS_FORM_FACTOR_USB_EXTERNAL);
+    puls_smart_data_set_power_state (d, PULS_POWER_STATE_ACTIVE);
     puls_smart_data_set_capacity_bytes (d, 1000204886016ULL);
     puls_smart_data_set_drive_type (d, PULS_DRIVE_TYPE_USB);
     puls_smart_data_set_transport_protocol (d, PULS_TRANSPORT_USB);
