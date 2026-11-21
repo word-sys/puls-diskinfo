@@ -13,6 +13,7 @@
  * (at your option) any later version.
  */
 
+#define _DEFAULT_SOURCE
 #define _POSIX_C_SOURCE 200809L
 
 #include "puls-helper-protocol.h"
@@ -26,6 +27,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -36,41 +38,83 @@
  * @path: Device node path.
  *
  * Validates that a device path looks like a real storage device node.
- * Accepts: /dev/sda, /dev/nvme0, /dev/nvme0n1, /dev/hda, /dev/vda,
- * /dev/mmcblk0, /dev/sg0. Rejects everything else to prevent injection.
+ * Accepts whole-disk /dev/sd*, /dev/nvme*, /dev/hd*, /dev/vd*, /dev/xvd*,
+ * /dev/mmcblk*, and /dev/sg* nodes via the strict protocol syntax whitelist.
+ * Rejects traversal, shell metacharacters, partitions, and pseudo-devices.
  */
 static int
 is_valid_device (const char *path)
 {
-    if (path == NULL || strlen (path) < 6)
+    return puls_helper_is_valid_device_syntax (path);
+}
+
+/**
+ * verify_device_node:
+ * @device: Candidate device path.
+ * @out_st: (out) (optional): Populated stat buffer from lstat().
+ * @out_err_code: (out): Protocol error token on failure.
+ * @out_err_json: (out): Protocol JSON error payload on failure.
+ *
+ * Performs multi-layer path sanitization and anti-hijacking validation:
+ * 1. Strict syntactic whitelist (`is_valid_device`).
+ * 2. `lstat()` check ensuring the node exists, is NOT a symlink (`!S_ISLNK`),
+ *    and IS a block or character special device (`S_ISBLK || S_ISCHR`).
+ * 3. `realpath()` check ensuring canonical path equals @device exactly.
+ *
+ * Returns: 1 if valid and verified, 0 on error.
+ */
+static int
+verify_device_node (const char  *device,
+                    struct stat *out_st,
+                    const char **out_err_code,
+                    const char **out_err_json)
+{
+    if (!is_valid_device (device)) {
+        if (out_err_code)
+            *out_err_code = PULS_HELPER_ERR_INVALID_DEVICE;
+        if (out_err_json)
+            *out_err_json = "{\"error\":\"Invalid device path\"}\n";
         return 0;
-
-    if (strncmp (path, "/dev/", 5) != 0)
-        return 0;
-
-    const char *name = path + 5;
-
-    for (const char *p = name; *p != '\0'; p++) {
-        if (!isalnum ((unsigned char)*p))
-            return 0;
     }
 
-    if (strncmp (name, "sd", 2) == 0 ||
-        strncmp (name, "nvme", 4) == 0 ||
-        strncmp (name, "hd", 2) == 0 ||
-        strncmp (name, "vd", 2) == 0 ||
-        strncmp (name, "mmcblk", 6) == 0)
-        return 1;
-
-    if (strncmp (name, "sg", 2) == 0 && isdigit ((unsigned char)name[2])) {
-        for (const char *p = name + 2; *p != '\0'; p++) {
-            if (!isdigit ((unsigned char)*p))
-                return 0;
+    struct stat lst;
+    if (lstat (device, &lst) != 0) {
+        if (errno == ENOENT) {
+            if (out_err_code)
+                *out_err_code = PULS_HELPER_ERR_NOT_FOUND;
+            if (out_err_json)
+                *out_err_json = "{\"error\":\"Device does not exist\"}\n";
+        } else {
+            if (out_err_code)
+                *out_err_code = PULS_HELPER_ERR_INVALID_DEVICE;
+            if (out_err_json)
+                *out_err_json = "{\"error\":\"Cannot stat device node\"}\n";
         }
-        return 1;
+        return 0;
     }
 
-    return 0;
+    if (S_ISLNK (lst.st_mode) ||
+        (!S_ISBLK (lst.st_mode) && !S_ISCHR (lst.st_mode))) {
+        if (out_err_code)
+            *out_err_code = PULS_HELPER_ERR_INVALID_DEVICE;
+        if (out_err_json)
+            *out_err_json = "{\"error\":\"Path is not a physical block/char device node\"}\n";
+        return 0;
+    }
+
+    char resolved[PATH_MAX];
+    if (realpath (device, resolved) == NULL || strcmp (resolved, device) != 0) {
+        if (out_err_code)
+            *out_err_code = PULS_HELPER_ERR_INVALID_DEVICE;
+        if (out_err_json)
+            *out_err_json = "{\"error\":\"Device path failed canonical realpath check\"}\n";
+        return 0;
+    }
+
+    if (out_st != NULL)
+        *out_st = lst;
+
+    return 1;
 }
 
 static void
@@ -114,14 +158,16 @@ parse_u64_strict (const char *str, uint64_t *out_val)
 static void
 run_single_command (const char *device, const char *action)
 {
-    if (!is_valid_device (device)) {
+    const char *err_code = NULL;
+    const char *err_json = NULL;
+
+    if (!verify_device_node (device, NULL, &err_code, &err_json)) {
+        if (err_code != NULL && strcmp (err_code, PULS_HELPER_ERR_NOT_FOUND) == 0) {
+            fprintf (stderr, "Error: Device does not exist: %s\n", device);
+            exit (3);
+        }
         fprintf (stderr, "Error: Invalid device path: %s\n", device);
         exit (2);
-    }
-
-    if (access (device, F_OK) != 0) {
-        fprintf (stderr, "Error: Device does not exist: %s\n", device);
-        exit (3);
     }
 
     if (action == NULL) {
@@ -162,9 +208,10 @@ handle_smartctl_command (const char *device, const char *action)
         return;
     }
 
-    if (access (device, F_OK) != 0) {
-        send_frame_err (PULS_HELPER_ERR_NOT_FOUND,
-                        "{\"error\":\"Device does not exist\"}\n");
+    const char *err_code = NULL;
+    const char *err_json = NULL;
+    if (!verify_device_node (device, NULL, &err_code, &err_json)) {
+        send_frame_err (err_code, err_json);
         return;
     }
 
@@ -273,16 +320,29 @@ handle_stream_scan (const char *device, const char *start_str, const char *len_s
         return;
     }
 
-    if (access (device, F_OK) != 0) {
-        send_frame_err (PULS_HELPER_ERR_NOT_FOUND,
-                        "{\"error\":\"Device does not exist\"}\n");
+    struct stat lst;
+    const char *err_code = NULL;
+    const char *err_json = NULL;
+    if (!verify_device_node (device, &lst, &err_code, &err_json)) {
+        send_frame_err (err_code, err_json);
         return;
     }
 
-    int fd = open (device, O_RDONLY | O_CLOEXEC);
+    int fd = open (device, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
     if (fd < 0) {
         send_frame_err (PULS_HELPER_ERR_IO,
                         "{\"error\":\"Failed to open device for read-only scan\"}\n");
+        return;
+    }
+
+    struct stat fst;
+    if (fstat (fd, &fst) != 0 ||
+        (!S_ISBLK (fst.st_mode) && !S_ISCHR (fst.st_mode)) ||
+        fst.st_ino != lst.st_ino ||
+        fst.st_rdev != lst.st_rdev) {
+        close (fd);
+        send_frame_err (PULS_HELPER_ERR_INVALID_DEVICE,
+                        "{\"error\":\"Opened descriptor failed device verification\"}\n");
         return;
     }
 

@@ -589,6 +589,13 @@ puls_run_smartctl_sync_with_options (const gchar *device_path,
                                      gboolean     check_standby,
                                      GError     **error)
 {
+    if (!puls_device_path_is_valid (device_path)) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                     "Invalid or unsafe device path: %s",
+                     device_path ? device_path : "(null)");
+        return NULL;
+    }
+
     g_autofree gchar *cmd = puls_build_helper_read_command (device_path, check_standby);
     gchar *res = communicate_with_helper (cmd, error);
     if (res != NULL)
@@ -648,21 +655,152 @@ puls_detect_smartmontools (gchar **version_out)
     return TRUE;
 }
 
+/**
+ * puls_device_path_is_valid:
+ * @path: (nullable): Device path string.
+ *
+ * Strictly validates that @path conforms to the whole-disk storage node syntax
+ * whitelist (`/dev/sda`, `/dev/nvme0`, `/dev/nvme0n1`, `/dev/vda`, `/dev/xvda`,
+ * `/dev/hda`, `/dev/mmcblk0`, `/dev/sg0`). Rejects directory traversal (`..`),
+ * shell metacharacters, partitions (`/dev/sda1`, `/dev/nvme0n1p1`), and
+ * pseudo-devices (`/dev/null`, `/dev/loop0`).
+ *
+ * Returns: %TRUE if @path satisfies the syntactic whitelist.
+ */
 gboolean
 puls_device_path_is_valid (const gchar *path)
 {
-    if (path == NULL)
+    return puls_helper_is_valid_device_syntax (path) != 0;
+}
+
+/**
+ * puls_validate_device_node_in_dir:
+ * @dev_root: Base directory for device nodes (e.g. `"/dev"` or a test directory).
+ * @device_path: Full path to the device node inside @dev_root (or `/dev/<name>`).
+ * @error: (out) (optional): Return location for a #GError.
+ *
+ * Performs multi-layer path sanitization and anti-hijacking verification:
+ * 1. Validates the basename against the strict whole-disk device syntax whitelist.
+ * 2. Performs `lstat()` and rejects symlinks (`S_ISLNK`) or non-device files
+ *    (requiring `S_ISBLK` or `S_ISCHR`).
+ * 3. Resolves both @dev_root and the target node via `realpath()` and verifies
+ *    the canonical target path matches `<canonical_root>/<basename>` with no
+ *    symlink indirection or traversal.
+ *
+ * Returns: %TRUE if the device node is a genuine, non-symlink block/character
+ * device inside @dev_root, %FALSE otherwise.
+ */
+gboolean
+puls_validate_device_node_in_dir (const gchar *dev_root,
+                                  const gchar *device_path,
+                                  GError     **error)
+{
+    if (dev_root == NULL || *dev_root == '\0' ||
+        device_path == NULL || *device_path == '\0') {
+        g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                             "Device root or path is NULL or empty");
         return FALSE;
+    }
 
-    if (g_str_has_prefix (path, "/dev/sd") ||
-        g_str_has_prefix (path, "/dev/nvme") ||
-        g_str_has_prefix (path, "/dev/hd") ||
-        g_str_has_prefix (path, "/dev/vd") ||
-        g_str_has_prefix (path, "/dev/mmcblk") ||
-        (g_str_has_prefix (path, "/dev/sg") && puls_scsi_is_generic_name (path)))
-        return TRUE;
+    const gchar *root_prefix = dev_root;
+    g_autofree gchar *trimmed_root = NULL;
+    gsize root_len = strlen (dev_root);
+    while (root_len > 1 && dev_root[root_len - 1] == '/')
+        root_len--;
+    trimmed_root = g_strndup (dev_root, root_len);
+    root_prefix = trimmed_root;
 
-    return FALSE;
+    if (!g_str_has_prefix (device_path, root_prefix) ||
+        device_path[root_len] != '/' ||
+        device_path[root_len + 1] == '\0') {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                     "Device path '%s' is not directly under '%s'",
+                     device_path, root_prefix);
+        return FALSE;
+    }
+
+    const gchar *base_name = device_path + root_len + 1;
+    if (strchr (base_name, '/') != NULL) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                     "Subdirectory or traversal in device name '%s'",
+                     device_path);
+        return FALSE;
+    }
+
+    g_autofree gchar *canonical_dev_syntax = g_strdup_printf ("/dev/%s", base_name);
+    if (!puls_device_path_is_valid (canonical_dev_syntax)) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                     "Device name '%s' failed strict syntax whitelist",
+                     base_name);
+        return FALSE;
+    }
+
+    struct stat lst;
+    if (lstat (device_path, &lst) != 0) {
+        gint saved_errno = errno;
+        g_set_error (error, G_IO_ERROR, g_io_error_from_errno (saved_errno),
+                     "Cannot lstat device node '%s': %s",
+                     device_path, g_strerror (saved_errno));
+        return FALSE;
+    }
+
+    if (S_ISLNK (lst.st_mode)) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                     "Symlink hijacking rejected for '%s'", device_path);
+        return FALSE;
+    }
+
+    if (!S_ISBLK (lst.st_mode) && !S_ISCHR (lst.st_mode)) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                     "Path '%s' is not a block or character device node",
+                     device_path);
+        return FALSE;
+    }
+
+    char resolved_root[PATH_MAX];
+    char resolved_node[PATH_MAX];
+    if (realpath (root_prefix, resolved_root) == NULL ||
+        realpath (device_path, resolved_node) == NULL) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                     "Canonical realpath check failed for '%s'", device_path);
+        return FALSE;
+    }
+
+    g_autofree gchar *expected_resolved = g_strdup_printf ("%s/%s",
+                                                           resolved_root,
+                                                           base_name);
+    if (g_strcmp0 (resolved_node, expected_resolved) != 0) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                     "Canonical path mismatch for '%s' (resolved to '%s')",
+                     device_path, resolved_node);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+/**
+ * puls_validate_device_node:
+ * @device_path: Full path under `/dev` (e.g. `"/dev/nvme0n1"`).
+ * @error: (out) (optional): Return location for a #GError.
+ *
+ * Convenience wrapper around puls_validate_device_node_in_dir() with
+ * `dev_root` set to `"/dev"`.
+ *
+ * Returns: %TRUE if @device_path is a verified block/char device node in `/dev`.
+ */
+gboolean
+puls_validate_device_node (const gchar *device_path,
+                           GError     **error)
+{
+    if (!puls_device_path_is_valid (device_path)) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                     "Invalid device path syntax: %s",
+                     device_path ? device_path : "(null)");
+        return FALSE;
+    }
+
+    return puls_validate_device_node_in_dir ("/dev", device_path, error);
 }
 
 gchar *
@@ -2064,6 +2202,13 @@ puls_run_smartctl_action_finish (GAsyncResult *result, GError **error)
 gchar *
 puls_run_smartctl_action_sync (const gchar *device_path, const gchar *action, GError **error)
 {
+    if (!puls_device_path_is_valid (device_path)) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                     "Invalid or unsafe device path: %s",
+                     device_path ? device_path : "(null)");
+        return NULL;
+    }
+
     g_autofree gchar *cmd = puls_helper_format_action (device_path, action);
     gchar *res = communicate_with_helper (cmd, error);
     if (res != NULL)

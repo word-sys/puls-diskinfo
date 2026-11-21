@@ -46,3 +46,140 @@
 #define PULS_HELPER_ERR_NOT_FOUND       "E_DEVICE_NOT_FOUND"
 #define PULS_HELPER_ERR_IO              "E_IO_ERROR"
 #define PULS_HELPER_ERR_INTERNAL        "E_INTERNAL"
+
+#include <stddef.h>
+#include <string.h>
+
+static inline int
+puls_helper_is_lower_alpha (char c)
+{
+    return (c >= 'a' && c <= 'z');
+}
+
+static inline int
+puls_helper_is_digit (char c)
+{
+    return (c >= '0' && c <= '9');
+}
+
+static inline int
+puls_helper_match_alpha_disk (const char *name, const char *prefix)
+{
+    size_t plen = strlen (prefix);
+    if (strncmp (name, prefix, plen) != 0)
+        return 0;
+
+    const char *p = name + plen;
+    size_t count = 0;
+    while (*p != '\0') {
+        if (!puls_helper_is_lower_alpha (*p))
+            return 0;
+        count++;
+        p++;
+    }
+
+    return (count >= 1 && count <= 4);
+}
+
+static inline int
+puls_helper_match_uint_suffix (const char *p, size_t max_digits, int allow_zero)
+{
+    if (!puls_helper_is_digit (*p))
+        return 0;
+    if (!allow_zero && *p == '0' && *(p + 1) == '\0')
+        return 0;
+
+    size_t digits = 0;
+    while (*p != '\0') {
+        if (!puls_helper_is_digit (*p))
+            return 0;
+        digits++;
+        p++;
+    }
+
+    return (digits >= 1 && digits <= max_digits);
+}
+
+/**
+ * puls_helper_is_valid_device_syntax:
+ * @path: Candidate device path string.
+ *
+ * Strict whitelist validator for storage device node paths. Rejects directory
+ * traversal (`..`), nested slashes, whitespace, shell metacharacters,
+ * partitions, and pseudo devices.
+ *
+ * Accepted patterns:
+ * - `/dev/sd[a-z]{1,4}`, `/dev/hd[a-z]{1,4}`, `/dev/vd[a-z]{1,4}`, `/dev/xvd[a-z]{1,4}`
+ * - `/dev/nvme[0-9]{1,3}` (controller)
+ * - `/dev/nvme[0-9]{1,3}(c[0-9]{1,3})?n[1-9][0-9]{0,3}` (namespace)
+ * - `/dev/mmcblk[0-9]{1,3}`
+ * - `/dev/sg[0-9]{1,4}`
+ *
+ * Returns: 1 if valid, 0 otherwise.
+ */
+static inline int
+puls_helper_is_valid_device_syntax (const char *path)
+{
+    if (path == NULL)
+        return 0;
+
+    size_t len = strlen (path);
+    if (len < 8 || len >= 32)
+        return 0;
+
+    if (strncmp (path, "/dev/", 5) != 0)
+        return 0;
+
+    const char *name = path + 5;
+
+    /* Reject any non-lowercase-alphanumeric character (blocks /, ., ;, |, &, $, spaces, uppercase) */
+    for (const char *p = name; *p != '\0'; p++) {
+        if (!puls_helper_is_lower_alpha (*p) && !puls_helper_is_digit (*p))
+            return 0;
+    }
+
+    if (puls_helper_match_alpha_disk (name, "sd") ||
+        puls_helper_match_alpha_disk (name, "hd") ||
+        puls_helper_match_alpha_disk (name, "vd") ||
+        puls_helper_match_alpha_disk (name, "xvd"))
+        return 1;
+
+    if (strncmp (name, "mmcblk", 6) == 0)
+        return puls_helper_match_uint_suffix (name + 6, 3, 1);
+
+    if (strncmp (name, "sg", 2) == 0)
+        return puls_helper_match_uint_suffix (name + 2, 4, 1);
+
+    if (strncmp (name, "nvme", 4) == 0) {
+        const char *p = name + 4;
+        size_t ctrl_digits = 0;
+        while (puls_helper_is_digit (*p)) {
+            ctrl_digits++;
+            p++;
+        }
+        if (ctrl_digits == 0 || ctrl_digits > 3)
+            return 0;
+        if (*p == '\0')
+            return 1; /* /dev/nvme<N> controller */
+
+        if (*p == 'c') {
+            p++;
+            size_t c_digits = 0;
+            while (puls_helper_is_digit (*p)) {
+                c_digits++;
+                p++;
+            }
+            if (c_digits == 0 || c_digits > 3)
+                return 0;
+        }
+
+        if (*p != 'n')
+            return 0;
+        p++;
+        if (*p == '0')
+            return 0; /* NSID must be >= 1 */
+        return puls_helper_match_uint_suffix (p, 4, 0);
+    }
+
+    return 0;
+}

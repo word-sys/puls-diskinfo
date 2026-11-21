@@ -7,6 +7,8 @@
  */
 
 #include <glib.h>
+#include <sys/stat.h>
+#include "../helper/puls-helper-protocol.h"
 #include "puls-smart-data.h"
 #include "puls-smart-parser.h"
 #include "puls-disk-manager.h"
@@ -2700,6 +2702,237 @@ test_helper_protocol_handshake (void)
 #endif
 }
 
+static void
+test_path_sanitization_anti_injection (void)
+{
+    /* 1. Directory traversal & path injection must be rejected */
+    const gchar *traversal_paths[] = {
+        "/dev/../etc/passwd",
+        "/dev/sda/../../etc/shadow",
+        "/dev/./sda",
+        "../dev/sda",
+        "/dev/..sda",
+        "/dev/sda/..",
+        "/dev//sda",
+        "/dev/sda/",
+        "dev/sda",
+        "/tmp/sda",
+        NULL
+    };
+    for (gsize i = 0; traversal_paths[i] != NULL; i++) {
+        g_assert_false (puls_device_path_is_valid (traversal_paths[i]));
+        g_assert_cmpint (puls_helper_is_valid_device_syntax (traversal_paths[i]), ==, 0);
+    }
+
+    /* 2. Shell metacharacter & command injection must be rejected */
+    const gchar *injection_paths[] = {
+        "/dev/sda;reboot",
+        "/dev/sda|cat /etc/passwd",
+        "/dev/sda&&id",
+        "/dev/sda$(id)",
+        "/dev/sda`id`",
+        "/dev/sda > /tmp/pwn",
+        "/dev/sda --help",
+        "/dev/sda\nQUIT",
+        "/dev/sda\tstandby",
+        "/dev/sda'\"\\",
+        NULL
+    };
+    for (gsize i = 0; injection_paths[i] != NULL; i++) {
+        g_assert_false (puls_device_path_is_valid (injection_paths[i]));
+        g_assert_cmpint (puls_helper_is_valid_device_syntax (injection_paths[i]), ==, 0);
+    }
+
+    /* 3. Pseudo-devices, partitions, bare prefixes, and uppercase must be rejected */
+    const gchar *rejected_nodes[] = {
+        NULL,
+        "",
+        "/dev/",
+        "/dev/null",
+        "/dev/zero",
+        "/dev/urandom",
+        "/dev/random",
+        "/dev/tty",
+        "/dev/mem",
+        "/dev/kmsg",
+        "/dev/loop0",
+        "/dev/ram0",
+        "/dev/zram0",
+        "/dev/dm-0",
+        "/dev/md0",
+        "/dev/sda1",
+        "/dev/sda12",
+        "/dev/nvme0n1p1",
+        "/dev/nvme0p1",
+        "/dev/nvme0n0",
+        "/dev/mmcblk0p1",
+        "/dev/sg0p1",
+        "/dev/sd",
+        "/dev/hd",
+        "/dev/vd",
+        "/dev/xvd",
+        "/dev/nvme",
+        "/dev/mmcblk",
+        "/dev/sg",
+        "/dev/sga",
+        "/dev/SDA",
+        "/dev/NVME0N1",
+        "/dev/sdabcde",
+        NULL
+    };
+    for (gsize i = 0; rejected_nodes[i] != NULL || i == 0; i++) {
+        g_assert_false (puls_device_path_is_valid (rejected_nodes[i]));
+        g_assert_cmpint (puls_helper_is_valid_device_syntax (rejected_nodes[i]), ==, 0);
+        if (i > 0 && rejected_nodes[i] == NULL)
+            break;
+    }
+
+    /* 4. Valid whole-disk & controller device syntax must be accepted */
+    const gchar *valid_paths[] = {
+        "/dev/sda",
+        "/dev/sdz",
+        "/dev/sdab",
+        "/dev/hda",
+        "/dev/vda",
+        "/dev/xvda",
+        "/dev/nvme0",
+        "/dev/nvme12",
+        "/dev/nvme0n1",
+        "/dev/nvme0n16",
+        "/dev/nvme1c2n1",
+        "/dev/mmcblk0",
+        "/dev/mmcblk12",
+        "/dev/sg0",
+        "/dev/sg42",
+        NULL
+    };
+    for (gsize i = 0; valid_paths[i] != NULL; i++) {
+        g_assert_true (puls_device_path_is_valid (valid_paths[i]));
+        g_assert_cmpint (puls_helper_is_valid_device_syntax (valid_paths[i]), ==, 1);
+    }
+
+    /* 5. Anti-symlink hijacking & non-device file spoofing verification */
+    g_autoptr(GError) err = NULL;
+    g_autofree gchar *tmp_dev = g_dir_make_tmp ("puls_test_dev_guard_XXXXXX", &err);
+    g_assert_no_error (err);
+    g_assert_nonnull (tmp_dev);
+
+    /* 5a. Regular file named 'sda' inside dev_root must be rejected (not S_ISBLK/S_ISCHR) */
+    g_autofree gchar *fake_file_sda = g_build_filename (tmp_dev, "sda", NULL);
+    g_assert_true (g_file_set_contents (fake_file_sda, "fake_block_data", -1, &err));
+    g_assert_no_error (err);
+
+    g_assert_false (puls_validate_device_node_in_dir (tmp_dev, fake_file_sda, &err));
+    g_assert_error (err, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+    g_clear_error (&err);
+
+    /* 5b. Symlink hijacking 'sdb -> /etc/passwd' or 'sdc -> /dev/null' must be rejected */
+    g_autofree gchar *symlink_sdb = g_build_filename (tmp_dev, "sdb", NULL);
+    g_assert_cmpint (symlink ("/etc/passwd", symlink_sdb), ==, 0);
+
+    g_assert_false (puls_validate_device_node_in_dir (tmp_dev, symlink_sdb, &err));
+    g_assert_error (err, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+    g_clear_error (&err);
+
+    g_autofree gchar *symlink_nvme = g_build_filename (tmp_dev, "nvme0n1", NULL);
+    g_assert_cmpint (symlink ("/dev/null", symlink_nvme), ==, 0);
+
+    g_assert_false (puls_validate_device_node_in_dir (tmp_dev, symlink_nvme, &err));
+    g_assert_error (err, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+    g_clear_error (&err);
+
+    /* 5c. Directory traversal under tmp_dev must be rejected */
+    g_autofree gchar *trav_in_tmp = g_strdup_printf ("%s/../etc/passwd", tmp_dev);
+    g_assert_false (puls_validate_device_node_in_dir (tmp_dev, trav_in_tmp, &err));
+    g_assert_error (err, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+    g_clear_error (&err);
+
+    unlink (fake_file_sda);
+    unlink (symlink_sdb);
+    unlink (symlink_nvme);
+    rmdir (tmp_dev);
+
+    /* 5d. If host has real /dev/nvme0 or /dev/nvme0n1 or /dev/sda, verify puls_validate_device_node accepts it */
+    const gchar *host_candidates[] = { "/dev/nvme0", "/dev/nvme0n1", "/dev/sda", "/dev/vda", NULL };
+    for (gsize i = 0; host_candidates[i] != NULL; i++) {
+        struct stat st;
+        if (lstat (host_candidates[i], &st) == 0 &&
+            !S_ISLNK (st.st_mode) &&
+            (S_ISBLK (st.st_mode) || S_ISCHR (st.st_mode))) {
+            g_assert_true (puls_validate_device_node (host_candidates[i], &err));
+            g_assert_no_error (err);
+        }
+    }
+
+    /* 5e. Client sync smartctl wrappers must reject injection paths before spawning anything */
+    g_autofree gchar *bad_out = puls_run_smartctl_sync ("/dev/sda;reboot", &err);
+    g_assert_null (bad_out);
+    g_assert_error (err, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+    g_clear_error (&err);
+
+    g_autofree gchar *bad_act = puls_run_smartctl_action_sync ("/dev/../etc/passwd", "short", &err);
+    g_assert_null (bad_act);
+    g_assert_error (err, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+    g_clear_error (&err);
+
+#ifdef TEST_HELPER_BIN
+    /* 6. Live Privileged Helper IPC anti-injection test */
+    g_autoptr(GSubprocess) proc = g_subprocess_new (
+        G_SUBPROCESS_FLAGS_STDIN_PIPE | G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_SILENCE,
+        &err, TEST_HELPER_BIN, NULL);
+    g_assert_no_error (err);
+    g_assert_nonnull (proc);
+
+    GOutputStream *h_in = g_subprocess_get_stdin_pipe (proc);
+    GInputStream *raw_out = g_subprocess_get_stdout_pipe (proc);
+    g_autoptr(GDataInputStream) h_out = g_data_input_stream_new (raw_out);
+
+    gboolean hs_ok = FALSE;
+    g_autofree gchar *hs_err = NULL;
+    g_autofree gchar *hs_payload = NULL;
+    g_assert_true (puls_helper_exchange_command (h_in, h_out, "HELLO v2\n",
+                                                 &hs_ok, &hs_err, &hs_payload, &err));
+    g_assert_no_error (err);
+    g_assert_true (hs_ok);
+
+    const gchar *helper_attack_cmds[] = {
+        "READ_SMART /dev/../etc/passwd\n",
+        "READ_SMART /dev/sda;reboot\n",
+        "READ_SMART /dev/sda|id\n",
+        "READ_SMART /dev/null\n",
+        "READ_SMART /dev/sda1\n",
+        "ACTION /dev/../etc/passwd short\n",
+        "ACTION /dev/sda;reboot short\n",
+        "STREAM_SCAN /dev/../etc/passwd 0 512\n",
+        "STREAM_SCAN /dev/sda;reboot 0 512\n",
+        "STREAM_SCAN /dev/null 0 512\n",
+        NULL
+    };
+
+    for (gsize i = 0; helper_attack_cmds[i] != NULL; i++) {
+        gboolean ok = TRUE;
+        g_autofree gchar *err_code = NULL;
+        g_autofree gchar *payload = NULL;
+
+        g_assert_true (puls_helper_exchange_command (h_in, h_out, helper_attack_cmds[i],
+                                                     &ok, &err_code, &payload, &err));
+        g_assert_no_error (err);
+        g_assert_false (ok);
+        g_assert_cmpstr (err_code, ==, "E_INVALID_DEVICE");
+    }
+
+    gboolean quit_ok = FALSE;
+    g_autofree gchar *quit_err = NULL;
+    g_autofree gchar *quit_payload = NULL;
+    g_assert_true (puls_helper_exchange_command (h_in, h_out, "QUIT\n",
+                                                 &quit_ok, &quit_err, &quit_payload, &err));
+    g_assert_no_error (err);
+    g_assert_true (quit_ok);
+    g_assert_true (g_subprocess_wait_check (proc, NULL, &err));
+    g_assert_no_error (err);
+#endif
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -2736,6 +2969,7 @@ main (int argc, char *argv[])
     g_test_add_func ("/basic/async-scan-cancellation", test_async_scan_cancellation);
     g_test_add_func ("/basic/phase3-final-integration", test_phase3_final_integration);
     g_test_add_func ("/basic/helper-protocol-handshake", test_helper_protocol_handshake);
+    g_test_add_func ("/basic/path-sanitization-anti-injection", test_path_sanitization_anti_injection);
 
     int result = g_test_run ();
 

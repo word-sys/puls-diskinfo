@@ -118,9 +118,14 @@ gchar   *puls_run_smartctl_action_sync   (const gchar          *device_path,
                                           GError              **error);
 
 
-gboolean puls_detect_smartmontools     (gchar **version_out);
-gboolean puls_device_path_is_valid     (const gchar *path);
-gchar   *puls_get_helper_path         (void);
+gboolean puls_detect_smartmontools          (gchar **version_out);
+gboolean puls_device_path_is_valid          (const gchar *path);
+gboolean puls_validate_device_node_in_dir   (const gchar *dev_root,
+                                             const gchar *device_path,
+                                             GError     **error);
+gboolean puls_validate_device_node          (const gchar *device_path,
+                                             GError     **error);
+gchar   *puls_get_helper_path               (void);
 
 PulsDriveType         puls_detect_drive_type          (const gchar *device_path);
 PulsTransportProtocol puls_detect_transport_protocol  (const gchar *device_path);
