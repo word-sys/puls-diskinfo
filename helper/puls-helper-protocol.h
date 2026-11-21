@@ -32,6 +32,12 @@
 #define PULS_HELPER_CMD_STREAM_SCAN     "STREAM_SCAN"
 #define PULS_HELPER_CMD_QUIT            "QUIT"
 
+/* Whitelisted Subcommands / Options */
+#define PULS_HELPER_READ_OPT_STANDBY    "standby"
+#define PULS_HELPER_ACTION_SHORT        "short"
+#define PULS_HELPER_ACTION_LONG         "long"
+#define PULS_HELPER_ACTION_ABORT        "abort"
+
 /* Framed Response Prefixes (Helper -> Client) */
 #define PULS_HELPER_RESP_OK             "OK"
 #define PULS_HELPER_RESP_ERR            "ERR"
@@ -40,6 +46,7 @@
 #define PULS_HELPER_ERR_HANDSHAKE_REQ   "E_HANDSHAKE_REQUIRED"
 #define PULS_HELPER_ERR_VERSION         "E_VERSION_MISMATCH"
 #define PULS_HELPER_ERR_UNKNOWN_CMD     "E_UNKNOWN_CMD"
+#define PULS_HELPER_ERR_INVALID_SUBCMD  "E_INVALID_SUBCMD"
 #define PULS_HELPER_ERR_INVALID_ARG     "E_INVALID_ARG"
 #define PULS_HELPER_ERR_INVALID_DEVICE  "E_INVALID_DEVICE"
 #define PULS_HELPER_ERR_INVALID_ACTION  "E_INVALID_ACTION"
@@ -182,4 +189,81 @@ puls_helper_is_valid_device_syntax (const char *path)
     }
 
     return 0;
+}
+
+/**
+ * puls_helper_is_valid_command:
+ * @cmd: Top-level protocol command verb.
+ *
+ * Strictly validates @cmd against the minimal privileged helper whitelist:
+ * `HELLO`, `READ_SMART`, `ACTION`, `STREAM_SCAN`, `QUIT`.
+ *
+ * Returns: 1 if whitelisted, 0 otherwise.
+ */
+static inline int
+puls_helper_is_valid_command (const char *cmd)
+{
+    if (cmd == NULL)
+        return 0;
+
+    return (strcmp (cmd, PULS_HELPER_CMD_HELLO) == 0 ||
+            strcmp (cmd, PULS_HELPER_CMD_READ_SMART) == 0 ||
+            strcmp (cmd, PULS_HELPER_CMD_ACTION) == 0 ||
+            strcmp (cmd, PULS_HELPER_CMD_STREAM_SCAN) == 0 ||
+            strcmp (cmd, PULS_HELPER_CMD_QUIT) == 0);
+}
+
+/**
+ * puls_helper_is_valid_read_option:
+ * @opt: Optional subcommand modifier for `READ_SMART`.
+ *
+ * Strictly allows only `NULL` (default SMART read) or `"standby"` (`-n standby`).
+ *
+ * Returns: 1 if whitelisted, 0 otherwise.
+ */
+static inline int
+puls_helper_is_valid_read_option (const char *opt)
+{
+    if (opt == NULL)
+        return 1;
+
+    return (strcmp (opt, PULS_HELPER_READ_OPT_STANDBY) == 0);
+}
+
+/**
+ * puls_helper_is_valid_action:
+ * @action: Self-test action subcommand for `ACTION`.
+ *
+ * Strictly allows only the auditable self-test subset:
+ * `"short"`, `"long"`, and `"abort"`.
+ *
+ * Returns: 1 if whitelisted, 0 otherwise.
+ */
+static inline int
+puls_helper_is_valid_action (const char *action)
+{
+    if (action == NULL)
+        return 0;
+
+    return (strcmp (action, PULS_HELPER_ACTION_SHORT) == 0 ||
+            strcmp (action, PULS_HELPER_ACTION_LONG) == 0 ||
+            strcmp (action, PULS_HELPER_ACTION_ABORT) == 0);
+}
+
+/**
+ * puls_helper_is_valid_cli_subcommand:
+ * @subcmd: Optional subcommand for single-shot CLI invocation.
+ *
+ * Strictly allows `NULL` (SMART read), `"standby"`, `"short"`, `"long"`, or `"abort"`.
+ *
+ * Returns: 1 if whitelisted, 0 otherwise.
+ */
+static inline int
+puls_helper_is_valid_cli_subcommand (const char *subcmd)
+{
+    if (subcmd == NULL)
+        return 1;
+
+    return (puls_helper_is_valid_read_option (subcmd) ||
+            puls_helper_is_valid_action (subcmd));
 }

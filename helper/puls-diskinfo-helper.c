@@ -155,9 +155,176 @@ parse_u64_strict (const char *str, uint64_t *out_val)
     return 1;
 }
 
-static void
-run_single_command (const char *device, const char *action)
+/**
+ * HelperSmartOp:
+ *
+ * Strongly-typed enumeration of every smartctl operation the privileged helper
+ * is permitted to execute. No dynamic flags or user-supplied arguments other
+ * than the verified device node path are ever passed to smartctl.
+ */
+typedef enum {
+    HELPER_OP_SMART_READ = 0,
+    HELPER_OP_SMART_READ_STANDBY,
+    HELPER_OP_SELFTEST_SHORT,
+    HELPER_OP_SELFTEST_LONG,
+    HELPER_OP_SELFTEST_ABORT
+} HelperSmartOp;
+
+/**
+ * resolve_smartctl_binary:
+ *
+ * Locates smartctl strictly from a hardcoded whitelist of trusted system
+ * directories to prevent PATH hijacking under elevated privileges.
+ *
+ * Returns: Static absolute path to smartctl, or NULL if not found.
+ */
+static const char *
+resolve_smartctl_binary (void)
 {
+    static const char * const trusted_paths[] = {
+        "/usr/sbin/smartctl",
+        "/sbin/smartctl",
+        "/usr/bin/smartctl",
+        "/bin/smartctl"
+    };
+
+    for (size_t i = 0; i < sizeof (trusted_paths) / sizeof (trusted_paths[0]); i++) {
+        struct stat st;
+        if (stat (trusted_paths[i], &st) == 0 &&
+            S_ISREG (st.st_mode) &&
+            access (trusted_paths[i], X_OK) == 0) {
+            return trusted_paths[i];
+        }
+    }
+
+    return NULL;
+}
+
+/**
+ * map_action_to_op:
+ * @action: Action token from `ACTION <dev> <action>`.
+ * @out_op: (out): Corresponding #HelperSmartOp.
+ *
+ * Strictly maps only the whitelisted self-test actions (`short`, `long`,
+ * `abort`) to their operation enum. Rejects everything else (including
+ * `standby`, `conveyance`, `offline`, `format`, etc.).
+ *
+ * Returns: 1 if valid, 0 otherwise.
+ */
+static int
+map_action_to_op (const char *action, HelperSmartOp *out_op)
+{
+    if (!puls_helper_is_valid_action (action))
+        return 0;
+
+    if (strcmp (action, PULS_HELPER_ACTION_SHORT) == 0) {
+        *out_op = HELPER_OP_SELFTEST_SHORT;
+        return 1;
+    }
+    if (strcmp (action, PULS_HELPER_ACTION_LONG) == 0) {
+        *out_op = HELPER_OP_SELFTEST_LONG;
+        return 1;
+    }
+    if (strcmp (action, PULS_HELPER_ACTION_ABORT) == 0) {
+        *out_op = HELPER_OP_SELFTEST_ABORT;
+        return 1;
+    }
+
+    return 0;
+}
+
+/**
+ * map_cli_subcmd_to_op:
+ * @subcmd: Optional subcommand from legacy single-shot CLI mode.
+ * @out_op: (out): Corresponding #HelperSmartOp.
+ *
+ * Returns: 1 if @subcmd is whitelisted, 0 otherwise.
+ */
+static int
+map_cli_subcmd_to_op (const char *subcmd, HelperSmartOp *out_op)
+{
+    if (subcmd == NULL) {
+        *out_op = HELPER_OP_SMART_READ;
+        return 1;
+    }
+    if (strcmp (subcmd, PULS_HELPER_READ_OPT_STANDBY) == 0) {
+        *out_op = HELPER_OP_SMART_READ_STANDBY;
+        return 1;
+    }
+    return map_action_to_op (subcmd, out_op);
+}
+
+/**
+ * exec_whitelisted_smartctl:
+ * @op: Strictly whitelisted smartctl operation.
+ * @device: Verified canonical device node path.
+ *
+ * Replaces the current process image with smartctl using a fixed argument
+ * table and a sanitized minimal environment. Never returns.
+ */
+static void
+exec_whitelisted_smartctl (HelperSmartOp op, const char *device)
+{
+    const char *bin = resolve_smartctl_binary ();
+    if (bin == NULL) {
+        fprintf (stderr, "Error: smartctl binary not found in trusted system paths\n");
+        _exit (4);
+    }
+
+    char * const safe_envp[] = {
+        "PATH=/usr/sbin:/sbin:/usr/bin:/bin",
+        "LC_ALL=C",
+        NULL
+    };
+
+    /* Cast away const only for POSIX execve signature (argv strings are never mutated). */
+    char *dev_arg = (char *)(uintptr_t)device;
+
+    switch (op) {
+    case HELPER_OP_SMART_READ: {
+        char *argv[] = { "smartctl", "-a", "-j", dev_arg, NULL };
+        execve (bin, argv, safe_envp);
+        break;
+    }
+    case HELPER_OP_SMART_READ_STANDBY: {
+        char *argv[] = { "smartctl", "-n", "standby", "-a", "-j", dev_arg, NULL };
+        execve (bin, argv, safe_envp);
+        break;
+    }
+    case HELPER_OP_SELFTEST_SHORT: {
+        char *argv[] = { "smartctl", "-t", "short", dev_arg, NULL };
+        execve (bin, argv, safe_envp);
+        break;
+    }
+    case HELPER_OP_SELFTEST_LONG: {
+        char *argv[] = { "smartctl", "-t", "long", dev_arg, NULL };
+        execve (bin, argv, safe_envp);
+        break;
+    }
+    case HELPER_OP_SELFTEST_ABORT: {
+        char *argv[] = { "smartctl", "-X", dev_arg, NULL };
+        execve (bin, argv, safe_envp);
+        break;
+    }
+    default:
+        fprintf (stderr, "Error: Disallowed helper operation\n");
+        _exit (5);
+    }
+
+    perror ("Failed to execute smartctl");
+    _exit (4);
+}
+
+static void
+run_single_command (const char *device, const char *subcmd)
+{
+    HelperSmartOp op;
+    if (!map_cli_subcmd_to_op (subcmd, &op)) {
+        fprintf (stderr, "Error: Unrecognized subcommand: %s\n",
+                 subcmd ? subcmd : "(null)");
+        exit (5);
+    }
+
     const char *err_code = NULL;
     const char *err_json = NULL;
 
@@ -170,44 +337,12 @@ run_single_command (const char *device, const char *action)
         exit (2);
     }
 
-    if (action == NULL) {
-        execlp ("smartctl", "smartctl", "-a", "-j", device, (char *)NULL);
-    } else if (strcmp (action, "standby") == 0) {
-        execlp ("smartctl", "smartctl", "-n", "standby", "-a", "-j", device, (char *)NULL);
-    } else if (strcmp (action, "short") == 0) {
-        execlp ("smartctl", "smartctl", "-t", "short", device, (char *)NULL);
-    } else if (strcmp (action, "long") == 0) {
-        execlp ("smartctl", "smartctl", "-t", "long", device, (char *)NULL);
-    } else if (strcmp (action, "abort") == 0) {
-        execlp ("smartctl", "smartctl", "-X", device, (char *)NULL);
-    } else {
-        fprintf (stderr, "Error: Invalid action: %s\n", action);
-        exit (5);
-    }
-
-    perror ("Failed to execute smartctl");
-    exit (4);
+    exec_whitelisted_smartctl (op, device);
 }
 
 static void
-handle_smartctl_command (const char *device, const char *action)
+handle_smartctl_command (const char *device, HelperSmartOp op)
 {
-    if (!is_valid_device (device)) {
-        send_frame_err (PULS_HELPER_ERR_INVALID_DEVICE,
-                        "{\"error\":\"Invalid device path\"}\n");
-        return;
-    }
-
-    if (action != NULL &&
-        strcmp (action, "standby") != 0 &&
-        strcmp (action, "short") != 0 &&
-        strcmp (action, "long") != 0 &&
-        strcmp (action, "abort") != 0) {
-        send_frame_err (PULS_HELPER_ERR_INVALID_ACTION,
-                        "{\"error\":\"Invalid smartctl action\"}\n");
-        return;
-    }
-
     const char *err_code = NULL;
     const char *err_json = NULL;
     if (!verify_device_node (device, NULL, &err_code, &err_json)) {
@@ -237,19 +372,7 @@ handle_smartctl_command (const char *device, const char *action)
         dup2 (pfd[1], STDERR_FILENO);
         close (pfd[1]);
 
-        if (action == NULL) {
-            execlp ("smartctl", "smartctl", "-a", "-j", device, (char *)NULL);
-        } else if (strcmp (action, "standby") == 0) {
-            execlp ("smartctl", "smartctl", "-n", "standby", "-a", "-j", device, (char *)NULL);
-        } else if (strcmp (action, "short") == 0) {
-            execlp ("smartctl", "smartctl", "-t", "short", device, (char *)NULL);
-        } else if (strcmp (action, "long") == 0) {
-            execlp ("smartctl", "smartctl", "-t", "long", device, (char *)NULL);
-        } else if (strcmp (action, "abort") == 0) {
-            execlp ("smartctl", "smartctl", "-X", device, (char *)NULL);
-        }
-        perror ("execlp");
-        _exit (4);
+        exec_whitelisted_smartctl (op, device);
     }
 
     close (pfd[1]);
@@ -314,7 +437,9 @@ handle_stream_scan (const char *device, const char *start_str, const char *len_s
     if (!parse_u64_strict (start_str, &start_off) ||
         !parse_u64_strict (len_str, &read_len) ||
         read_len == 0 ||
-        read_len > PULS_HELPER_MAX_STREAM_SCAN_LEN) {
+        read_len > PULS_HELPER_MAX_STREAM_SCAN_LEN ||
+        start_off > (uint64_t)INT64_MAX ||
+        read_len > (uint64_t)INT64_MAX - start_off) {
         send_frame_err (PULS_HELPER_ERR_INVALID_ARG,
                         "{\"error\":\"Invalid STREAM_SCAN range parameters\"}\n");
         return;
@@ -410,8 +535,33 @@ handle_hello (const char *version_arg, int *handshake_done)
     const char *ok_json =
         "{\"protocol\":\"" PULS_HELPER_PROTO_TAG "\","
         "\"version\":2,"
-        "\"capabilities\":[\"READ_SMART\",\"ACTION\",\"STREAM_SCAN\"]}\n";
+        "\"capabilities\":[\"READ_SMART\",\"ACTION\",\"STREAM_SCAN\"],"
+        "\"read_options\":[\"standby\"],"
+        "\"actions\":[\"short\",\"long\",\"abort\"]}\n";
     send_frame_ok (ok_json, strlen (ok_json));
+}
+
+/**
+ * line_has_forbidden_chars:
+ * @line: Raw protocol input buffer from getline().
+ * @len: Exact byte length returned by getline().
+ *
+ * Rejects embedded NUL bytes, non-printable ASCII control characters (except
+ * HT/LF/CR), and non-ASCII bytes before command parsing.
+ *
+ * Returns: 1 if forbidden characters are present, 0 if clean.
+ */
+static int
+line_has_forbidden_chars (const char *line, size_t len)
+{
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)line[i];
+        if (c == '\t' || c == '\r' || c == '\n')
+            continue;
+        if (c < 0x20U || c >= 0x7FU)
+            return 1;
+    }
+    return 0;
 }
 
 static size_t
@@ -448,6 +598,11 @@ dispatch_protocol_line (char *line, int *handshake_done)
         return 0;
 
     if (strcmp (toks[0], PULS_HELPER_CMD_QUIT) == 0) {
+        if (n_toks != 1) {
+            send_frame_err (PULS_HELPER_ERR_INVALID_ARG,
+                            "{\"error\":\"Usage: QUIT\"}\n");
+            return 0;
+        }
         send_frame_ok ("", 0);
         return 1;
     }
@@ -467,11 +622,22 @@ dispatch_protocol_line (char *line, int *handshake_done)
         return 0;
     }
 
+    if (!puls_helper_is_valid_command (toks[0])) {
+        send_frame_err (PULS_HELPER_ERR_UNKNOWN_CMD,
+                        "{\"error\":\"Unrecognized command; not in helper whitelist\"}\n");
+        return 0;
+    }
+
     if (strcmp (toks[0], PULS_HELPER_CMD_READ_SMART) == 0) {
         if (n_toks == 2) {
-            handle_smartctl_command (toks[1], NULL);
-        } else if (n_toks == 3 && strcmp (toks[2], "standby") == 0) {
-            handle_smartctl_command (toks[1], "standby");
+            handle_smartctl_command (toks[1], HELPER_OP_SMART_READ);
+        } else if (n_toks == 3) {
+            if (!puls_helper_is_valid_read_option (toks[2])) {
+                send_frame_err (PULS_HELPER_ERR_INVALID_SUBCMD,
+                                "{\"error\":\"Invalid READ_SMART subcommand; only 'standby' is allowed\"}\n");
+            } else {
+                handle_smartctl_command (toks[1], HELPER_OP_SMART_READ_STANDBY);
+            }
         } else {
             send_frame_err (PULS_HELPER_ERR_INVALID_ARG,
                             "{\"error\":\"Usage: READ_SMART <dev> [standby]\"}\n");
@@ -483,8 +649,17 @@ dispatch_protocol_line (char *line, int *handshake_done)
         if (n_toks != 3) {
             send_frame_err (PULS_HELPER_ERR_INVALID_ARG,
                             "{\"error\":\"Usage: ACTION <dev> <short|long|abort>\"}\n");
+        } else if (!is_valid_device (toks[1])) {
+            send_frame_err (PULS_HELPER_ERR_INVALID_DEVICE,
+                            "{\"error\":\"Invalid device path\"}\n");
         } else {
-            handle_smartctl_command (toks[1], toks[2]);
+            HelperSmartOp op;
+            if (!map_action_to_op (toks[2], &op)) {
+                send_frame_err (PULS_HELPER_ERR_INVALID_ACTION,
+                                "{\"error\":\"Invalid ACTION subcommand; only 'short', 'long', or 'abort' is allowed\"}\n");
+            } else {
+                handle_smartctl_command (toks[1], op);
+            }
         }
         return 0;
     }
@@ -500,7 +675,7 @@ dispatch_protocol_line (char *line, int *handshake_done)
     }
 
     send_frame_err (PULS_HELPER_ERR_UNKNOWN_CMD,
-                    "{\"error\":\"Unknown command\"}\n");
+                    "{\"error\":\"Unrecognized command; not in helper whitelist\"}\n");
     return 0;
 }
 
@@ -508,9 +683,13 @@ int
 main (int argc, char *argv[])
 {
     if (argc >= 2) {
+        if (argc > 3) {
+            fprintf (stderr, "Error: Too many arguments (usage: puls-diskinfo-helper <dev> [standby|short|long|abort])\n");
+            return 5;
+        }
         const char *device = argv[1];
-        const char *action = (argc == 3) ? argv[2] : NULL;
-        run_single_command (device, action);
+        const char *subcmd = (argc == 3) ? argv[2] : NULL;
+        run_single_command (device, subcmd);
         return 0;
     }
 
@@ -526,10 +705,17 @@ main (int argc, char *argv[])
             continue;
         }
 
+        if (line_has_forbidden_chars (line, (size_t)line_len)) {
+            send_frame_err (PULS_HELPER_ERR_INVALID_ARG,
+                            "{\"error\":\"Command line contains forbidden control or NUL characters\"}\n");
+            continue;
+        }
+
         while (line_len > 0 &&
                (line[line_len - 1] == '\n' ||
                 line[line_len - 1] == '\r' ||
-                line[line_len - 1] == ' ')) {
+                line[line_len - 1] == ' ' ||
+                line[line_len - 1] == '\t')) {
             line[line_len - 1] = '\0';
             line_len--;
         }

@@ -194,6 +194,21 @@ puls_format_number (guint64 number)
 }
 
 /**
+ * puls_helper_action_is_valid:
+ * @action: (nullable): Candidate self-test action string.
+ *
+ * Strictly validates @action against the privileged helper's whitelisted
+ * self-test subcommands (`"short"`, `"long"`, `"abort"`).
+ *
+ * Returns: %TRUE if @action is permitted, %FALSE otherwise.
+ */
+gboolean
+puls_helper_action_is_valid (const gchar *action)
+{
+    return puls_helper_is_valid_action (action) != 0;
+}
+
+/**
  * puls_helper_format_hello:
  * @version: Protocol major version (e.g. `2`).
  *
@@ -2209,6 +2224,13 @@ puls_run_smartctl_action_sync (const gchar *device_path, const gchar *action, GE
         return NULL;
     }
 
+    if (!puls_helper_action_is_valid (action)) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                     "Disallowed smartctl action '%s'; only 'short', 'long', or 'abort' is permitted",
+                     action ? action : "(null)");
+        return NULL;
+    }
+
     g_autofree gchar *cmd = puls_helper_format_action (device_path, action);
     gchar *res = communicate_with_helper (cmd, error);
     if (res != NULL)
@@ -2218,14 +2240,16 @@ puls_run_smartctl_action_sync (const gchar *device_path, const gchar *action, GE
         g_clear_error (error);
 
     g_autofree gchar *cmdline = NULL;
-    if (g_strcmp0 (action, "short") == 0) {
+    if (g_strcmp0 (action, PULS_HELPER_ACTION_SHORT) == 0) {
         cmdline = g_strdup_printf ("smartctl -t short %s", device_path);
-    } else if (g_strcmp0 (action, "long") == 0) {
+    } else if (g_strcmp0 (action, PULS_HELPER_ACTION_LONG) == 0) {
         cmdline = g_strdup_printf ("smartctl -t long %s", device_path);
-    } else if (g_strcmp0 (action, "abort") == 0) {
+    } else if (g_strcmp0 (action, PULS_HELPER_ACTION_ABORT) == 0) {
         cmdline = g_strdup_printf ("smartctl -X %s", device_path);
     } else {
-        cmdline = g_strdup_printf ("smartctl -a -j %s", device_path);
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                     "Disallowed smartctl action: %s", action);
+        return NULL;
     }
 
     gchar *stdout_buf = NULL;

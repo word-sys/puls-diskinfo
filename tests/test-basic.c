@@ -2933,6 +2933,251 @@ test_path_sanitization_anti_injection (void)
 #endif
 }
 
+static void
+test_helper_command_whitelist (void)
+{
+    /* 1. Shared pure-C protocol whitelist validators */
+    g_assert_cmpint (puls_helper_is_valid_command ("HELLO"), ==, 1);
+    g_assert_cmpint (puls_helper_is_valid_command ("READ_SMART"), ==, 1);
+    g_assert_cmpint (puls_helper_is_valid_command ("ACTION"), ==, 1);
+    g_assert_cmpint (puls_helper_is_valid_command ("STREAM_SCAN"), ==, 1);
+    g_assert_cmpint (puls_helper_is_valid_command ("QUIT"), ==, 1);
+
+    const gchar *bad_cmds[] = {
+        NULL, "", "EXEC", "SHELL", "WRITE_SECTOR", "FORMAT",
+        "SANITIZE", "HDPARM", "NVME_FORMAT", "DD", "SUDO",
+        "read_smart", "action", "stream_scan", "quit", "PING", NULL
+    };
+    for (gsize i = 0; i == 0 || bad_cmds[i] != NULL; i++) {
+        g_assert_cmpint (puls_helper_is_valid_command (bad_cmds[i]), ==, 0);
+        if (i > 0 && bad_cmds[i] == NULL)
+            break;
+    }
+
+    /* READ_SMART subcommand option whitelist: strictly NULL or "standby" */
+    g_assert_cmpint (puls_helper_is_valid_read_option (NULL), ==, 1);
+    g_assert_cmpint (puls_helper_is_valid_read_option ("standby"), ==, 1);
+    g_assert_cmpint (puls_helper_is_valid_read_option ("short"), ==, 0);
+    g_assert_cmpint (puls_helper_is_valid_read_option ("long"), ==, 0);
+    g_assert_cmpint (puls_helper_is_valid_read_option ("abort"), ==, 0);
+    g_assert_cmpint (puls_helper_is_valid_read_option ("STANDBY"), ==, 0);
+    g_assert_cmpint (puls_helper_is_valid_read_option ("--all"), ==, 0);
+    g_assert_cmpint (puls_helper_is_valid_read_option (""), ==, 0);
+
+    /* ACTION self-test whitelist: strictly "short", "long", "abort" */
+    g_assert_cmpint (puls_helper_is_valid_action ("short"), ==, 1);
+    g_assert_cmpint (puls_helper_is_valid_action ("long"), ==, 1);
+    g_assert_cmpint (puls_helper_is_valid_action ("abort"), ==, 1);
+    g_assert_true (puls_helper_action_is_valid ("short"));
+    g_assert_true (puls_helper_action_is_valid ("long"));
+    g_assert_true (puls_helper_action_is_valid ("abort"));
+
+    const gchar *bad_actions[] = {
+        NULL, "", "standby", "conveyance", "offline", "select",
+        "format", "sanitize", "write", "reset", "SHORT", "LONG",
+        "ABORT", "--smart=off", "-t", "-X", "short;id", NULL
+    };
+    for (gsize i = 0; i == 0 || bad_actions[i] != NULL; i++) {
+        g_assert_cmpint (puls_helper_is_valid_action (bad_actions[i]), ==, 0);
+        g_assert_false (puls_helper_action_is_valid (bad_actions[i]));
+        if (i > 0 && bad_actions[i] == NULL)
+            break;
+    }
+
+    /* Single-shot CLI subcommand whitelist */
+    g_assert_cmpint (puls_helper_is_valid_cli_subcommand (NULL), ==, 1);
+    g_assert_cmpint (puls_helper_is_valid_cli_subcommand ("standby"), ==, 1);
+    g_assert_cmpint (puls_helper_is_valid_cli_subcommand ("short"), ==, 1);
+    g_assert_cmpint (puls_helper_is_valid_cli_subcommand ("long"), ==, 1);
+    g_assert_cmpint (puls_helper_is_valid_cli_subcommand ("abort"), ==, 1);
+    g_assert_cmpint (puls_helper_is_valid_cli_subcommand ("format"), ==, 0);
+    g_assert_cmpint (puls_helper_is_valid_cli_subcommand ("conveyance"), ==, 0);
+
+    /* 2. Client-side action guard rejects disallowed actions before spawning anything */
+    g_autoptr(GError) err = NULL;
+    for (gsize i = 0; i == 0 || bad_actions[i] != NULL; i++) {
+        g_autofree gchar *out = puls_run_smartctl_action_sync ("/dev/sda", bad_actions[i], &err);
+        g_assert_null (out);
+        g_assert_error (err, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+        g_clear_error (&err);
+        if (i > 0 && bad_actions[i] == NULL)
+            break;
+    }
+
+#ifdef TEST_HELPER_BIN
+    /* 3. Live Helper IPC granular command & subcommand whitelist checks */
+    g_autoptr(GSubprocess) proc = g_subprocess_new (
+        G_SUBPROCESS_FLAGS_STDIN_PIPE | G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_SILENCE,
+        &err, TEST_HELPER_BIN, NULL);
+    g_assert_no_error (err);
+    g_assert_nonnull (proc);
+
+    GOutputStream *h_in = g_subprocess_get_stdin_pipe (proc);
+    g_autoptr(GDataInputStream) h_out = g_data_input_stream_new (
+        g_subprocess_get_stdout_pipe (proc));
+
+    gboolean ok = FALSE;
+    g_autofree gchar *err_code = NULL;
+    g_autofree gchar *payload = NULL;
+
+    /* Handshake advertises granular read_options & actions whitelist */
+    g_assert_true (puls_helper_exchange_command (h_in, h_out, "HELLO v2\n",
+                                                 &ok, &err_code, &payload, &err));
+    g_assert_no_error (err);
+    g_assert_true (ok);
+    g_assert_nonnull (strstr (payload, "\"actions\":[\"short\",\"long\",\"abort\"]"));
+    g_assert_nonnull (strstr (payload, "\"read_options\":[\"standby\"]"));
+    g_clear_pointer (&err_code, g_free);
+    g_clear_pointer (&payload, g_free);
+
+    /* 3a. Unrecognized top-level commands -> E_UNKNOWN_CMD */
+    const gchar *unknown_cmds[] = {
+        "EXEC /bin/sh\n",
+        "SHELL id\n",
+        "WRITE_SECTOR /dev/sda 0 512\n",
+        "FORMAT /dev/sda\n",
+        "SANITIZE /dev/sda\n",
+        "HDPARM /dev/sda\n",
+        "NVME_FORMAT /dev/nvme0n1\n",
+        "DD /dev/sda\n",
+        "read_smart /dev/sda\n",
+        "action /dev/sda short\n",
+        NULL
+    };
+    for (gsize i = 0; unknown_cmds[i] != NULL; i++) {
+        g_assert_true (puls_helper_exchange_command (h_in, h_out, unknown_cmds[i],
+                                                     &ok, &err_code, &payload, &err));
+        g_assert_no_error (err);
+        g_assert_false (ok);
+        g_assert_cmpstr (err_code, ==, PULS_HELPER_ERR_UNKNOWN_CMD);
+        g_clear_pointer (&err_code, g_free);
+        g_clear_pointer (&payload, g_free);
+    }
+
+    /* 3b. Disallowed ACTION subcommands (including 'standby', 'conveyance', 'offline', flags) -> E_INVALID_ACTION */
+    const gchar *disallowed_action_cmds[] = {
+        "ACTION /dev/sda standby\n",
+        "ACTION /dev/sda conveyance\n",
+        "ACTION /dev/sda offline\n",
+        "ACTION /dev/sda select\n",
+        "ACTION /dev/sda format\n",
+        "ACTION /dev/sda sanitize\n",
+        "ACTION /dev/sda write\n",
+        "ACTION /dev/sda reset\n",
+        "ACTION /dev/sda SHORT\n",
+        "ACTION /dev/sda --smart=off\n",
+        "ACTION /dev/sda -t\n",
+        NULL
+    };
+    for (gsize i = 0; disallowed_action_cmds[i] != NULL; i++) {
+        g_assert_true (puls_helper_exchange_command (h_in, h_out, disallowed_action_cmds[i],
+                                                     &ok, &err_code, &payload, &err));
+        g_assert_no_error (err);
+        g_assert_false (ok);
+        g_assert_cmpstr (err_code, ==, PULS_HELPER_ERR_INVALID_ACTION);
+        g_clear_pointer (&err_code, g_free);
+        g_clear_pointer (&payload, g_free);
+    }
+
+    /* 3c. Disallowed READ_SMART subcommands -> E_INVALID_SUBCMD */
+    const gchar *disallowed_read_subcmds[] = {
+        "READ_SMART /dev/sda short\n",
+        "READ_SMART /dev/sda long\n",
+        "READ_SMART /dev/sda abort\n",
+        "READ_SMART /dev/sda raw\n",
+        "READ_SMART /dev/sda force\n",
+        "READ_SMART /dev/sda STANDBY\n",
+        "READ_SMART /dev/sda -x\n",
+        "READ_SMART /dev/sda --all\n",
+        NULL
+    };
+    for (gsize i = 0; disallowed_read_subcmds[i] != NULL; i++) {
+        g_assert_true (puls_helper_exchange_command (h_in, h_out, disallowed_read_subcmds[i],
+                                                     &ok, &err_code, &payload, &err));
+        g_assert_no_error (err);
+        g_assert_false (ok);
+        g_assert_cmpstr (err_code, ==, PULS_HELPER_ERR_INVALID_SUBCMD);
+        g_clear_pointer (&err_code, g_free);
+        g_clear_pointer (&payload, g_free);
+    }
+
+    /* 3d. Arity violations, overflow bounds, and strict QUIT check -> E_INVALID_ARG */
+    const gchar *invalid_arg_cmds[] = {
+        "READ_SMART\n",
+        "READ_SMART /dev/sda standby extra\n",
+        "ACTION /dev/sda\n",
+        "ACTION /dev/sda short extra\n",
+        "STREAM_SCAN /dev/sda 0\n",
+        "STREAM_SCAN /dev/sda 0 512 extra\n",
+        "STREAM_SCAN /dev/sda -1 512\n",
+        "STREAM_SCAN /dev/sda 0 99999999\n",
+        "STREAM_SCAN /dev/sda 9223372036854775807 4096\n",
+        "QUIT extra\n",
+        "READ_SMART /dev/sda\x01\n",
+        NULL
+    };
+    for (gsize i = 0; invalid_arg_cmds[i] != NULL; i++) {
+        g_assert_true (puls_helper_exchange_command (h_in, h_out, invalid_arg_cmds[i],
+                                                     &ok, &err_code, &payload, &err));
+        g_assert_no_error (err);
+        g_assert_false (ok);
+        g_assert_cmpstr (err_code, ==, PULS_HELPER_ERR_INVALID_ARG);
+        g_clear_pointer (&err_code, g_free);
+        g_clear_pointer (&payload, g_free);
+    }
+
+    /* 3e. Embedded NUL byte in protocol line must be rejected with E_INVALID_ARG */
+    static const char nul_cmd[] = "READ_SMART /dev/sda\0;id\n";
+    gsize written = 0;
+    g_assert_true (g_output_stream_write_all (h_in, nul_cmd, sizeof (nul_cmd) - 1,
+                                              &written, NULL, &err));
+    g_assert_no_error (err);
+    g_autofree gchar *nul_hdr = g_data_input_stream_read_line (h_out, NULL, NULL, &err);
+    g_assert_no_error (err);
+    g_assert_nonnull (nul_hdr);
+    gsize nul_plen = 0;
+    g_assert_true (puls_helper_parse_frame_header (nul_hdr, &ok, &err_code, &nul_plen));
+    g_assert_false (ok);
+    g_assert_cmpstr (err_code, ==, PULS_HELPER_ERR_INVALID_ARG);
+    if (nul_plen > 0) {
+        g_autofree gchar *discard = g_malloc (nul_plen);
+        gsize got = 0;
+        g_assert_true (g_input_stream_read_all (G_INPUT_STREAM (h_out), discard, nul_plen,
+                                                &got, NULL, &err));
+        g_assert_no_error (err);
+    }
+    g_clear_pointer (&err_code, g_free);
+
+    /* Clean QUIT still works after rejections */
+    g_assert_true (puls_helper_exchange_command (h_in, h_out, "QUIT\n",
+                                                 &ok, &err_code, &payload, &err));
+    g_assert_no_error (err);
+    g_assert_true (ok);
+    g_clear_pointer (&payload, g_free);
+    g_assert_true (g_subprocess_wait_check (proc, NULL, &err));
+    g_assert_no_error (err);
+
+    /* 4. Legacy single-shot CLI mode must reject unrecognized subcommands & excess args with exit code 5 */
+    const gchar *cli_bad_1[] = { TEST_HELPER_BIN, "/dev/sda", "format", NULL };
+    g_autoptr(GSubprocess) cli_p1 = g_subprocess_newv (
+        cli_bad_1, G_SUBPROCESS_FLAGS_STDOUT_SILENCE | G_SUBPROCESS_FLAGS_STDERR_SILENCE, &err);
+    g_assert_no_error (err);
+    g_assert_true (g_subprocess_wait (cli_p1, NULL, &err));
+    g_assert_no_error (err);
+    g_assert_true (g_subprocess_get_if_exited (cli_p1));
+    g_assert_cmpint (g_subprocess_get_exit_status (cli_p1), ==, 5);
+
+    const gchar *cli_bad_2[] = { TEST_HELPER_BIN, "/dev/sda", "short", "--extra", NULL };
+    g_autoptr(GSubprocess) cli_p2 = g_subprocess_newv (
+        cli_bad_2, G_SUBPROCESS_FLAGS_STDOUT_SILENCE | G_SUBPROCESS_FLAGS_STDERR_SILENCE, &err);
+    g_assert_no_error (err);
+    g_assert_true (g_subprocess_wait (cli_p2, NULL, &err));
+    g_assert_no_error (err);
+    g_assert_true (g_subprocess_get_if_exited (cli_p2));
+    g_assert_cmpint (g_subprocess_get_exit_status (cli_p2), ==, 5);
+#endif
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -2970,6 +3215,7 @@ main (int argc, char *argv[])
     g_test_add_func ("/basic/phase3-final-integration", test_phase3_final_integration);
     g_test_add_func ("/basic/helper-protocol-handshake", test_helper_protocol_handshake);
     g_test_add_func ("/basic/path-sanitization-anti-injection", test_path_sanitization_anti_injection);
+    g_test_add_func ("/basic/helper-command-whitelist", test_helper_command_whitelist);
 
     int result = g_test_run ();
 

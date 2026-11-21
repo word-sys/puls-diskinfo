@@ -82,6 +82,7 @@ gchar         *puls_build_helper_read_command    (const gchar *device_path,
                                                   gboolean     check_standby);
 
 /* Privileged Helper IPC Protocol v2 Framing & Handshake */
+gboolean       puls_helper_action_is_valid       (const gchar *action);
 gchar         *puls_helper_format_hello          (guint        version);
 gchar         *puls_helper_format_read_smart     (const gchar *device_path,
                                                   gboolean     check_standby);
