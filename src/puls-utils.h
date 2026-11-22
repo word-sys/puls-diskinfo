@@ -91,10 +91,35 @@ gchar         *puls_helper_format_action         (const gchar *device_path,
 gchar         *puls_helper_format_stream_scan    (const gchar *device_path,
                                                   guint64      start_offset,
                                                   guint64      length);
+gchar         *puls_helper_format_stream_scan_chunked (const gchar *device_path,
+                                                       guint64      start_offset,
+                                                       guint64      length,
+                                                       guint64      chunk_bytes);
 gboolean       puls_helper_parse_frame_header    (const gchar *header_line,
                                                   gboolean    *out_ok,
                                                   gchar      **out_err_code,
                                                   gsize       *out_payload_len);
+gboolean       puls_helper_parse_chunk_header    (const gchar *header_line,
+                                                  guint64     *out_seq,
+                                                  gsize       *out_payload_len);
+
+typedef struct {
+    guint64 seq;
+    guint64 offset;
+    guint64 chunk_bytes;
+    guint64 bytes_read;
+    guint64 total_bytes;
+    gdouble progress_pct;
+    gdouble chunk_ms;
+    gdouble mb_per_sec;
+} PulsHelperStreamChunk;
+
+typedef gboolean (*PulsHelperStreamCallback)     (guint64      seq,
+                                                  const gchar *chunk_payload,
+                                                  gpointer     user_data);
+
+gboolean       puls_helper_parse_stream_chunk_json (const gchar           *json_payload,
+                                                    PulsHelperStreamChunk *out_chunk);
 gboolean       puls_helper_exchange_command      (GOutputStream    *stdin_stream,
                                                   GDataInputStream *stdout_stream,
                                                   const gchar      *command,
@@ -102,6 +127,15 @@ gboolean       puls_helper_exchange_command      (GOutputStream    *stdin_stream
                                                   gchar           **out_err_code,
                                                   gchar           **out_payload,
                                                   GError          **error);
+gboolean       puls_helper_exchange_stream       (GOutputStream            *stdin_stream,
+                                                  GDataInputStream         *stdout_stream,
+                                                  const gchar              *command,
+                                                  PulsHelperStreamCallback  chunk_cb,
+                                                  gpointer                  user_data,
+                                                  gboolean                 *out_ok,
+                                                  gchar                   **out_err_code,
+                                                  gchar                   **out_final_payload,
+                                                  GError                  **error);
 
 /* Privilege Elevation & Sudo / Storage Group Fallback */
 typedef enum {
@@ -183,6 +217,14 @@ gboolean          puls_helper_client_exchange       (PulsHelperClient *client,
                                                      gchar           **out_err_code,
                                                      gchar           **out_payload,
                                                      GError          **error);
+gboolean          puls_helper_client_stream         (PulsHelperClient         *client,
+                                                     const gchar              *command,
+                                                     PulsHelperStreamCallback  chunk_cb,
+                                                     gpointer                  user_data,
+                                                     gboolean                 *out_ok,
+                                                     gchar                   **out_err_code,
+                                                     gchar                   **out_final_payload,
+                                                     GError                  **error);
 void              puls_helper_client_shutdown       (PulsHelperClient *client);
 void              puls_helper_client_get_stats      (PulsHelperClient *client,
                                                      PulsHelperStats  *out_stats);

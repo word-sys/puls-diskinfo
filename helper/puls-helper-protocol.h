@@ -26,38 +26,44 @@
 #define PULS_POLKIT_ACTION_SURFACE_SCAN   "io.github.word_sys.puls_diskinfo.surface-scan"
 
 /* Framing limits */
-#define PULS_HELPER_MAX_LINE_LEN        4096U
-#define PULS_HELPER_MAX_PAYLOAD_LEN     (4U * 1024U * 1024U)   /* 4 MiB */
-#define PULS_HELPER_MAX_STREAM_SCAN_LEN (16U * 1024U * 1024U)  /* 16 MiB per probe */
+#define PULS_HELPER_MAX_LINE_LEN         4096U
+#define PULS_HELPER_MAX_PAYLOAD_LEN      (4U * 1024U * 1024U)   /* 4 MiB */
+#define PULS_HELPER_MAX_STREAM_SCAN_LEN  (16U * 1024U * 1024U)  /* 16 MiB per probe */
+#define PULS_HELPER_MIN_STREAM_CHUNK     512U                   /* 512 B min telemetry chunk */
+#define PULS_HELPER_DEFAULT_STREAM_CHUNK 65536U                 /* 64 KiB default telemetry chunk */
+#define PULS_HELPER_MAX_STREAM_CHUNK     (1024U * 1024U)        /* 1 MiB max telemetry chunk */
 
 /* Commands (Client -> Helper) */
-#define PULS_HELPER_CMD_HELLO           "HELLO"
-#define PULS_HELPER_CMD_READ_SMART      "READ_SMART"
-#define PULS_HELPER_CMD_ACTION          "ACTION"
-#define PULS_HELPER_CMD_STREAM_SCAN     "STREAM_SCAN"
-#define PULS_HELPER_CMD_QUIT            "QUIT"
+#define PULS_HELPER_CMD_HELLO            "HELLO"
+#define PULS_HELPER_CMD_READ_SMART       "READ_SMART"
+#define PULS_HELPER_CMD_ACTION           "ACTION"
+#define PULS_HELPER_CMD_STREAM_SCAN      "STREAM_SCAN"
+#define PULS_HELPER_CMD_CANCEL           "CANCEL"
+#define PULS_HELPER_CMD_QUIT             "QUIT"
 
 /* Whitelisted Subcommands / Options */
-#define PULS_HELPER_READ_OPT_STANDBY    "standby"
-#define PULS_HELPER_ACTION_SHORT        "short"
-#define PULS_HELPER_ACTION_LONG         "long"
-#define PULS_HELPER_ACTION_ABORT        "abort"
+#define PULS_HELPER_READ_OPT_STANDBY     "standby"
+#define PULS_HELPER_ACTION_SHORT         "short"
+#define PULS_HELPER_ACTION_LONG          "long"
+#define PULS_HELPER_ACTION_ABORT         "abort"
 
 /* Framed Response Prefixes (Helper -> Client) */
-#define PULS_HELPER_RESP_OK             "OK"
-#define PULS_HELPER_RESP_ERR            "ERR"
+#define PULS_HELPER_RESP_OK              "OK"
+#define PULS_HELPER_RESP_ERR             "ERR"
+#define PULS_HELPER_RESP_CHUNK           "CHUNK"
 
 /* Standardized Error Codes */
-#define PULS_HELPER_ERR_HANDSHAKE_REQ   "E_HANDSHAKE_REQUIRED"
-#define PULS_HELPER_ERR_VERSION         "E_VERSION_MISMATCH"
-#define PULS_HELPER_ERR_UNKNOWN_CMD     "E_UNKNOWN_CMD"
-#define PULS_HELPER_ERR_INVALID_SUBCMD  "E_INVALID_SUBCMD"
-#define PULS_HELPER_ERR_INVALID_ARG     "E_INVALID_ARG"
-#define PULS_HELPER_ERR_INVALID_DEVICE  "E_INVALID_DEVICE"
-#define PULS_HELPER_ERR_INVALID_ACTION  "E_INVALID_ACTION"
-#define PULS_HELPER_ERR_NOT_FOUND       "E_DEVICE_NOT_FOUND"
-#define PULS_HELPER_ERR_IO              "E_IO_ERROR"
-#define PULS_HELPER_ERR_INTERNAL        "E_INTERNAL"
+#define PULS_HELPER_ERR_HANDSHAKE_REQ    "E_HANDSHAKE_REQUIRED"
+#define PULS_HELPER_ERR_VERSION          "E_VERSION_MISMATCH"
+#define PULS_HELPER_ERR_UNKNOWN_CMD      "E_UNKNOWN_CMD"
+#define PULS_HELPER_ERR_INVALID_SUBCMD   "E_INVALID_SUBCMD"
+#define PULS_HELPER_ERR_INVALID_ARG      "E_INVALID_ARG"
+#define PULS_HELPER_ERR_INVALID_DEVICE   "E_INVALID_DEVICE"
+#define PULS_HELPER_ERR_INVALID_ACTION   "E_INVALID_ACTION"
+#define PULS_HELPER_ERR_NOT_FOUND        "E_DEVICE_NOT_FOUND"
+#define PULS_HELPER_ERR_CANCELLED        "E_CANCELLED"
+#define PULS_HELPER_ERR_IO               "E_IO_ERROR"
+#define PULS_HELPER_ERR_INTERNAL         "E_INTERNAL"
 
 #include <stddef.h>
 #include <string.h>
@@ -201,7 +207,7 @@ puls_helper_is_valid_device_syntax (const char *path)
  * @cmd: Top-level protocol command verb.
  *
  * Strictly validates @cmd against the minimal privileged helper whitelist:
- * `HELLO`, `READ_SMART`, `ACTION`, `STREAM_SCAN`, `QUIT`.
+ * `HELLO`, `READ_SMART`, `ACTION`, `STREAM_SCAN`, `CANCEL`, `QUIT`.
  *
  * Returns: 1 if whitelisted, 0 otherwise.
  */
@@ -215,6 +221,7 @@ puls_helper_is_valid_command (const char *cmd)
             strcmp (cmd, PULS_HELPER_CMD_READ_SMART) == 0 ||
             strcmp (cmd, PULS_HELPER_CMD_ACTION) == 0 ||
             strcmp (cmd, PULS_HELPER_CMD_STREAM_SCAN) == 0 ||
+            strcmp (cmd, PULS_HELPER_CMD_CANCEL) == 0 ||
             strcmp (cmd, PULS_HELPER_CMD_QUIT) == 0);
 }
 

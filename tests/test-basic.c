@@ -8,10 +8,14 @@
 
 #include <glib.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <gio/gunixinputstream.h>
+#include <gio/gunixoutputstream.h>
 #include "../helper/puls-helper-protocol.h"
+#include "../helper/puls-helper-stream.h"
 #include "puls-smart-data.h"
 #include "puls-smart-parser.h"
 #include "puls-disk-manager.h"
@@ -3827,6 +3831,261 @@ test_zero_elevation_mode (void)
     rmdir (tmp_dir);
 }
 
+typedef struct {
+    guint   chunks_received;
+    guint64 last_seq;
+    guint64 last_bytes_read;
+    gdouble last_progress;
+    guint   cancel_after;
+} StreamTestCtx;
+
+static gboolean
+stream_test_chunk_cb (guint64      seq,
+                      const gchar *chunk_payload,
+                      gpointer     user_data)
+{
+    StreamTestCtx *ctx = (StreamTestCtx *)user_data;
+
+    PulsHelperStreamChunk parsed = { 0 };
+    g_assert_true (puls_helper_parse_stream_chunk_json (chunk_payload, &parsed));
+    g_assert_cmpuint (parsed.seq, ==, seq);
+    g_assert_cmpuint (parsed.seq, ==, ctx->last_seq + 1);
+    g_assert_cmpuint (parsed.bytes_read, >, ctx->last_bytes_read);
+    g_assert_cmpfloat (parsed.progress_pct, >=, ctx->last_progress);
+    g_assert_cmpfloat (parsed.mb_per_sec, >=, 0.0);
+
+    ctx->chunks_received++;
+    ctx->last_seq = parsed.seq;
+    ctx->last_bytes_read = parsed.bytes_read;
+    ctx->last_progress = parsed.progress_pct;
+
+    if (ctx->cancel_after > 0 && ctx->chunks_received >= ctx->cancel_after)
+        return FALSE; /* Trigger bidirectional mid-stream CANCEL */
+
+    return TRUE;
+}
+
+static void
+test_bidirectional_ipc_streaming (void)
+{
+    /* 1. Chunked command formatting & CHUNK frame header parser */
+    g_autofree gchar *fmt = puls_helper_format_stream_scan_chunked ("/dev/nvme0n1", 0, 262144, 16384);
+    g_assert_cmpstr (fmt, ==, "STREAM_SCAN /dev/nvme0n1 0 262144 16384\n");
+
+    guint64 seq = 0;
+    gsize plen = 0;
+    g_assert_true  (puls_helper_parse_chunk_header ("CHUNK 1 128", &seq, &plen));
+    g_assert_cmpuint (seq, ==, 1);
+    g_assert_cmpuint (plen, ==, 128);
+    g_assert_true  (puls_helper_parse_chunk_header ("CHUNK 42 0", &seq, &plen));
+    g_assert_cmpuint (seq, ==, 42);
+    g_assert_cmpuint (plen, ==, 0);
+
+    g_assert_false (puls_helper_parse_chunk_header ("CHUNK 0 128", &seq, &plen));
+    g_assert_false (puls_helper_parse_chunk_header ("CHUNK -1 128", &seq, &plen));
+    g_assert_false (puls_helper_parse_chunk_header ("CHUNK 1 -5", &seq, &plen));
+    g_assert_false (puls_helper_parse_chunk_header ("CHUNK 1 999999999", &seq, &plen));
+    g_assert_false (puls_helper_parse_chunk_header ("OK 128", &seq, &plen));
+    g_assert_false (puls_helper_parse_chunk_header ("ERR E_IO_ERROR 10", &seq, &plen));
+    g_assert_false (puls_helper_parse_chunk_header ("", &seq, &plen));
+    g_assert_false (puls_helper_parse_chunk_header (NULL, &seq, &plen));
+
+    /* 2. Real bidirectional UNIX pipe streaming test (full completion + mid-stream CANCEL) */
+    g_autoptr(GError) err = NULL;
+    g_autofree gchar *tmp_dir = g_dir_make_tmp ("puls_test_stream_XXXXXX", &err);
+    g_assert_no_error (err);
+    g_autofree gchar *data_file = g_build_filename (tmp_dir, "disk.img", NULL);
+
+    g_autofree gchar *zeros = g_malloc0 (16384);
+    memset (zeros, 0x5A, 16384);
+    g_assert_true (g_file_set_contents (data_file, zeros, 16384, &err));
+    g_assert_no_error (err);
+
+    /* 2a. Complete 4-chunk telemetry stream over live pipes */
+    int c2h[2] = { -1, -1 };
+    int h2c[2] = { -1, -1 };
+    g_assert_cmpint (pipe (c2h), ==, 0);
+    g_assert_cmpint (pipe (h2c), ==, 0);
+
+    pid_t pid = fork ();
+    g_assert_cmpint (pid, >=, 0);
+    if (pid == 0) {
+        close (c2h[1]);
+        close (h2c[0]);
+
+        /* Read incoming command line from client before streaming */
+        char cmd_buf[128];
+        size_t pos = 0;
+        while (pos + 1 < sizeof (cmd_buf)) {
+            char ch = '\0';
+            if (read (c2h[0], &ch, 1) <= 0 || ch == '\n')
+                break;
+            cmd_buf[pos++] = ch;
+        }
+
+        int data_fd = open (data_file, O_RDONLY);
+        FILE *out_fp = fdopen (h2c[1], "w");
+        if (data_fd >= 0 && out_fp != NULL) {
+            puls_helper_stream_read_fd (data_fd, c2h[0], out_fp,
+                                        "/dev/sda", 0, 16384, 4096, 0);
+            fclose (out_fp);
+            close (data_fd);
+        }
+        close (c2h[0]);
+        _exit (0);
+    }
+
+    close (c2h[0]);
+    close (h2c[1]);
+
+    g_autoptr(GOutputStream) p_in = g_unix_output_stream_new (c2h[1], TRUE);
+    g_autoptr(GInputStream) raw_out = g_unix_input_stream_new (h2c[0], TRUE);
+    g_autoptr(GDataInputStream) p_out = g_data_input_stream_new (raw_out);
+
+    StreamTestCtx sctx = { 0 };
+    gboolean ok = FALSE;
+    g_autofree gchar *err_code = NULL;
+    g_autofree gchar *final_payload = NULL;
+
+    g_assert_true (puls_helper_exchange_stream (p_in, p_out,
+                                                "STREAM_SCAN /dev/sda 0 16384 4096\n",
+                                                stream_test_chunk_cb, &sctx,
+                                                &ok, &err_code, &final_payload, &err));
+    g_assert_no_error (err);
+    g_assert_true (ok);
+    g_assert_null (err_code);
+    g_assert_cmpuint (sctx.chunks_received, ==, 4);
+    g_assert_cmpuint (sctx.last_seq, ==, 4);
+    g_assert_cmpuint (sctx.last_bytes_read, ==, 16384);
+    g_assert_cmpfloat_with_epsilon (sctx.last_progress, 100.0, 0.01);
+    g_assert_nonnull (strstr (final_payload, "\"status\":\"ok\""));
+    g_assert_nonnull (strstr (final_payload, "\"chunks\":4"));
+    g_assert_nonnull (strstr (final_payload, "\"bytes_read\":16384"));
+    g_clear_pointer (&final_payload, g_free);
+
+    int wstatus = 0;
+    g_assert_cmpint (waitpid (pid, &wstatus, 0), ==, pid);
+
+    /* 2b. Bidirectional mid-stream CANCEL (client cancels on chunk 2 of 8) */
+    g_assert_cmpint (pipe (c2h), ==, 0);
+    g_assert_cmpint (pipe (h2c), ==, 0);
+
+    pid_t pid2 = fork ();
+    g_assert_cmpint (pid2, >=, 0);
+    if (pid2 == 0) {
+        close (c2h[1]);
+        close (h2c[0]);
+
+        char cmd_buf[128];
+        size_t pos = 0;
+        while (pos + 1 < sizeof (cmd_buf)) {
+            char ch = '\0';
+            if (read (c2h[0], &ch, 1) <= 0 || ch == '\n')
+                break;
+            cmd_buf[pos++] = ch;
+        }
+
+        int data_fd = open (data_file, O_RDONLY);
+        FILE *out_fp = fdopen (h2c[1], "w");
+        if (data_fd >= 0 && out_fp != NULL) {
+            /* 8 chunks of 2048 B with 15 ms pacing so CANCEL arrives cleanly mid-stream */
+            puls_helper_stream_read_fd (data_fd, c2h[0], out_fp,
+                                        "/dev/sda", 0, 16384, 2048, 15000);
+            fclose (out_fp);
+            close (data_fd);
+        }
+        close (c2h[0]);
+        _exit (0);
+    }
+
+    close (c2h[0]);
+    close (h2c[1]);
+
+    g_autoptr(GOutputStream) p2_in = g_unix_output_stream_new (c2h[1], TRUE);
+    g_autoptr(GInputStream) raw2_out = g_unix_input_stream_new (h2c[0], TRUE);
+    g_autoptr(GDataInputStream) p2_out = g_data_input_stream_new (raw2_out);
+
+    StreamTestCtx cancel_ctx = { .cancel_after = 2 };
+    ok = TRUE;
+    g_assert_true (puls_helper_exchange_stream (p2_in, p2_out,
+                                                "STREAM_SCAN /dev/sda 0 16384 2048\n",
+                                                stream_test_chunk_cb, &cancel_ctx,
+                                                &ok, &err_code, &final_payload, &err));
+    g_assert_no_error (err);
+    g_assert_false (ok);
+    g_assert_cmpstr (err_code, ==, PULS_HELPER_ERR_CANCELLED);
+    g_assert_cmpuint (cancel_ctx.chunks_received, ==, 2);
+    g_assert_nonnull (strstr (final_payload, "\"status\":\"cancelled\""));
+    g_clear_pointer (&err_code, g_free);
+    g_clear_pointer (&final_payload, g_free);
+
+    g_assert_cmpint (waitpid (pid2, &wstatus, 0), ==, pid2);
+
+    unlink (data_file);
+    rmdir (tmp_dir);
+
+#ifdef TEST_HELPER_BIN
+    /* 3. Live compiled helper streaming capability advertisement, CANCEL, and chunk bounds */
+    PulsHelperClient *client = puls_helper_client_new_with_mode (
+        TEST_HELPER_BIN, PULS_ELEVATION_DIRECT_GROUP);
+    g_assert_nonnull (client);
+
+    g_assert_true (puls_helper_client_exchange (client, "HELLO v2\n",
+                                                &ok, &err_code, &final_payload, &err));
+    g_assert_no_error (err);
+    g_assert_true (ok);
+    g_assert_nonnull (strstr (final_payload, "\"streaming\":true"));
+    g_assert_nonnull (strstr (final_payload, "\"chunk_frame\":\"CHUNK\""));
+    g_clear_pointer (&final_payload, g_free);
+
+    /* Idle CANCEL is idempotent and keeps connection synchronized */
+    g_assert_true (puls_helper_client_exchange (client, "CANCEL\n",
+                                                &ok, &err_code, &final_payload, &err));
+    g_assert_no_error (err);
+    g_assert_true (ok);
+    g_clear_pointer (&final_payload, g_free);
+
+    /* Invalid CANCEL arity & invalid chunk bounds rejected with E_INVALID_ARG */
+    g_assert_true (puls_helper_client_exchange (client, "CANCEL extra\n",
+                                                &ok, &err_code, &final_payload, &err));
+    g_assert_no_error (err);
+    g_assert_false (ok);
+    g_assert_cmpstr (err_code, ==, PULS_HELPER_ERR_INVALID_ARG);
+    g_clear_pointer (&err_code, g_free);
+    g_clear_pointer (&final_payload, g_free);
+
+    g_assert_true (puls_helper_client_stream (client, "STREAM_SCAN /dev/sda 0 65536 256\n",
+                                              NULL, NULL,
+                                              &ok, &err_code, &final_payload, &err));
+    g_assert_no_error (err);
+    g_assert_false (ok);
+    g_assert_cmpstr (err_code, ==, PULS_HELPER_ERR_INVALID_ARG);
+    g_clear_pointer (&err_code, g_free);
+    g_clear_pointer (&final_payload, g_free);
+
+    g_assert_true (puls_helper_client_stream (client, "STREAM_SCAN /dev/sda 0 65536 2097152\n",
+                                              NULL, NULL,
+                                              &ok, &err_code, &final_payload, &err));
+    g_assert_no_error (err);
+    g_assert_false (ok);
+    g_assert_cmpstr (err_code, ==, PULS_HELPER_ERR_INVALID_ARG);
+    g_clear_pointer (&err_code, g_free);
+    g_clear_pointer (&final_payload, g_free);
+
+    /* Non-existent device cleanly returns E_DEVICE_NOT_FOUND over streaming client API */
+    g_assert_true (puls_helper_client_stream (client, "STREAM_SCAN /dev/sdzz 0 65536 4096\n",
+                                              NULL, NULL,
+                                              &ok, &err_code, &final_payload, &err));
+    g_assert_no_error (err);
+    g_assert_false (ok);
+    g_assert_cmpstr (err_code, ==, PULS_HELPER_ERR_NOT_FOUND);
+    g_clear_pointer (&err_code, g_free);
+    g_clear_pointer (&final_payload, g_free);
+
+    puls_helper_client_free (client);
+#endif
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -3869,6 +4128,7 @@ main (int argc, char *argv[])
     g_test_add_func ("/basic/helper-crash-recovery-watchdog", test_helper_crash_recovery_watchdog);
     g_test_add_func ("/basic/elevation-fallback-mechanisms", test_elevation_fallback_mechanisms);
     g_test_add_func ("/basic/zero-elevation-mode", test_zero_elevation_mode);
+    g_test_add_func ("/basic/bidirectional-ipc-streaming", test_bidirectional_ipc_streaming);
 
     int result = g_test_run ();
 

@@ -17,6 +17,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "puls-helper-protocol.h"
+#include "puls-helper-stream.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -424,7 +425,10 @@ handle_smartctl_command (const char *device, HelperSmartOp op)
 }
 
 static void
-handle_stream_scan (const char *device, const char *start_str, const char *len_str)
+handle_stream_scan (const char *device,
+                    const char *start_str,
+                    const char *len_str,
+                    const char *chunk_str)
 {
     if (!is_valid_device (device)) {
         send_frame_err (PULS_HELPER_ERR_INVALID_DEVICE,
@@ -434,6 +438,8 @@ handle_stream_scan (const char *device, const char *start_str, const char *len_s
 
     uint64_t start_off = 0;
     uint64_t read_len = 0;
+    uint64_t chunk_bytes = PULS_HELPER_DEFAULT_STREAM_CHUNK;
+
     if (!parse_u64_strict (start_str, &start_off) ||
         !parse_u64_strict (len_str, &read_len) ||
         read_len == 0 ||
@@ -443,6 +449,16 @@ handle_stream_scan (const char *device, const char *start_str, const char *len_s
         send_frame_err (PULS_HELPER_ERR_INVALID_ARG,
                         "{\"error\":\"Invalid STREAM_SCAN range parameters\"}\n");
         return;
+    }
+
+    if (chunk_str != NULL) {
+        if (!parse_u64_strict (chunk_str, &chunk_bytes) ||
+            chunk_bytes < PULS_HELPER_MIN_STREAM_CHUNK ||
+            chunk_bytes > PULS_HELPER_MAX_STREAM_CHUNK) {
+            send_frame_err (PULS_HELPER_ERR_INVALID_ARG,
+                            "{\"error\":\"Invalid STREAM_SCAN chunk size (must be 512..1048576 bytes)\"}\n");
+            return;
+        }
     }
 
     struct stat lst;
@@ -471,55 +487,10 @@ handle_stream_scan (const char *device, const char *start_str, const char *len_s
         return;
     }
 
-    struct timespec ts_start, ts_end;
-    clock_gettime (CLOCK_MONOTONIC, &ts_start);
-
-    char io_buf[65536];
-    uint64_t remaining = read_len;
-    uint64_t offset = start_off;
-    uint64_t bytes_done = 0;
-    int io_failed = 0;
-
-    while (remaining > 0) {
-        size_t want = (remaining > sizeof (io_buf)) ? sizeof (io_buf) : (size_t)remaining;
-        ssize_t got = pread (fd, io_buf, want, (off_t)offset);
-        if (got < 0) {
-            if (errno == EINTR)
-                continue;
-            io_failed = 1;
-            break;
-        }
-        if (got == 0)
-            break;
-        bytes_done += (uint64_t)got;
-        offset += (uint64_t)got;
-        remaining -= (uint64_t)got;
-    }
+    (void)puls_helper_stream_read_fd (fd, STDIN_FILENO, stdout,
+                                      device, start_off, read_len,
+                                      chunk_bytes, 0);
     close (fd);
-
-    clock_gettime (CLOCK_MONOTONIC, &ts_end);
-    double elapsed_ms = ((double)(ts_end.tv_sec - ts_start.tv_sec) * 1000.0) +
-                        ((double)(ts_end.tv_nsec - ts_start.tv_nsec) / 1000000.0);
-
-    if (io_failed) {
-        send_frame_err (PULS_HELPER_ERR_IO,
-                        "{\"error\":\"Read error during STREAM_SCAN\"}\n");
-        return;
-    }
-
-    char resp[512];
-    int n = snprintf (resp, sizeof (resp),
-                      "{\"status\":\"ok\",\"device\":\"%s\",\"start\":%" PRIu64
-                      ",\"length\":%" PRIu64 ",\"bytes_read\":%" PRIu64
-                      ",\"elapsed_ms\":%.3f}\n",
-                      device, start_off, read_len, bytes_done, elapsed_ms);
-    if (n < 0 || (size_t)n >= sizeof (resp)) {
-        send_frame_err (PULS_HELPER_ERR_INTERNAL,
-                        "{\"error\":\"Failed to format STREAM_SCAN response\"}\n");
-        return;
-    }
-
-    send_frame_ok (resp, (size_t)n);
 }
 
 static void
@@ -537,7 +508,9 @@ handle_hello (const char *version_arg, int *handshake_done)
         "\"version\":2,"
         "\"capabilities\":[\"READ_SMART\",\"ACTION\",\"STREAM_SCAN\"],"
         "\"read_options\":[\"standby\"],"
-        "\"actions\":[\"short\",\"long\",\"abort\"]}\n";
+        "\"actions\":[\"short\",\"long\",\"abort\"],"
+        "\"streaming\":true,"
+        "\"chunk_frame\":\"" PULS_HELPER_RESP_CHUNK "\"}\n";
     send_frame_ok (ok_json, strlen (ok_json));
 }
 
@@ -664,12 +637,25 @@ dispatch_protocol_line (char *line, int *handshake_done)
         return 0;
     }
 
-    if (strcmp (toks[0], PULS_HELPER_CMD_STREAM_SCAN) == 0) {
-        if (n_toks != 4) {
+    if (strcmp (toks[0], PULS_HELPER_CMD_CANCEL) == 0) {
+        if (n_toks != 1) {
             send_frame_err (PULS_HELPER_ERR_INVALID_ARG,
-                            "{\"error\":\"Usage: STREAM_SCAN <dev> <start> <len>\"}\n");
+                            "{\"error\":\"Usage: CANCEL\"}\n");
         } else {
-            handle_stream_scan (toks[1], toks[2], toks[3]);
+            /* Idempotent when no stream is active (handles race with stream completion) */
+            send_frame_ok ("", 0);
+        }
+        return 0;
+    }
+
+    if (strcmp (toks[0], PULS_HELPER_CMD_STREAM_SCAN) == 0) {
+        if (n_toks == 4) {
+            handle_stream_scan (toks[1], toks[2], toks[3], NULL);
+        } else if (n_toks == 5) {
+            handle_stream_scan (toks[1], toks[2], toks[3], toks[4]);
+        } else {
+            send_frame_err (PULS_HELPER_ERR_INVALID_ARG,
+                            "{\"error\":\"Usage: STREAM_SCAN <dev> <start> <len> [chunk_bytes]\"}\n");
         }
         return 0;
     }

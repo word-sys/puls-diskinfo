@@ -26,6 +26,7 @@
 #include <sys/stat.h>
 #include <gio/gunixinputstream.h>
 #include <gio/gunixoutputstream.h>
+#include <json-glib/json-glib.h>
 
 struct _PulsHelperClient {
     GMutex            mutex;
@@ -293,6 +294,28 @@ puls_helper_format_stream_scan (const gchar *device_path,
                             PULS_HELPER_CMD_STREAM_SCAN, device_path, start_offset, length);
 }
 
+/**
+ * puls_helper_format_stream_scan_chunked:
+ * @device_path: Storage device node path.
+ * @start_offset: Starting byte offset.
+ * @length: Number of bytes to probe.
+ * @chunk_bytes: Streaming telemetry chunk size in bytes (512 .. 1 MiB).
+ *
+ * Returns: (transfer full): Framed v2 `STREAM_SCAN` command with explicit chunk size.
+ */
+gchar *
+puls_helper_format_stream_scan_chunked (const gchar *device_path,
+                                        guint64      start_offset,
+                                        guint64      length,
+                                        guint64      chunk_bytes)
+{
+    g_return_val_if_fail (device_path != NULL, NULL);
+
+    return g_strdup_printf ("%s %s %" G_GUINT64_FORMAT " %" G_GUINT64_FORMAT " %" G_GUINT64_FORMAT "\n",
+                            PULS_HELPER_CMD_STREAM_SCAN, device_path,
+                            start_offset, length, chunk_bytes);
+}
+
 static gboolean
 parse_strict_size_token (const gchar *tok, gsize *out_len)
 {
@@ -450,6 +473,230 @@ puls_helper_exchange_command (GOutputStream     *stdin_stream,
         g_free (buf);
 
     return TRUE;
+}
+
+/**
+ * puls_helper_parse_chunk_header:
+ * @header_line: Single ASCII streaming chunk header (`CHUNK <seq> <len>`).
+ * @out_seq: (out) (optional): Monotonic chunk sequence number (>= 1).
+ * @out_payload_len: (out) (optional): Exact chunk JSON payload length in bytes.
+ *
+ * Returns: %TRUE if @header_line is a valid Protocol v2 `CHUNK` header.
+ */
+gboolean
+puls_helper_parse_chunk_header (const gchar *header_line,
+                                guint64     *out_seq,
+                                gsize       *out_payload_len)
+{
+    if (out_seq)
+        *out_seq = 0;
+    if (out_payload_len)
+        *out_payload_len = 0;
+
+    if (header_line == NULL || *header_line == '\0')
+        return FALSE;
+
+    g_autofree gchar *trimmed = g_strdup (header_line);
+    g_strstrip (trimmed);
+    g_auto(GStrv) parts = g_strsplit (trimmed, " ", -1);
+    if (g_strv_length (parts) != 3 || g_strcmp0 (parts[0], PULS_HELPER_RESP_CHUNK) != 0)
+        return FALSE;
+
+    if (parts[1][0] == '\0' || !g_ascii_isdigit (parts[1][0]))
+        return FALSE;
+
+    errno = 0;
+    gchar *seq_end = NULL;
+    guint64 seq = g_ascii_strtoull (parts[1], &seq_end, 10);
+    if (errno != 0 || seq_end == parts[1] || *seq_end != '\0' || seq == 0)
+        return FALSE;
+
+    gsize len = 0;
+    if (!parse_strict_size_token (parts[2], &len))
+        return FALSE;
+
+    if (out_seq)
+        *out_seq = seq;
+    if (out_payload_len)
+        *out_payload_len = len;
+
+    return TRUE;
+}
+
+/**
+ * puls_helper_parse_stream_chunk_json:
+ * @json_payload: UTF-8 JSON object payload from a `CHUNK` frame.
+ * @out_chunk: (out): Populated #PulsHelperStreamChunk telemetry metrics.
+ *
+ * Returns: %TRUE if @json_payload is a valid telemetry JSON object.
+ */
+gboolean
+puls_helper_parse_stream_chunk_json (const gchar           *json_payload,
+                                     PulsHelperStreamChunk *out_chunk)
+{
+    g_return_val_if_fail (out_chunk != NULL, FALSE);
+    memset (out_chunk, 0, sizeof (*out_chunk));
+
+    if (json_payload == NULL || *json_payload == '\0')
+        return FALSE;
+
+    g_autoptr(JsonParser) parser = json_parser_new ();
+    if (!json_parser_load_from_data (parser, json_payload, -1, NULL))
+        return FALSE;
+
+    JsonNode *root = json_parser_get_root (parser);
+    if (root == NULL || !JSON_NODE_HOLDS_OBJECT (root))
+        return FALSE;
+
+    JsonObject *obj = json_node_get_object (root);
+    if (!json_object_has_member (obj, "seq") ||
+        !json_object_has_member (obj, "bytes_read") ||
+        !json_object_has_member (obj, "total_bytes"))
+        return FALSE;
+
+    out_chunk->seq          = (guint64)MAX (0, json_object_get_int_member (obj, "seq"));
+    out_chunk->offset       = json_object_has_member (obj, "offset")
+                              ? (guint64)MAX (0, json_object_get_int_member (obj, "offset")) : 0;
+    out_chunk->chunk_bytes  = json_object_has_member (obj, "chunk_bytes")
+                              ? (guint64)MAX (0, json_object_get_int_member (obj, "chunk_bytes")) : 0;
+    out_chunk->bytes_read   = (guint64)MAX (0, json_object_get_int_member (obj, "bytes_read"));
+    out_chunk->total_bytes  = (guint64)MAX (0, json_object_get_int_member (obj, "total_bytes"));
+    out_chunk->progress_pct = json_object_has_member (obj, "progress")
+                              ? json_object_get_double_member (obj, "progress") : 0.0;
+    out_chunk->chunk_ms     = json_object_has_member (obj, "chunk_ms")
+                              ? json_object_get_double_member (obj, "chunk_ms") : 0.0;
+    out_chunk->mb_per_sec   = json_object_has_member (obj, "mb_per_sec")
+                              ? json_object_get_double_member (obj, "mb_per_sec") : 0.0;
+
+    return (out_chunk->seq > 0);
+}
+
+/**
+ * puls_helper_exchange_stream:
+ * @stdin_stream: Helper stdin pipe.
+ * @stdout_stream: Helper stdout buffered stream.
+ * @command: Full streaming command line ending in `\n`.
+ * @chunk_cb: (nullable) (scope call): Callback invoked for each `CHUNK` telemetry
+ *   frame. Return %TRUE to keep streaming or %FALSE to send a bidirectional
+ *   `CANCEL\n` control frame immediately.
+ * @user_data: User context for @chunk_cb.
+ * @out_ok: (out) (optional): %TRUE if terminal frame was `OK`, %FALSE for `ERR`.
+ * @out_err_code: (out) (optional): Terminal error token when `ERR`.
+ * @out_final_payload: (out) (optional): Terminal summary/error payload bytes.
+ * @error: (out) (optional): Return location for transport/framing #GError.
+ *
+ * Sends @command and consumes 0 or more intermediate `CHUNK <seq> <len>` frames
+ * until the terminal `OK` or `ERR` frame completes the stream.
+ *
+ * Returns: %TRUE on valid framed stream completion (check @out_ok / @out_err_code).
+ */
+gboolean
+puls_helper_exchange_stream (GOutputStream            *stdin_stream,
+                             GDataInputStream         *stdout_stream,
+                             const gchar              *command,
+                             PulsHelperStreamCallback  chunk_cb,
+                             gpointer                  user_data,
+                             gboolean                 *out_ok,
+                             gchar                   **out_err_code,
+                             gchar                   **out_final_payload,
+                             GError                  **error)
+{
+    g_return_val_if_fail (G_IS_OUTPUT_STREAM (stdin_stream), FALSE);
+    g_return_val_if_fail (G_IS_DATA_INPUT_STREAM (stdout_stream), FALSE);
+    g_return_val_if_fail (command != NULL, FALSE);
+
+    if (out_ok)
+        *out_ok = FALSE;
+    if (out_err_code)
+        *out_err_code = NULL;
+    if (out_final_payload)
+        *out_final_payload = NULL;
+
+    gsize bytes_written = 0;
+    if (!g_output_stream_write_all (stdin_stream, command, strlen (command),
+                                    &bytes_written, NULL, error))
+        return FALSE;
+
+    gboolean cancel_sent = FALSE;
+
+    for (;;) {
+        g_autofree gchar *header = g_data_input_stream_read_line (stdout_stream, NULL, NULL, error);
+        if (header == NULL) {
+            if (error && *error == NULL)
+                g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                             "Helper EOF or disconnected during stream");
+            return FALSE;
+        }
+
+        guint64 chunk_seq = 0;
+        gsize payload_len = 0;
+
+        if (puls_helper_parse_chunk_header (header, &chunk_seq, &payload_len)) {
+            g_autofree gchar *chunk_buf = g_malloc (payload_len + 1);
+            if (payload_len > 0) {
+                gsize got = 0;
+                if (!g_input_stream_read_all (G_INPUT_STREAM (stdout_stream),
+                                              chunk_buf, payload_len,
+                                              &got, NULL, error) ||
+                    got != payload_len) {
+                    if (error && *error == NULL)
+                        g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                                     "Short read on helper CHUNK payload");
+                    return FALSE;
+                }
+            }
+            chunk_buf[payload_len] = '\0';
+
+            if (!cancel_sent && chunk_cb != NULL) {
+                gboolean keep_going = chunk_cb (chunk_seq, chunk_buf, user_data);
+                if (!keep_going) {
+                    static const gchar cancel_cmd[] = PULS_HELPER_CMD_CANCEL "\n";
+                    gsize cw = 0;
+                    (void)g_output_stream_write_all (stdin_stream, cancel_cmd,
+                                                     sizeof (cancel_cmd) - 1,
+                                                     &cw, NULL, NULL);
+                    cancel_sent = TRUE;
+                }
+            }
+            continue;
+        }
+
+        gboolean resp_ok = FALSE;
+        g_autofree gchar *err_code = NULL;
+
+        if (!puls_helper_parse_frame_header (header, &resp_ok, &err_code, &payload_len)) {
+            g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                         "Invalid helper stream frame header: %s", header);
+            return FALSE;
+        }
+
+        gchar *final_buf = g_malloc (payload_len + 1);
+        if (payload_len > 0) {
+            gsize got = 0;
+            if (!g_input_stream_read_all (G_INPUT_STREAM (stdout_stream),
+                                          final_buf, payload_len,
+                                          &got, NULL, error) ||
+                got != payload_len) {
+                g_free (final_buf);
+                if (error && *error == NULL)
+                    g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                                 "Short read on helper terminal stream payload");
+                return FALSE;
+            }
+        }
+        final_buf[payload_len] = '\0';
+
+        if (out_ok)
+            *out_ok = resp_ok;
+        if (out_err_code)
+            *out_err_code = g_steal_pointer (&err_code);
+        if (out_final_payload)
+            *out_final_payload = final_buf;
+        else
+            g_free (final_buf);
+
+        return TRUE;
+    }
 }
 
 static void
@@ -1360,6 +1607,61 @@ puls_helper_client_exchange (PulsHelperClient  *client,
 
     g_mutex_unlock (&client->mutex);
     return success;
+}
+
+/**
+ * puls_helper_client_stream:
+ * @client: A #PulsHelperClient.
+ * @command: Framed Protocol v2 streaming command line ending in `\n`.
+ * @chunk_cb: (nullable) (scope call): Real-time telemetry chunk callback.
+ * @user_data: Context pointer for @chunk_cb.
+ * @out_ok: (out) (optional): %TRUE for terminal `OK`, %FALSE for `ERR`.
+ * @out_err_code: (out) (optional): Error token when `ERR`.
+ * @out_final_payload: (out) (optional): Terminal JSON payload.
+ * @error: (out) (optional): Return location for a #GError.
+ *
+ * Executes a continuous chunked streaming command over @client with watchdog
+ * liveness verification and bidirectional `CANCEL` support.
+ *
+ * Returns: %TRUE if the stream completed with a valid terminal frame.
+ */
+gboolean
+puls_helper_client_stream (PulsHelperClient         *client,
+                           const gchar              *command,
+                           PulsHelperStreamCallback  chunk_cb,
+                           gpointer                  user_data,
+                           gboolean                 *out_ok,
+                           gchar                   **out_err_code,
+                           gchar                   **out_final_payload,
+                           GError                  **error)
+{
+    g_return_val_if_fail (client != NULL, FALSE);
+    g_return_val_if_fail (command != NULL, FALSE);
+
+    g_mutex_lock (&client->mutex);
+
+    if (!ensure_helper_running_locked (client, error)) {
+        g_mutex_unlock (&client->mutex);
+        return FALSE;
+    }
+
+    GError *local_err = NULL;
+    gboolean ok = puls_helper_exchange_stream (client->stdin_stream,
+                                               client->stdout_stream,
+                                               command,
+                                               chunk_cb,
+                                               user_data,
+                                               out_ok,
+                                               out_err_code,
+                                               out_final_payload,
+                                               &local_err);
+    if (!ok) {
+        terminate_and_reap_helper_locked (client, FALSE, TRUE);
+        g_propagate_error (error, local_err);
+    }
+
+    g_mutex_unlock (&client->mutex);
+    return ok;
 }
 
 /**
