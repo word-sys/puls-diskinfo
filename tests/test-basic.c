@@ -3631,6 +3631,202 @@ test_elevation_fallback_mechanisms (void)
 #endif
 }
 
+typedef struct {
+    guint             direct_calls;
+    guint             helper_calls;
+    gboolean          direct_perm_denied;
+    PulsHelperClient *helper_client;
+} ZeroElevTestCtx;
+
+static gchar *
+zero_elev_mock_direct_fn (const gchar  *device_path,
+                          gboolean      check_standby G_GNUC_UNUSED,
+                          gpointer      user_data,
+                          GError      **error G_GNUC_UNUSED)
+{
+    ZeroElevTestCtx *ctx = (ZeroElevTestCtx *)user_data;
+    ctx->direct_calls++;
+
+    if (ctx->direct_perm_denied) {
+        return g_strdup ("{\"smartctl\":{\"messages\":[{\"string\":\"Smartctl open device: failed: Permission denied\"}]}}\n");
+    }
+
+    return g_strdup_printf ("{\"source\":\"direct\",\"device\":\"%s\",\"smart_status\":{\"passed\":true}}\n",
+                            device_path);
+}
+
+static gchar *
+zero_elev_mock_helper_fn (const gchar  *device_path G_GNUC_UNUSED,
+                          gboolean      check_standby G_GNUC_UNUSED,
+                          gpointer      user_data,
+                          GError      **error)
+{
+    ZeroElevTestCtx *ctx = (ZeroElevTestCtx *)user_data;
+    ctx->helper_calls++;
+
+    if (ctx->helper_client != NULL) {
+        gboolean ok = FALSE;
+        g_autofree gchar *err_code = NULL;
+        gchar *payload = NULL;
+        if (puls_helper_client_exchange (ctx->helper_client, "HELLO v2\n",
+                                         &ok, &err_code, &payload, error) && ok) {
+            return payload;
+        }
+        g_free (payload);
+        return NULL;
+    }
+
+    return g_strdup ("{\"source\":\"helper\",\"smart_status\":{\"passed\":true}}\n");
+}
+
+static void
+test_zero_elevation_mode (void)
+{
+    g_autoptr(GError) err = NULL;
+
+    /* 1. Permission-denied output classifier */
+    g_assert_true  (puls_smartctl_output_is_permission_denied (NULL));
+    g_assert_true  (puls_smartctl_output_is_permission_denied (""));
+    g_assert_true  (puls_smartctl_output_is_permission_denied ("open device: /dev/nvme0 failed: Permission denied"));
+    g_assert_true  (puls_smartctl_output_is_permission_denied ("NVMe admin ioctl failed: Operation not permitted"));
+    g_assert_true  (puls_smartctl_output_is_permission_denied ("error: EACCES"));
+    g_assert_false (puls_smartctl_output_is_permission_denied ("{\"json_format_version\":[1,0],\"smart_status\":{\"passed\":true}}"));
+
+    /* 2. Device-path security guard preserved on puls_device_supports_zero_elevation */
+    g_assert_false (puls_device_supports_zero_elevation (NULL));
+    g_assert_false (puls_device_supports_zero_elevation (""));
+    g_assert_false (puls_device_supports_zero_elevation ("/dev/null"));
+    g_assert_false (puls_device_supports_zero_elevation ("/dev/zero"));
+    g_assert_false (puls_device_supports_zero_elevation ("/dev/../etc/passwd"));
+    g_assert_false (puls_device_supports_zero_elevation ("/dev/sda;reboot"));
+
+    /* 3. Real POSIX permission probing via puls_node_has_direct_rw_access() */
+    g_autofree gchar *tmp_dir = g_dir_make_tmp ("puls_test_zero_elev_XXXXXX", &err);
+    g_assert_no_error (err);
+    g_assert_nonnull (tmp_dir);
+
+    g_autofree gchar *rw_node = g_build_filename (tmp_dir, "sda", NULL);
+    g_assert_true (g_file_set_contents (rw_node, "mock_dev", -1, &err));
+    g_assert_no_error (err);
+
+    /* 3a. Group/owner readable & writable (0660) -> direct access allowed */
+    g_assert_cmpint (chmod (rw_node, 0660), ==, 0);
+    g_assert_true (puls_node_has_direct_rw_access (rw_node));
+
+    /* 3b. Read-only (0444) -> rejected (smartctl ioctls require W_OK) */
+    g_assert_cmpint (chmod (rw_node, 0444), ==, 0);
+    g_assert_false (puls_node_has_direct_rw_access (rw_node));
+
+    /* 3c. Write-only (0200) -> rejected (missing R_OK) */
+    g_assert_cmpint (chmod (rw_node, 0200), ==, 0);
+    g_assert_false (puls_node_has_direct_rw_access (rw_node));
+
+    /* 3d. No permissions (0000) -> rejected */
+    g_assert_cmpint (chmod (rw_node, 0000), ==, 0);
+    g_assert_false (puls_node_has_direct_rw_access (rw_node));
+
+    /* 3e. Symlink to 0660 node -> rejected (anti-hijacking) */
+    g_assert_cmpint (chmod (rw_node, 0660), ==, 0);
+    g_autofree gchar *sym_node = g_build_filename (tmp_dir, "sdb", NULL);
+    g_assert_cmpint (symlink (rw_node, sym_node), ==, 0);
+    g_assert_false (puls_node_has_direct_rw_access (sym_node));
+    g_assert_false (puls_node_has_direct_rw_access (NULL));
+    g_assert_false (puls_node_has_direct_rw_access (""));
+
+    /* 4. End-to-end Zero-Elevation orchestration (verifying helper is NOT invoked) */
+    PulsHelperClient *real_helper = NULL;
+#ifdef TEST_HELPER_BIN
+    real_helper = puls_helper_client_new_with_mode (TEST_HELPER_BIN, PULS_ELEVATION_DIRECT_GROUP);
+    g_assert_nonnull (real_helper);
+#endif
+
+    /* Case A: Node has R_OK | W_OK -> runs directly, helper is NEVER launched or invoked */
+    g_assert_cmpint (chmod (rw_node, 0660), ==, 0);
+    ZeroElevTestCtx ctx = { .helper_client = real_helper };
+    gboolean used_direct = FALSE;
+    g_autofree gchar *out_direct = puls_execute_smartctl_with_zero_elevation (
+        rw_node,
+        FALSE,
+        puls_node_has_direct_rw_access (rw_node),
+        zero_elev_mock_direct_fn,
+        zero_elev_mock_helper_fn,
+        &ctx,
+        &used_direct,
+        &err);
+    g_assert_no_error (err);
+    g_assert_nonnull (out_direct);
+    g_assert_true (used_direct);
+    g_assert_nonnull (strstr (out_direct, "\"source\":\"direct\""));
+    g_assert_cmpuint (ctx.direct_calls, ==, 1);
+    g_assert_cmpuint (ctx.helper_calls, ==, 0);
+
+    if (real_helper != NULL) {
+        PulsHelperStats st = { 0 };
+        puls_helper_client_get_stats (real_helper, &st);
+        g_assert_false (st.running);
+        g_assert_cmpuint (st.launch_count, ==, 0);
+    }
+
+    /* Case B: Node lacks W_OK (0444) -> bypasses direct, invokes helper cleanly */
+    g_assert_cmpint (chmod (rw_node, 0444), ==, 0);
+    ctx.direct_calls = 0;
+    ctx.helper_calls = 0;
+    ctx.direct_perm_denied = FALSE;
+    used_direct = TRUE;
+
+    g_autofree gchar *out_helper = puls_execute_smartctl_with_zero_elevation (
+        rw_node,
+        FALSE,
+        puls_node_has_direct_rw_access (rw_node),
+        zero_elev_mock_direct_fn,
+        zero_elev_mock_helper_fn,
+        &ctx,
+        &used_direct,
+        &err);
+    g_assert_no_error (err);
+    g_assert_nonnull (out_helper);
+    g_assert_false (used_direct);
+    g_assert_cmpuint (ctx.direct_calls, ==, 0);
+    g_assert_cmpuint (ctx.helper_calls, ==, 1);
+
+    if (real_helper != NULL) {
+        PulsHelperStats st = { 0 };
+        puls_helper_client_get_stats (real_helper, &st);
+        g_assert_true (st.running);
+        g_assert_cmpuint (st.launch_count, ==, 1);
+    }
+
+    /* Case C: Node has 0660 RW, but kernel ioctl returns Permission denied -> falls back to helper */
+    g_assert_cmpint (chmod (rw_node, 0660), ==, 0);
+    ctx.direct_calls = 0;
+    ctx.helper_calls = 0;
+    ctx.direct_perm_denied = TRUE;
+    used_direct = TRUE;
+
+    g_autofree gchar *out_fb = puls_execute_smartctl_with_zero_elevation (
+        rw_node,
+        TRUE,
+        puls_node_has_direct_rw_access (rw_node),
+        zero_elev_mock_direct_fn,
+        zero_elev_mock_helper_fn,
+        &ctx,
+        &used_direct,
+        &err);
+    g_assert_no_error (err);
+    g_assert_nonnull (out_fb);
+    g_assert_false (used_direct);
+    g_assert_cmpuint (ctx.direct_calls, ==, 1);
+    g_assert_cmpuint (ctx.helper_calls, ==, 1);
+
+    if (real_helper != NULL)
+        puls_helper_client_free (real_helper);
+
+    chmod (rw_node, 0600);
+    unlink (sym_node);
+    unlink (rw_node);
+    rmdir (tmp_dir);
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -3672,6 +3868,7 @@ main (int argc, char *argv[])
     g_test_add_func ("/basic/polkit-policy-validation", test_polkit_policy_validation);
     g_test_add_func ("/basic/helper-crash-recovery-watchdog", test_helper_crash_recovery_watchdog);
     g_test_add_func ("/basic/elevation-fallback-mechanisms", test_elevation_fallback_mechanisms);
+    g_test_add_func ("/basic/zero-elevation-mode", test_zero_elevation_mode);
 
     int result = g_test_run ();
 

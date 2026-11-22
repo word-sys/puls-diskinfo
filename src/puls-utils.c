@@ -1499,6 +1499,161 @@ puls_run_smartctl_finish (GAsyncResult *result, GError **error)
     return g_task_propagate_pointer (G_TASK (result), error);
 }
 
+/**
+ * puls_node_has_direct_rw_access:
+ * @path: (nullable): Filesystem path to a device node or test node.
+ *
+ * Checks that @path exists, is NOT a symlink (`!S_ISLNK`), and is both
+ * readable and writable (`access(path, R_OK | W_OK) == 0`) by the current
+ * user without requiring privilege elevation.
+ *
+ * Returns: %TRUE if direct read/write access is permitted, %FALSE otherwise.
+ */
+gboolean
+puls_node_has_direct_rw_access (const gchar *path)
+{
+    if (path == NULL || *path == '\0')
+        return FALSE;
+
+    struct stat lst;
+    if (lstat (path, &lst) != 0)
+        return FALSE;
+
+    if (S_ISLNK (lst.st_mode))
+        return FALSE;
+
+    return (access (path, R_OK | W_OK) == 0);
+}
+
+/**
+ * puls_device_supports_zero_elevation:
+ * @device_path: (nullable): Storage device node path under `/dev`.
+ *
+ * Verifies that @device_path is a genuine, non-symlink block or character
+ * storage device node under `/dev` AND that the current user has direct
+ * `R_OK | W_OK` permissions (`access(device_path, R_OK | W_OK) == 0`) so
+ * `smartctl` can run directly without invoking `pkexec` or the privileged
+ * helper.
+ *
+ * Returns: %TRUE if zero-elevation direct execution is permitted.
+ */
+gboolean
+puls_device_supports_zero_elevation (const gchar *device_path)
+{
+    if (!puls_validate_device_node (device_path, NULL))
+        return FALSE;
+
+    return (access (device_path, R_OK | W_OK) == 0);
+}
+
+/**
+ * puls_smartctl_output_is_permission_denied:
+ * @output: (nullable): Raw stdout/JSON captured from a direct `smartctl` call.
+ *
+ * Detects whether a direct unprivileged `smartctl` invocation was rejected by
+ * the kernel due to missing device or `CAP_SYS_RAWIO`/`CAP_SYS_ADMIN`
+ * privileges, indicating that elevated fallback should be attempted.
+ *
+ * Returns: %TRUE if @output indicates a permission error.
+ */
+gboolean
+puls_smartctl_output_is_permission_denied (const gchar *output)
+{
+    if (output == NULL || *output == '\0')
+        return TRUE;
+
+    return (strstr (output, "Permission denied") != NULL ||
+            strstr (output, "Operation not permitted") != NULL ||
+            strstr (output, "EACCES") != NULL ||
+            strstr (output, "EPERM") != NULL);
+}
+
+/**
+ * puls_execute_smartctl_with_zero_elevation:
+ * @device_path: Target device path.
+ * @check_standby: Whether to pass `-n standby`.
+ * @allow_direct_rw: Result of permission check (`R_OK | W_OK`).
+ * @direct_fn: Direct unprivileged `smartctl` runner (bypassing helper/pkexec).
+ * @helper_fn: (nullable): Elevated helper/fallback runner used when direct access
+ *   is unavailable or kernel ioctl returns permission denied.
+ * @user_data: Opaque context passed to @direct_fn and @helper_fn.
+ * @out_used_direct: (out) (optional): Set to %TRUE if @direct_fn fulfilled the
+ *   query without invoking @helper_fn.
+ * @error: (out) (optional): Return location for a #GError.
+ *
+ * Orchestrates Zero-Elevation Mode: when @allow_direct_rw is %TRUE, executes
+ * @direct_fn directly without invoking `pkexec` or the helper. Falls back to
+ * @helper_fn only when direct permissions are absent or kernel ioctls reject
+ * the unprivileged call.
+ *
+ * Returns: (transfer full) (nullable): `smartctl` output string on success.
+ */
+gchar *
+puls_execute_smartctl_with_zero_elevation (const gchar            *device_path,
+                                           gboolean                check_standby,
+                                           gboolean                allow_direct_rw,
+                                           PulsSmartctlDirectFunc  direct_fn,
+                                           PulsSmartctlHelperFunc  helper_fn,
+                                           gpointer                user_data,
+                                           gboolean               *out_used_direct,
+                                           GError                **error)
+{
+    g_return_val_if_fail (device_path != NULL, NULL);
+    g_return_val_if_fail (direct_fn != NULL, NULL);
+
+    if (out_used_direct != NULL)
+        *out_used_direct = FALSE;
+
+    if (allow_direct_rw) {
+        GError *direct_err = NULL;
+        gchar *direct_out = direct_fn (device_path, check_standby, user_data, &direct_err);
+
+        if (direct_out != NULL &&
+            *direct_out != '\0' &&
+            !puls_smartctl_output_is_permission_denied (direct_out)) {
+            g_clear_error (&direct_err);
+            if (out_used_direct != NULL)
+                *out_used_direct = TRUE;
+            return direct_out;
+        }
+
+        PULS_LOG_DEBUG ("Zero-elevation direct read for %s did not succeed (%s); falling back to helper",
+                        device_path,
+                        direct_err ? direct_err->message : "permission denied or empty output");
+        g_free (direct_out);
+
+        if (helper_fn == NULL) {
+            if (direct_err != NULL)
+                g_propagate_error (error, direct_err);
+            else
+                g_set_error (error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+                             "Direct smartctl read denied for %s", device_path);
+            return NULL;
+        }
+        g_clear_error (&direct_err);
+    }
+
+    if (helper_fn == NULL) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+                     "No helper available for non-accessible device %s", device_path);
+        return NULL;
+    }
+
+    return helper_fn (device_path, check_standby, user_data, error);
+}
+
+static gchar *
+spawn_smartctl_direct_sync (const gchar *cmdline, GError **error)
+{
+    gchar *stdout_buf = NULL;
+    gchar *stderr_buf = NULL;
+    gint exit_status = 0;
+
+    g_spawn_command_line_sync (cmdline, &stdout_buf, &stderr_buf, &exit_status, error);
+    g_free (stderr_buf);
+    return stdout_buf;
+}
+
 static gchar *
 spawn_smartctl_fallback_sync (const gchar       *cmdline,
                               PulsElevationMode  mode,
@@ -1521,23 +1676,25 @@ spawn_smartctl_fallback_sync (const gchar       *cmdline,
         g_clear_error (&sudo_err);
     }
 
-    g_spawn_command_line_sync (cmdline, &stdout_buf, &stderr_buf, &exit_status, error);
-    g_free (stderr_buf);
-    return stdout_buf;
+    return spawn_smartctl_direct_sync (cmdline, error);
 }
 
-gchar *
-puls_run_smartctl_sync_with_options (const gchar *device_path,
-                                     gboolean     check_standby,
-                                     GError     **error)
+static gchar *
+prod_smartctl_direct_read (const gchar  *device_path,
+                           gboolean      check_standby,
+                           gpointer      user_data G_GNUC_UNUSED,
+                           GError      **error)
 {
-    if (!puls_device_path_is_valid (device_path)) {
-        g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
-                     "Invalid or unsafe device path: %s",
-                     device_path ? device_path : "(null)");
-        return NULL;
-    }
+    g_autofree gchar *cmdline = puls_build_smartctl_read_command (device_path, check_standby);
+    return spawn_smartctl_direct_sync (cmdline, error);
+}
 
+static gchar *
+prod_smartctl_helper_read (const gchar  *device_path,
+                           gboolean      check_standby,
+                           gpointer      user_data G_GNUC_UNUSED,
+                           GError      **error)
+{
     PulsElevationMode mode = puls_get_elevation_mode ();
 
     /* Use privileged or group-credential helper when elevation/group access applies */
@@ -1553,6 +1710,39 @@ puls_run_smartctl_sync_with_options (const gchar *device_path,
 
     g_autofree gchar *cmdline = puls_build_smartctl_read_command (device_path, check_standby);
     return spawn_smartctl_fallback_sync (cmdline, mode, error);
+}
+
+gchar *
+puls_run_smartctl_sync_with_options (const gchar *device_path,
+                                     gboolean     check_standby,
+                                     GError     **error)
+{
+    if (!puls_device_path_is_valid (device_path)) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                     "Invalid or unsafe device path: %s",
+                     device_path ? device_path : "(null)");
+        return NULL;
+    }
+
+    gboolean zero_elev = puls_device_supports_zero_elevation (device_path);
+    gboolean used_direct = FALSE;
+
+    gchar *out = puls_execute_smartctl_with_zero_elevation (
+        device_path,
+        check_standby,
+        zero_elev,
+        prod_smartctl_direct_read,
+        prod_smartctl_helper_read,
+        NULL,
+        &used_direct,
+        error);
+
+    if (used_direct && out != NULL) {
+        PULS_LOG_DEBUG ("Zero-elevation mode: direct smartctl read succeeded for %s (pkexec/helper bypassed)",
+                        device_path);
+    }
+
+    return out;
 }
 
 gchar *
@@ -3158,18 +3348,6 @@ puls_run_smartctl_action_sync (const gchar *device_path, const gchar *action, GE
         return NULL;
     }
 
-    PulsElevationMode mode = puls_get_elevation_mode ();
-
-    if (mode != PULS_ELEVATION_NONE) {
-        g_autofree gchar *cmd = puls_helper_format_action (device_path, action);
-        gchar *res = communicate_with_helper (cmd, error);
-        if (res != NULL)
-            return res;
-
-        if (error)
-            g_clear_error (error);
-    }
-
     g_autofree gchar *cmdline = NULL;
     if (g_strcmp0 (action, PULS_HELPER_ACTION_SHORT) == 0) {
         cmdline = g_strdup_printf ("smartctl -t short %s", device_path);
@@ -3181,6 +3359,34 @@ puls_run_smartctl_action_sync (const gchar *device_path, const gchar *action, GE
         g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
                      "Disallowed smartctl action: %s", action);
         return NULL;
+    }
+
+    /* Zero-elevation fast path: run smartctl directly when device node allows R_OK | W_OK */
+    if (puls_device_supports_zero_elevation (device_path)) {
+        GError *direct_err = NULL;
+        gchar *direct_out = spawn_smartctl_direct_sync (cmdline, &direct_err);
+        if (direct_out != NULL &&
+            *direct_out != '\0' &&
+            !puls_smartctl_output_is_permission_denied (direct_out)) {
+            g_clear_error (&direct_err);
+            PULS_LOG_DEBUG ("Zero-elevation mode: direct smartctl action '%s' succeeded for %s",
+                            action, device_path);
+            return direct_out;
+        }
+        g_free (direct_out);
+        g_clear_error (&direct_err);
+    }
+
+    PulsElevationMode mode = puls_get_elevation_mode ();
+
+    if (mode != PULS_ELEVATION_NONE) {
+        g_autofree gchar *cmd = puls_helper_format_action (device_path, action);
+        gchar *res = communicate_with_helper (cmd, error);
+        if (res != NULL)
+            return res;
+
+        if (error)
+            g_clear_error (error);
     }
 
     gchar *stdout_buf = spawn_smartctl_fallback_sync (cmdline, mode, error);

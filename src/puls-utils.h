@@ -132,6 +132,28 @@ PulsElevationMode puls_get_elevation_mode            (void);
 gchar           **puls_helper_build_spawn_argv       (PulsElevationMode        mode,
                                                       const gchar             *helper_bin);
 
+/* Zero-Elevation Mode for Group-Readable / Direct-Accessible Device Nodes */
+typedef gchar *(*PulsSmartctlDirectFunc)             (const gchar             *device_path,
+                                                      gboolean                 check_standby,
+                                                      gpointer                 user_data,
+                                                      GError                 **error);
+typedef gchar *(*PulsSmartctlHelperFunc)             (const gchar             *device_path,
+                                                      gboolean                 check_standby,
+                                                      gpointer                 user_data,
+                                                      GError                 **error);
+
+gboolean          puls_node_has_direct_rw_access     (const gchar             *path);
+gboolean          puls_device_supports_zero_elevation(const gchar             *device_path);
+gboolean          puls_smartctl_output_is_permission_denied (const gchar      *output);
+gchar            *puls_execute_smartctl_with_zero_elevation (const gchar            *device_path,
+                                                             gboolean                check_standby,
+                                                             gboolean                allow_direct_rw,
+                                                             PulsSmartctlDirectFunc  direct_fn,
+                                                             PulsSmartctlHelperFunc  helper_fn,
+                                                             gpointer                user_data,
+                                                             gboolean               *out_used_direct,
+                                                             GError                **error);
+
 /* Privileged Helper Watchdog, Crash Recovery & Zombie Cleanup */
 typedef struct _PulsHelperClient PulsHelperClient;
 
