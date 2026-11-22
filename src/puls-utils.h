@@ -103,6 +103,41 @@ gboolean       puls_helper_exchange_command      (GOutputStream    *stdin_stream
                                                   gchar           **out_payload,
                                                   GError          **error);
 
+/* Privileged Helper Watchdog, Crash Recovery & Zombie Cleanup */
+typedef struct _PulsHelperClient PulsHelperClient;
+
+typedef struct {
+    GPid     pid;
+    gboolean running;
+    guint    launch_count;
+    guint    crash_count;
+    guint    reaped_count;
+} PulsHelperStats;
+
+PulsHelperClient *puls_helper_client_new            (const gchar      *helper_path,
+                                                     gboolean          use_pkexec);
+void              puls_helper_client_free           (PulsHelperClient *client);
+gboolean          puls_helper_client_ensure_running (PulsHelperClient *client,
+                                                     GError          **error);
+gboolean          puls_helper_client_watchdog_check (PulsHelperClient *client);
+void              puls_helper_client_watchdog_start (PulsHelperClient *client,
+                                                     guint             interval_ms);
+void              puls_helper_client_watchdog_stop  (PulsHelperClient *client);
+gboolean          puls_helper_client_exchange       (PulsHelperClient *client,
+                                                     const gchar      *command,
+                                                     gboolean         *out_ok,
+                                                     gchar           **out_err_code,
+                                                     gchar           **out_payload,
+                                                     GError          **error);
+void              puls_helper_client_shutdown       (PulsHelperClient *client);
+void              puls_helper_client_get_stats      (PulsHelperClient *client,
+                                                     PulsHelperStats  *out_stats);
+
+gboolean          puls_helper_watchdog_check        (void);
+void              puls_helper_watchdog_start        (guint             interval_ms);
+void              puls_helper_watchdog_stop         (void);
+void              puls_helper_shutdown              (void);
+
 /* Polkit Policy XML Introspection & Validation */
 typedef struct {
     gchar *id;

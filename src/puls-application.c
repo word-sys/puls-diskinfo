@@ -14,6 +14,7 @@
 #include "puls-application.h"
 #include "puls-window.h"
 #include "puls-settings.h"
+#include "puls-utils.h"
 
 GResource *puls_diskinfo_get_resource (void);
 
@@ -65,14 +66,24 @@ puls_application_activate (GApplication *app)
     else
         adw_style_manager_set_color_scheme (sm, ADW_COLOR_SCHEME_DEFAULT);
 
+    puls_helper_watchdog_start (5000);
+
     PulsWindow *window = puls_window_new (self);
     gtk_window_present (GTK_WINDOW (window));
+}
+
+static void
+puls_application_shutdown (GApplication *app)
+{
+    puls_helper_shutdown ();
+    G_APPLICATION_CLASS (puls_application_parent_class)->shutdown (app);
 }
 
 static void
 puls_application_dispose (GObject *object)
 {
     PulsApplication *self = PULS_APPLICATION (object);
+    puls_helper_shutdown ();
     g_clear_object (&self->css_provider);
     G_OBJECT_CLASS (puls_application_parent_class)->dispose (object);
 }
@@ -84,6 +95,7 @@ puls_application_class_init (PulsApplicationClass *klass)
     GObjectClass *object_class = G_OBJECT_CLASS (klass);
 
     app_class->activate = puls_application_activate;
+    app_class->shutdown = puls_application_shutdown;
     object_class->dispose = puls_application_dispose;
 }
 

@@ -7,7 +7,10 @@
  */
 
 #include <glib.h>
+#include <errno.h>
+#include <signal.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include "../helper/puls-helper-protocol.h"
 #include "puls-smart-data.h"
 #include "puls-smart-parser.h"
@@ -3330,6 +3333,164 @@ test_polkit_policy_validation (void)
     g_clear_error (&err);
 }
 
+static void
+test_helper_crash_recovery_watchdog (void)
+{
+#ifdef TEST_HELPER_BIN
+    g_autoptr(GError) err = NULL;
+    PulsHelperClient *client = puls_helper_client_new (TEST_HELPER_BIN, FALSE);
+    g_assert_nonnull (client);
+
+    PulsHelperStats st = { 0 };
+    puls_helper_client_get_stats (client, &st);
+    g_assert_false (st.running);
+    g_assert_cmpuint (st.launch_count, ==, 0);
+    g_assert_cmpuint (st.crash_count, ==, 0);
+    g_assert_cmpuint (st.reaped_count, ==, 0);
+
+    /* 1. Initial launch & Protocol v2 handshake */
+    g_assert_true (puls_helper_client_ensure_running (client, &err));
+    g_assert_no_error (err);
+    g_assert_true (puls_helper_client_watchdog_check (client));
+
+    puls_helper_client_get_stats (client, &st);
+    g_assert_true (st.running);
+    g_assert_cmpint ((gint)st.pid, >, 0);
+    g_assert_cmpuint (st.launch_count, ==, 1);
+    GPid pid1 = st.pid;
+
+    /* Normal query reuses the same live helper process */
+    gboolean ok = TRUE;
+    g_autofree gchar *err_code = NULL;
+    g_autofree gchar *payload = NULL;
+    g_assert_true (puls_helper_client_exchange (client, "READ_SMART /dev/invalid_xyz\n",
+                                                &ok, &err_code, &payload, &err));
+    g_assert_no_error (err);
+    g_assert_false (ok);
+    g_assert_cmpstr (err_code, ==, PULS_HELPER_ERR_INVALID_DEVICE);
+    g_clear_pointer (&err_code, g_free);
+    g_clear_pointer (&payload, g_free);
+
+    puls_helper_client_get_stats (client, &st);
+    g_assert_cmpint ((gint)st.pid, ==, (gint)pid1);
+    g_assert_cmpuint (st.launch_count, ==, 1);
+
+    /* 2. Intentionally SIGKILL helper -> watchdog detects termination & reaps zombie */
+    g_assert_cmpint (kill ((pid_t)pid1, SIGKILL), ==, 0);
+
+    gboolean still_alive = TRUE;
+    for (guint i = 0; i < 100 && still_alive; i++) {
+        g_usleep (5000);
+        still_alive = puls_helper_client_watchdog_check (client);
+    }
+    g_assert_false (still_alive);
+
+    puls_helper_client_get_stats (client, &st);
+    g_assert_false (st.running);
+    g_assert_cmpint ((gint)st.pid, ==, 0);
+    g_assert_cmpuint (st.crash_count, ==, 1);
+    g_assert_cmpuint (st.reaped_count, ==, 1);
+
+    /* Verify pid1 is completely reaped (no zombie child lingering) */
+    int wstatus = 0;
+    errno = 0;
+    g_assert_cmpint (waitpid ((pid_t)pid1, &wstatus, WNOHANG), ==, -1);
+    g_assert_cmpint (errno, ==, ECHILD);
+
+    /* Next query cleanly re-launches helper with a new PID */
+    g_assert_true (puls_helper_client_exchange (client, "HELLO v2\n",
+                                                &ok, &err_code, &payload, &err));
+    g_assert_no_error (err);
+    g_assert_true (ok);
+    g_assert_nonnull (strstr (payload, "\"protocol\":\"v2\""));
+    g_clear_pointer (&err_code, g_free);
+    g_clear_pointer (&payload, g_free);
+
+    puls_helper_client_get_stats (client, &st);
+    g_assert_true (st.running);
+    g_assert_cmpint ((gint)st.pid, >, 0);
+    g_assert_cmpint ((gint)st.pid, !=, (gint)pid1);
+    g_assert_cmpuint (st.launch_count, ==, 2);
+    GPid pid2 = st.pid;
+
+    /* 3. Kill helper directly before next query (NO manual watchdog_check call) */
+    g_assert_cmpint (kill ((pid_t)pid2, SIGKILL), ==, 0);
+    g_usleep (20000);
+
+    /* Query transparently recovers, reaps pid2, avoids SIGPIPE, and succeeds */
+    g_assert_true (puls_helper_client_exchange (client, "HELLO v2\n",
+                                                &ok, &err_code, &payload, &err));
+    g_assert_no_error (err);
+    g_assert_true (ok);
+    g_assert_nonnull (strstr (payload, "\"version\":2"));
+    g_clear_pointer (&err_code, g_free);
+    g_clear_pointer (&payload, g_free);
+
+    puls_helper_client_get_stats (client, &st);
+    g_assert_true (st.running);
+    g_assert_cmpint ((gint)st.pid, !=, (gint)pid2);
+    g_assert_cmpuint (st.launch_count, ==, 3);
+    g_assert_cmpuint (st.crash_count, ==, 2);
+    g_assert_cmpuint (st.reaped_count, ==, 2);
+    GPid pid3 = st.pid;
+
+    errno = 0;
+    g_assert_cmpint (waitpid ((pid_t)pid2, &wstatus, WNOHANG), ==, -1);
+    g_assert_cmpint (errno, ==, ECHILD);
+
+    /* 4. Periodic GLib watchdog timer automatically reaps SIGTERM'd helper while idle */
+    puls_helper_client_watchdog_start (client, 25);
+    g_assert_cmpint (kill ((pid_t)pid3, SIGTERM), ==, 0);
+
+    gint64 deadline = g_get_monotonic_time () + 2 * G_TIME_SPAN_SECOND;
+    while (g_get_monotonic_time () < deadline) {
+        puls_helper_client_get_stats (client, &st);
+        if (!st.running && st.reaped_count >= 3)
+            break;
+        g_main_context_iteration (NULL, FALSE);
+        g_usleep (5000);
+    }
+    puls_helper_client_watchdog_stop (client);
+
+    puls_helper_client_get_stats (client, &st);
+    g_assert_false (st.running);
+    g_assert_cmpuint (st.crash_count, ==, 3);
+    g_assert_cmpuint (st.reaped_count, ==, 3);
+
+    errno = 0;
+    g_assert_cmpint (waitpid ((pid_t)pid3, &wstatus, WNOHANG), ==, -1);
+    g_assert_cmpint (errno, ==, ECHILD);
+
+    /* Next query re-launches cleanly after periodic watchdog reap */
+    g_assert_true (puls_helper_client_exchange (client, "ACTION /dev/sda bogus\n",
+                                                &ok, &err_code, &payload, &err));
+    g_assert_no_error (err);
+    g_assert_false (ok);
+    g_assert_cmpstr (err_code, ==, PULS_HELPER_ERR_INVALID_ACTION);
+    g_clear_pointer (&err_code, g_free);
+    g_clear_pointer (&payload, g_free);
+
+    puls_helper_client_get_stats (client, &st);
+    g_assert_true (st.running);
+    g_assert_cmpuint (st.launch_count, ==, 4);
+    GPid pid4 = st.pid;
+
+    /* 5. Graceful shutdown sends QUIT and reaps without incrementing crash_count */
+    puls_helper_client_shutdown (client);
+
+    puls_helper_client_get_stats (client, &st);
+    g_assert_false (st.running);
+    g_assert_cmpuint (st.crash_count, ==, 3);
+    g_assert_cmpuint (st.reaped_count, ==, 4);
+
+    errno = 0;
+    g_assert_cmpint (waitpid ((pid_t)pid4, &wstatus, WNOHANG), ==, -1);
+    g_assert_cmpint (errno, ==, ECHILD);
+
+    puls_helper_client_free (client);
+#endif
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -3369,6 +3530,7 @@ main (int argc, char *argv[])
     g_test_add_func ("/basic/path-sanitization-anti-injection", test_path_sanitization_anti_injection);
     g_test_add_func ("/basic/helper-command-whitelist", test_helper_command_whitelist);
     g_test_add_func ("/basic/polkit-policy-validation", test_polkit_policy_validation);
+    g_test_add_func ("/basic/helper-crash-recovery-watchdog", test_helper_crash_recovery_watchdog);
 
     int result = g_test_run ();
 

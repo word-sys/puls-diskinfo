@@ -349,7 +349,9 @@ main (int argc, char *argv[])
     }
 
     if (opt_headless || opt_json) {
-        return run_headless_scan (opt_json);
+        int rc = run_headless_scan (opt_json);
+        puls_helper_shutdown ();
+        return rc;
     }
 
     if (!gtk_init_check ()) {

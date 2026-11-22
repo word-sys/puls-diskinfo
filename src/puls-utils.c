@@ -18,15 +18,30 @@
 #include <stdlib.h>
 #include <mntent.h>
 #include <sys/statvfs.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <signal.h>
 #include <sys/stat.h>
+#include <gio/gunixinputstream.h>
+#include <gio/gunixoutputstream.h>
 
-static GSubprocess *helper_proc = NULL;
-static GOutputStream *helper_stdin = NULL;
-static GDataInputStream *helper_stdout = NULL;
-static GMutex helper_mutex;
+struct _PulsHelperClient {
+    GMutex            mutex;
+    GPid              pid;
+    GOutputStream    *stdin_stream;
+    GDataInputStream *stdout_stream;
+    gchar            *helper_path;
+    gboolean          use_pkexec;
+    guint             launch_count;
+    guint             crash_count;
+    guint             reaped_count;
+    guint             watchdog_source_id;
+};
+
+static PulsHelperClient default_helper_client;
+static gsize default_helper_client_init = 0;
 
 typedef struct {
     gchar *device_path;
@@ -437,55 +452,207 @@ puls_helper_exchange_command (GOutputStream     *stdin_stream,
 }
 
 static void
-reset_helper_locked (void)
+ignore_sigpipe_once (void)
 {
-    g_clear_object (&helper_proc);
-    helper_stdin = NULL;
-    g_clear_object (&helper_stdout);
+    static gsize sigpipe_ignored = 0;
+    if (g_once_init_enter (&sigpipe_ignored)) {
+        signal (SIGPIPE, SIG_IGN);
+        g_once_init_leave (&sigpipe_ignored, 1);
+    }
+}
+
+static void
+close_helper_streams_locked (PulsHelperClient *client)
+{
+    if (client->stdin_stream != NULL) {
+        g_output_stream_close (client->stdin_stream, NULL, NULL);
+        g_clear_object (&client->stdin_stream);
+    }
+    if (client->stdout_stream != NULL) {
+        g_input_stream_close (G_INPUT_STREAM (client->stdout_stream), NULL, NULL);
+        g_clear_object (&client->stdout_stream);
+    }
+}
+
+static pid_t
+waitpid_eintr (pid_t pid, int *status, int options)
+{
+    pid_t res;
+    do {
+        res = waitpid (pid, status, options);
+    } while (res == -1 && errno == EINTR);
+    return res;
+}
+
+static void
+log_reaped_helper_exit (pid_t pid, int status, gboolean unexpected)
+{
+    if (WIFEXITED (status)) {
+        if (unexpected) {
+            PULS_LOG_WARN ("Privileged helper (pid=%d) exited unexpectedly with status %d",
+                           (int)pid, WEXITSTATUS (status));
+        } else {
+            PULS_LOG_DEBUG ("Privileged helper (pid=%d) reaped cleanly (status=%d)",
+                            (int)pid, WEXITSTATUS (status));
+        }
+    } else if (WIFSIGNALED (status)) {
+        if (unexpected) {
+            PULS_LOG_WARN ("Privileged helper (pid=%d) terminated by signal %d; scheduling recovery",
+                           (int)pid, WTERMSIG (status));
+        } else {
+            PULS_LOG_DEBUG ("Privileged helper (pid=%d) reaped after signal %d",
+                            (int)pid, WTERMSIG (status));
+        }
+    }
+}
+
+/**
+ * check_and_reap_if_exited_locked:
+ *
+ * Non-blocking watchdog probe using `waitpid(pid, &status, WNOHANG)`.
+ * If the child exited or was killed, reaps the zombie immediately and resets
+ * stream/PID state.
+ *
+ * Returns: %TRUE if helper process is currently alive, %FALSE otherwise.
+ */
+static gboolean
+check_and_reap_if_exited_locked (PulsHelperClient *client, gboolean record_as_crash)
+{
+    if (client->pid <= 0)
+        return FALSE;
+
+    int status = 0;
+    pid_t target = (pid_t)client->pid;
+    pid_t res = waitpid_eintr (target, &status, WNOHANG);
+
+    if (res == 0)
+        return TRUE; /* Still alive */
+
+    if (res == target) {
+        log_reaped_helper_exit (target, status, record_as_crash);
+        client->reaped_count++;
+        if (record_as_crash)
+            client->crash_count++;
+    } else if (res == -1 && errno == ECHILD) {
+        if (record_as_crash)
+            client->crash_count++;
+        PULS_LOG_WARN ("Privileged helper (pid=%d) already gone (ECHILD)", (int)target);
+    }
+
+    g_spawn_close_pid (client->pid);
+    client->pid = 0;
+    close_helper_streams_locked (client);
+    return FALSE;
+}
+
+/**
+ * terminate_and_reap_helper_locked:
+ *
+ * Ensures the helper child process is terminated and strictly reaped via
+ * `waitpid()` so no zombie child process can ever linger.
+ */
+static void
+terminate_and_reap_helper_locked (PulsHelperClient *client,
+                                  gboolean          graceful,
+                                  gboolean          record_as_crash)
+{
+    if (client->pid <= 0) {
+        close_helper_streams_locked (client);
+        return;
+    }
+
+    if (graceful && client->stdin_stream != NULL) {
+        static const gchar quit_cmd[] = PULS_HELPER_CMD_QUIT "\n";
+        gsize bytes_written = 0;
+        (void)g_output_stream_write_all (client->stdin_stream, quit_cmd,
+                                         sizeof (quit_cmd) - 1,
+                                         &bytes_written, NULL, NULL);
+    }
+
+    /* Closing stdin delivers EOF to the helper loop */
+    close_helper_streams_locked (client);
+
+    pid_t target = (pid_t)client->pid;
+    int status = 0;
+    pid_t res = waitpid_eintr (target, &status, WNOHANG);
+
+    /* Wait briefly for clean EOF/QUIT exit before escalating to signals */
+    for (guint i = 0; res == 0 && i < 20; i++) {
+        g_usleep (5000); /* 5 ms */
+        res = waitpid_eintr (target, &status, WNOHANG);
+    }
+
+    if (res == 0) {
+        (void)kill (target, SIGTERM);
+        for (guint i = 0; res == 0 && i < 20; i++) {
+            g_usleep (5000);
+            res = waitpid_eintr (target, &status, WNOHANG);
+        }
+    }
+
+    if (res == 0) {
+        (void)kill (target, SIGKILL);
+        res = waitpid_eintr (target, &status, 0);
+    }
+
+    if (res == target) {
+        log_reaped_helper_exit (target, status, record_as_crash);
+        client->reaped_count++;
+    }
+
+    if (record_as_crash)
+        client->crash_count++;
+
+    g_spawn_close_pid (client->pid);
+    client->pid = 0;
 }
 
 static gboolean
-ensure_helper_running (GError **error)
+spawn_helper_locked (PulsHelperClient *client, GError **error)
 {
-    g_mutex_lock (&helper_mutex);
+    ignore_sigpipe_once ();
 
-    if (helper_proc != NULL) {
-        g_mutex_unlock (&helper_mutex);
-        return TRUE;
+    g_autofree gchar *resolved_path = NULL;
+    const gchar *bin = client->helper_path;
+    if (bin == NULL || *bin == '\0') {
+        resolved_path = puls_get_helper_path ();
+        bin = resolved_path;
     }
 
-    g_autofree gchar *helper_path = puls_get_helper_path ();
-    if (helper_path == NULL) {
-        g_mutex_unlock (&helper_mutex);
-        g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "Helper executable not found");
+    if (bin == NULL || *bin == '\0') {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                     "Helper executable not found");
         return FALSE;
     }
 
-    gchar **argv;
-    if (geteuid () == 0) {
-        argv = g_new0 (gchar *, 2);
-        argv[0] = g_strdup (helper_path);
-        argv[1] = NULL;
+    gchar *argv[3] = { NULL, NULL, NULL };
+    if (client->use_pkexec) {
+        argv[0] = (gchar *)"pkexec";
+        argv[1] = (gchar *)bin;
     } else {
-        argv = g_new0 (gchar *, 3);
-        argv[0] = g_strdup ("pkexec");
-        argv[1] = g_strdup (helper_path);
-        argv[2] = NULL;
+        argv[0] = (gchar *)bin;
     }
 
-    GSubprocessLauncher *launcher = g_subprocess_launcher_new (G_SUBPROCESS_FLAGS_STDIN_PIPE | G_SUBPROCESS_FLAGS_STDOUT_PIPE);
-    helper_proc = g_subprocess_launcher_spawnv (launcher, (const gchar * const *)argv, error);
-    g_object_unref (launcher);
-    g_strfreev (argv);
+    GPid child_pid = 0;
+    gint stdin_fd = -1;
+    gint stdout_fd = -1;
 
-    if (helper_proc == NULL) {
-        g_mutex_unlock (&helper_mutex);
+    GSpawnFlags flags = G_SPAWN_SEARCH_PATH |
+                        G_SPAWN_DO_NOT_REAP_CHILD |
+                        G_SPAWN_CLOEXEC_PIPES;
+
+    if (!g_spawn_async_with_pipes (NULL, argv, NULL, flags,
+                                   NULL, NULL, &child_pid,
+                                   &stdin_fd, &stdout_fd, NULL,
+                                   error)) {
         return FALSE;
     }
 
-    helper_stdin = g_subprocess_get_stdin_pipe (helper_proc);
-    GInputStream *raw_stdout = g_subprocess_get_stdout_pipe (helper_proc);
-    helper_stdout = g_data_input_stream_new (raw_stdout);
+    client->pid = child_pid;
+    client->stdin_stream = g_unix_output_stream_new (stdin_fd, TRUE);
+    GInputStream *raw_stdout = g_unix_input_stream_new (stdout_fd, TRUE);
+    client->stdout_stream = g_data_input_stream_new (raw_stdout);
+    g_object_unref (raw_stdout);
 
     /* Perform strict Protocol v2 version handshake */
     g_autofree gchar *hello_cmd = puls_helper_format_hello (PULS_HELPER_PROTO_VERSION);
@@ -493,8 +660,9 @@ ensure_helper_running (GError **error)
     g_autofree gchar *hello_err = NULL;
     g_autofree gchar *hello_payload = NULL;
 
-    if (!puls_helper_exchange_command (helper_stdin, helper_stdout, hello_cmd,
-                                       &hello_ok, &hello_err, &hello_payload, error) ||
+    if (!puls_helper_exchange_command (client->stdin_stream, client->stdout_stream,
+                                       hello_cmd, &hello_ok, &hello_err, &hello_payload,
+                                       error) ||
         !hello_ok) {
         if (error && *error == NULL) {
             g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
@@ -509,37 +677,336 @@ ensure_helper_running (GError **error)
             PULS_LOG_DEBUG ("Helper Protocol %s handshake unavailable (transport closed)",
                             PULS_HELPER_PROTO_TAG);
         }
-        reset_helper_locked ();
-        g_mutex_unlock (&helper_mutex);
+        terminate_and_reap_helper_locked (client, FALSE, FALSE);
         return FALSE;
     }
 
-    PULS_LOG_DEBUG ("Helper Protocol %s handshake succeeded", PULS_HELPER_PROTO_TAG);
-    g_mutex_unlock (&helper_mutex);
+    client->launch_count++;
+    PULS_LOG_DEBUG ("Helper Protocol %s handshake succeeded (pid=%d, launches=%u)",
+                    PULS_HELPER_PROTO_TAG, (int)client->pid, client->launch_count);
     return TRUE;
+}
+
+static gboolean
+ensure_helper_running_locked (PulsHelperClient *client, GError **error)
+{
+    if (check_and_reap_if_exited_locked (client, TRUE))
+        return TRUE;
+
+    return spawn_helper_locked (client, error);
+}
+
+/**
+ * puls_helper_client_new:
+ * @helper_path: (nullable): Explicit path to helper binary, or %NULL to auto-discover.
+ * @use_pkexec: Whether to elevate via `pkexec` when spawning the helper.
+ *
+ * Creates an isolated helper IPC client with built-in crash watchdog and
+ * `waitpid()` zombie reaping.
+ *
+ * Returns: (transfer full): A new #PulsHelperClient.
+ */
+PulsHelperClient *
+puls_helper_client_new (const gchar *helper_path, gboolean use_pkexec)
+{
+    PulsHelperClient *client = g_new0 (PulsHelperClient, 1);
+    g_mutex_init (&client->mutex);
+    client->helper_path = g_strdup (helper_path);
+    client->use_pkexec = use_pkexec;
+    return client;
+}
+
+/**
+ * puls_helper_client_watchdog_stop:
+ * @client: A #PulsHelperClient.
+ *
+ * Stops the periodic GLib watchdog timer if active.
+ */
+void
+puls_helper_client_watchdog_stop (PulsHelperClient *client)
+{
+    g_return_if_fail (client != NULL);
+
+    g_mutex_lock (&client->mutex);
+    guint src_id = client->watchdog_source_id;
+    client->watchdog_source_id = 0;
+    g_mutex_unlock (&client->mutex);
+
+    if (src_id != 0)
+        g_source_remove (src_id);
+}
+
+/**
+ * puls_helper_client_shutdown:
+ * @client: A #PulsHelperClient.
+ *
+ * Stops the watchdog timer, sends `QUIT` to any running helper process, closes
+ * IPC pipes, and reaps the child via `waitpid()`.
+ */
+void
+puls_helper_client_shutdown (PulsHelperClient *client)
+{
+    g_return_if_fail (client != NULL);
+
+    puls_helper_client_watchdog_stop (client);
+
+    g_mutex_lock (&client->mutex);
+    terminate_and_reap_helper_locked (client, TRUE, FALSE);
+    g_mutex_unlock (&client->mutex);
+}
+
+/**
+ * puls_helper_client_free:
+ * @client: (nullable): A #PulsHelperClient to destroy.
+ *
+ * Shuts down and reaps any running helper child, then frees @client.
+ */
+void
+puls_helper_client_free (PulsHelperClient *client)
+{
+    if (client == NULL)
+        return;
+
+    puls_helper_client_shutdown (client);
+    g_free (client->helper_path);
+    g_mutex_clear (&client->mutex);
+    g_free (client);
+}
+
+/**
+ * puls_helper_client_ensure_running:
+ * @client: A #PulsHelperClient.
+ * @error: (out) (optional): Return location for a #GError.
+ *
+ * Verifies the helper child is alive (reaping any zombie if terminated) and
+ * spawns + handshakes a fresh instance if not running.
+ *
+ * Returns: %TRUE if a live, handshaked helper process is ready.
+ */
+gboolean
+puls_helper_client_ensure_running (PulsHelperClient *client, GError **error)
+{
+    g_return_val_if_fail (client != NULL, FALSE);
+
+    g_mutex_lock (&client->mutex);
+    gboolean ok = ensure_helper_running_locked (client, error);
+    g_mutex_unlock (&client->mutex);
+    return ok;
+}
+
+/**
+ * puls_helper_client_watchdog_check:
+ * @client: A #PulsHelperClient.
+ *
+ * Non-blocking watchdog check via `waitpid(..., WNOHANG)`. Detects unexpected
+ * helper termination and reaps any zombie immediately.
+ *
+ * Returns: %TRUE if the helper is currently running and alive, %FALSE otherwise.
+ */
+gboolean
+puls_helper_client_watchdog_check (PulsHelperClient *client)
+{
+    g_return_val_if_fail (client != NULL, FALSE);
+
+    g_mutex_lock (&client->mutex);
+    gboolean alive = check_and_reap_if_exited_locked (client, TRUE);
+    g_mutex_unlock (&client->mutex);
+    return alive;
+}
+
+static gboolean
+helper_watchdog_timer_cb (gpointer user_data)
+{
+    PulsHelperClient *client = (PulsHelperClient *)user_data;
+    (void)puls_helper_client_watchdog_check (client);
+    return G_SOURCE_CONTINUE;
+}
+
+/**
+ * puls_helper_client_watchdog_start:
+ * @client: A #PulsHelperClient.
+ * @interval_ms: Poll interval in milliseconds (minimum 20 ms).
+ *
+ * Attaches a periodic GLib watchdog timer to reap any crashed helper child
+ * promptly even while the GUI is idle between disk queries.
+ */
+void
+puls_helper_client_watchdog_start (PulsHelperClient *client, guint interval_ms)
+{
+    g_return_if_fail (client != NULL);
+
+    if (interval_ms < 20)
+        interval_ms = 20;
+
+    puls_helper_client_watchdog_stop (client);
+
+    guint new_id = g_timeout_add (interval_ms, helper_watchdog_timer_cb, client);
+
+    g_mutex_lock (&client->mutex);
+    guint old_id = client->watchdog_source_id;
+    client->watchdog_source_id = new_id;
+    g_mutex_unlock (&client->mutex);
+
+    if (old_id != 0)
+        g_source_remove (old_id);
+}
+
+/**
+ * puls_helper_client_exchange:
+ * @client: A #PulsHelperClient.
+ * @command: Framed Protocol v2 command line ending in `\n`.
+ * @out_ok: (out) (optional): %TRUE for `OK`, %FALSE for `ERR`.
+ * @out_err_code: (out) (optional): Helper error token when `ERR`.
+ * @out_payload: (out) (optional): Payload bytes.
+ * @error: (out) (optional): Return location for a #GError.
+ *
+ * Sends @command to the helper with transparent crash detection, `waitpid()`
+ * zombie reaping, and automatic one-shot restart + retry if the helper died
+ * before or during command delivery.
+ *
+ * Returns: %TRUE if a valid Protocol v2 response frame was received.
+ */
+gboolean
+puls_helper_client_exchange (PulsHelperClient  *client,
+                             const gchar       *command,
+                             gboolean          *out_ok,
+                             gchar            **out_err_code,
+                             gchar            **out_payload,
+                             GError           **error)
+{
+    g_return_val_if_fail (client != NULL, FALSE);
+    g_return_val_if_fail (command != NULL, FALSE);
+
+    g_mutex_lock (&client->mutex);
+
+    gboolean success = FALSE;
+    gboolean is_quit = (g_strcmp0 (command, PULS_HELPER_CMD_QUIT "\n") == 0);
+
+    for (guint attempt = 0; attempt < 2; attempt++) {
+        GError *local_err = NULL;
+
+        if (!ensure_helper_running_locked (client, &local_err)) {
+            g_propagate_error (error, local_err);
+            break;
+        }
+
+        gboolean resp_ok = FALSE;
+        gchar *err_code = NULL;
+        gchar *payload = NULL;
+
+        if (puls_helper_exchange_command (client->stdin_stream, client->stdout_stream,
+                                          command, &resp_ok, &err_code, &payload,
+                                          &local_err)) {
+            if (is_quit && resp_ok)
+                terminate_and_reap_helper_locked (client, FALSE, FALSE);
+
+            if (out_ok)
+                *out_ok = resp_ok;
+            if (out_err_code)
+                *out_err_code = err_code;
+            else
+                g_free (err_code);
+            if (out_payload)
+                *out_payload = payload;
+            else
+                g_free (payload);
+
+            success = TRUE;
+            break;
+        }
+
+        /* Transport failure (broken pipe / EOF / crash mid-command): reap & recover */
+        terminate_and_reap_helper_locked (client, FALSE, TRUE);
+
+        if (attempt == 0 && !is_quit) {
+            PULS_LOG_WARN ("Helper IPC transport failed (%s); restarting helper and retrying",
+                           local_err ? local_err->message : "EOF");
+            g_clear_error (&local_err);
+            continue;
+        }
+
+        g_propagate_error (error, local_err);
+        break;
+    }
+
+    g_mutex_unlock (&client->mutex);
+    return success;
+}
+
+/**
+ * puls_helper_client_get_stats:
+ * @client: A #PulsHelperClient.
+ * @out_stats: (out): Snapshot of PID, liveness, launch, crash, and reap counters.
+ */
+void
+puls_helper_client_get_stats (PulsHelperClient *client, PulsHelperStats *out_stats)
+{
+    g_return_if_fail (client != NULL);
+    g_return_if_fail (out_stats != NULL);
+
+    g_mutex_lock (&client->mutex);
+    out_stats->pid          = client->pid;
+    out_stats->running      = (client->pid > 0);
+    out_stats->launch_count = client->launch_count;
+    out_stats->crash_count  = client->crash_count;
+    out_stats->reaped_count = client->reaped_count;
+    g_mutex_unlock (&client->mutex);
+}
+
+static PulsHelperClient *
+get_default_helper_client (void)
+{
+    if (g_once_init_enter (&default_helper_client_init)) {
+        memset (&default_helper_client, 0, sizeof (default_helper_client));
+        g_mutex_init (&default_helper_client.mutex);
+        default_helper_client.use_pkexec = (geteuid () != 0);
+        atexit (puls_helper_shutdown);
+        g_once_init_leave (&default_helper_client_init, 1);
+    }
+    return &default_helper_client;
+}
+
+gboolean
+puls_helper_watchdog_check (void)
+{
+    if (g_atomic_pointer_get (&default_helper_client_init) == 0)
+        return FALSE;
+    return puls_helper_client_watchdog_check (&default_helper_client);
+}
+
+void
+puls_helper_watchdog_start (guint interval_ms)
+{
+    puls_helper_client_watchdog_start (get_default_helper_client (), interval_ms);
+}
+
+void
+puls_helper_watchdog_stop (void)
+{
+    if (g_atomic_pointer_get (&default_helper_client_init) == 0)
+        return;
+    puls_helper_client_watchdog_stop (&default_helper_client);
+}
+
+void
+puls_helper_shutdown (void)
+{
+    if (g_atomic_pointer_get (&default_helper_client_init) == 0)
+        return;
+    puls_helper_client_shutdown (&default_helper_client);
 }
 
 static gchar *
 communicate_with_helper (const gchar *command, GError **error)
 {
-    if (!ensure_helper_running (error)) {
-        return NULL;
-    }
-
-    g_mutex_lock (&helper_mutex);
-
     gboolean resp_ok = FALSE;
     g_autofree gchar *err_code = NULL;
     gchar *payload = NULL;
 
-    if (!puls_helper_exchange_command (helper_stdin, helper_stdout, command,
-                                       &resp_ok, &err_code, &payload, error)) {
-        reset_helper_locked ();
-        g_mutex_unlock (&helper_mutex);
+    if (!puls_helper_client_exchange (get_default_helper_client (), command,
+                                      &resp_ok, &err_code, &payload, error)) {
         return NULL;
     }
-
-    g_mutex_unlock (&helper_mutex);
 
     if (!resp_ok) {
         g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
