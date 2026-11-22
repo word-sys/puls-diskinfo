@@ -103,19 +103,51 @@ gboolean       puls_helper_exchange_command      (GOutputStream    *stdin_stream
                                                   gchar           **out_payload,
                                                   GError          **error);
 
+/* Privilege Elevation & Sudo / Storage Group Fallback */
+typedef enum {
+    PULS_ELEVATION_NONE = 0,       /* Unprivileged direct attempt */
+    PULS_ELEVATION_DIRECT_ROOT,    /* Running as euid == 0 */
+    PULS_ELEVATION_DIRECT_GROUP,   /* User belongs to 'disk' or 'storage' group */
+    PULS_ELEVATION_PKEXEC,         /* Polkit pkexec available */
+    PULS_ELEVATION_SUDO            /* Non-interactive sudo (-n) fallback */
+} PulsElevationMode;
+
+typedef struct {
+    gboolean is_root;
+    gboolean in_storage_group;
+    gboolean polkit_available;
+    gboolean sudo_available;
+    gboolean is_wsl;
+    gboolean is_container;
+} PulsElevationCaps;
+
+const gchar      *puls_elevation_mode_to_string      (PulsElevationMode        mode);
+gboolean          puls_group_list_has_storage_access (const gchar * const     *group_names);
+gboolean          puls_user_in_storage_group         (void);
+gboolean          puls_is_polkit_available           (void);
+gboolean          puls_is_sudo_available             (void);
+void              puls_detect_elevation_caps         (PulsElevationCaps       *out_caps);
+PulsElevationMode puls_resolve_elevation_mode        (const PulsElevationCaps *caps);
+PulsElevationMode puls_get_elevation_mode            (void);
+gchar           **puls_helper_build_spawn_argv       (PulsElevationMode        mode,
+                                                      const gchar             *helper_bin);
+
 /* Privileged Helper Watchdog, Crash Recovery & Zombie Cleanup */
 typedef struct _PulsHelperClient PulsHelperClient;
 
 typedef struct {
-    GPid     pid;
-    gboolean running;
-    guint    launch_count;
-    guint    crash_count;
-    guint    reaped_count;
+    GPid              pid;
+    gboolean          running;
+    guint             launch_count;
+    guint             crash_count;
+    guint             reaped_count;
+    PulsElevationMode elevation_mode;
 } PulsHelperStats;
 
 PulsHelperClient *puls_helper_client_new            (const gchar      *helper_path,
                                                      gboolean          use_pkexec);
+PulsHelperClient *puls_helper_client_new_with_mode  (const gchar      *helper_path,
+                                                     PulsElevationMode mode);
 void              puls_helper_client_free           (PulsHelperClient *client);
 gboolean          puls_helper_client_ensure_running (PulsHelperClient *client,
                                                      GError          **error);

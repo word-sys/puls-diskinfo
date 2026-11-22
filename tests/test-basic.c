@@ -3491,6 +3491,146 @@ test_helper_crash_recovery_watchdog (void)
 #endif
 }
 
+static void
+test_elevation_fallback_mechanisms (void)
+{
+    /* 1. Mode labels */
+    g_assert_cmpstr (puls_elevation_mode_to_string (PULS_ELEVATION_NONE),         ==, "none");
+    g_assert_cmpstr (puls_elevation_mode_to_string (PULS_ELEVATION_DIRECT_ROOT),  ==, "direct-root");
+    g_assert_cmpstr (puls_elevation_mode_to_string (PULS_ELEVATION_DIRECT_GROUP), ==, "direct-group");
+    g_assert_cmpstr (puls_elevation_mode_to_string (PULS_ELEVATION_PKEXEC),       ==, "pkexec");
+    g_assert_cmpstr (puls_elevation_mode_to_string (PULS_ELEVATION_SUDO),         ==, "sudo");
+
+    /* 2. Storage group access detector ('disk' / 'storage') */
+    const gchar *groups_disk[]    = { "users", "wheel", "disk", NULL };
+    const gchar *groups_storage[] = { "audio", "storage", "video", NULL };
+    const gchar *groups_none[]    = { "users", "sudo", "disks", "storages", "adm", NULL };
+    const gchar *groups_empty[]   = { NULL };
+
+    g_assert_true  (puls_group_list_has_storage_access (groups_disk));
+    g_assert_true  (puls_group_list_has_storage_access (groups_storage));
+    g_assert_false (puls_group_list_has_storage_access (groups_none));
+    g_assert_false (puls_group_list_has_storage_access (groups_empty));
+    g_assert_false (puls_group_list_has_storage_access (NULL));
+
+    /* 3. Deterministic elevation decision matrix across environments */
+    /* 3a. Root user always uses direct-root */
+    PulsElevationCaps caps_root = {
+        .is_root = TRUE, .in_storage_group = TRUE,
+        .polkit_available = TRUE, .sudo_available = TRUE
+    };
+    g_assert_cmpint (puls_resolve_elevation_mode (&caps_root), ==, PULS_ELEVATION_DIRECT_ROOT);
+
+    /* 3b. User in 'disk' or 'storage' group bypasses Polkit & sudo completely */
+    PulsElevationCaps caps_group = {
+        .is_root = FALSE, .in_storage_group = TRUE,
+        .polkit_available = TRUE, .sudo_available = TRUE
+    };
+    g_assert_cmpint (puls_resolve_elevation_mode (&caps_group), ==, PULS_ELEVATION_DIRECT_GROUP);
+
+    /* 3c. User in 'disk'/'storage' group inside headless container/WSL2 */
+    PulsElevationCaps caps_group_headless = {
+        .is_root = FALSE, .in_storage_group = TRUE,
+        .polkit_available = FALSE, .sudo_available = TRUE,
+        .is_wsl = TRUE, .is_container = TRUE
+    };
+    g_assert_cmpint (puls_resolve_elevation_mode (&caps_group_headless), ==, PULS_ELEVATION_DIRECT_GROUP);
+
+    /* 3d. Desktop Linux with Polkit available */
+    PulsElevationCaps caps_desktop = {
+        .is_root = FALSE, .in_storage_group = FALSE,
+        .polkit_available = TRUE, .sudo_available = TRUE
+    };
+    g_assert_cmpint (puls_resolve_elevation_mode (&caps_desktop), ==, PULS_ELEVATION_PKEXEC);
+
+    /* 3e. Non-desktop Linux / headless server / container without Polkit -> sudo fallback */
+    PulsElevationCaps caps_headless_sudo = {
+        .is_root = FALSE, .in_storage_group = FALSE,
+        .polkit_available = FALSE, .sudo_available = TRUE,
+        .is_container = TRUE
+    };
+    g_assert_cmpint (puls_resolve_elevation_mode (&caps_headless_sudo), ==, PULS_ELEVATION_SUDO);
+
+    /* 3f. WSL2 forces sudo fallback even if polkit_available were spuriously set */
+    PulsElevationCaps caps_wsl = {
+        .is_root = FALSE, .in_storage_group = FALSE,
+        .polkit_available = TRUE, .sudo_available = TRUE,
+        .is_wsl = TRUE
+    };
+    g_assert_cmpint (puls_resolve_elevation_mode (&caps_wsl), ==, PULS_ELEVATION_SUDO);
+
+    /* 3g. Fully unprivileged sandbox without Polkit, sudo, or storage group -> none */
+    PulsElevationCaps caps_sandbox = {
+        .is_root = FALSE, .in_storage_group = FALSE,
+        .polkit_available = FALSE, .sudo_available = FALSE,
+        .is_container = TRUE
+    };
+    g_assert_cmpint (puls_resolve_elevation_mode (&caps_sandbox), ==, PULS_ELEVATION_NONE);
+
+    /* 4. Helper spawn argv construction per elevation mode */
+    g_auto(GStrv) argv_pk = puls_helper_build_spawn_argv (PULS_ELEVATION_PKEXEC, "/usr/libexec/puls-diskinfo-helper");
+    g_assert_cmpuint (g_strv_length (argv_pk), ==, 2);
+    g_assert_cmpstr (argv_pk[0], ==, "pkexec");
+    g_assert_cmpstr (argv_pk[1], ==, "/usr/libexec/puls-diskinfo-helper");
+
+    g_auto(GStrv) argv_sudo = puls_helper_build_spawn_argv (PULS_ELEVATION_SUDO, "/usr/libexec/puls-diskinfo-helper");
+    g_assert_cmpuint (g_strv_length (argv_sudo), ==, 3);
+    g_assert_cmpstr (argv_sudo[0], ==, "sudo");
+    g_assert_cmpstr (argv_sudo[1], ==, "-n");
+    g_assert_cmpstr (argv_sudo[2], ==, "/usr/libexec/puls-diskinfo-helper");
+
+    g_auto(GStrv) argv_grp = puls_helper_build_spawn_argv (PULS_ELEVATION_DIRECT_GROUP, "/usr/libexec/puls-diskinfo-helper");
+    g_assert_cmpuint (g_strv_length (argv_grp), ==, 1);
+    g_assert_cmpstr (argv_grp[0], ==, "/usr/libexec/puls-diskinfo-helper");
+
+    g_auto(GStrv) argv_root = puls_helper_build_spawn_argv (PULS_ELEVATION_DIRECT_ROOT, "/usr/libexec/puls-diskinfo-helper");
+    g_assert_cmpuint (g_strv_length (argv_root), ==, 1);
+    g_assert_cmpstr (argv_root[0], ==, "/usr/libexec/puls-diskinfo-helper");
+
+    /* 5. Live host capability probe runs cleanly */
+    PulsElevationCaps live_caps;
+    puls_detect_elevation_caps (&live_caps);
+    PulsElevationMode live_mode = puls_resolve_elevation_mode (&live_caps);
+    g_assert_nonnull (puls_elevation_mode_to_string (live_mode));
+    g_assert_cmpint (puls_get_elevation_mode (), ==, live_mode);
+
+#ifdef TEST_HELPER_BIN
+    /* 6. Live group-access fallback query succeeds directly without pkexec/sudo */
+    g_autoptr(GError) err = NULL;
+    PulsHelperClient *grp_client = puls_helper_client_new_with_mode (
+        TEST_HELPER_BIN, PULS_ELEVATION_DIRECT_GROUP);
+    g_assert_nonnull (grp_client);
+
+    gboolean ok = FALSE;
+    g_autofree gchar *err_code = NULL;
+    g_autofree gchar *payload = NULL;
+    g_assert_true (puls_helper_client_exchange (grp_client, "HELLO v2\n",
+                                                &ok, &err_code, &payload, &err));
+    g_assert_no_error (err);
+    g_assert_true (ok);
+    g_assert_nonnull (strstr (payload, "\"protocol\":\"v2\""));
+    g_clear_pointer (&err_code, g_free);
+    g_clear_pointer (&payload, g_free);
+
+    PulsHelperStats st = { 0 };
+    puls_helper_client_get_stats (grp_client, &st);
+    g_assert_true (st.running);
+    g_assert_cmpint (st.elevation_mode, ==, PULS_ELEVATION_DIRECT_GROUP);
+    g_assert_cmpuint (st.launch_count, ==, 1);
+
+    /* Query a whitelisted command via the direct-group helper */
+    g_assert_true (puls_helper_client_exchange (grp_client, "READ_SMART /dev/sdzz\n",
+                                                &ok, &err_code, &payload, &err));
+    g_assert_no_error (err);
+    g_assert_false (ok);
+    g_assert_cmpstr (err_code, ==, PULS_HELPER_ERR_NOT_FOUND);
+    g_clear_pointer (&err_code, g_free);
+    g_clear_pointer (&payload, g_free);
+
+    puls_helper_client_free (grp_client);
+#endif
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -3531,6 +3671,7 @@ main (int argc, char *argv[])
     g_test_add_func ("/basic/helper-command-whitelist", test_helper_command_whitelist);
     g_test_add_func ("/basic/polkit-policy-validation", test_polkit_policy_validation);
     g_test_add_func ("/basic/helper-crash-recovery-watchdog", test_helper_crash_recovery_watchdog);
+    g_test_add_func ("/basic/elevation-fallback-mechanisms", test_elevation_fallback_mechanisms);
 
     int result = g_test_run ();
 

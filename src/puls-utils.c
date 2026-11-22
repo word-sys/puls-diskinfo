@@ -33,7 +33,8 @@ struct _PulsHelperClient {
     GOutputStream    *stdin_stream;
     GDataInputStream *stdout_stream;
     gchar            *helper_path;
-    gboolean          use_pkexec;
+    PulsElevationMode elevation_mode;
+    gboolean          allow_fallback;
     guint             launch_count;
     guint             crash_count;
     guint             reaped_count;
@@ -607,30 +608,386 @@ terminate_and_reap_helper_locked (PulsHelperClient *client,
     client->pid = 0;
 }
 
-static gboolean
-spawn_helper_locked (PulsHelperClient *client, GError **error)
-{
-    ignore_sigpipe_once ();
+/* =========================================================================
+ * Privilege Elevation & Sudo / Storage Group Fallback Mechanisms
+ * ========================================================================= */
 
-    g_autofree gchar *resolved_path = NULL;
-    const gchar *bin = client->helper_path;
-    if (bin == NULL || *bin == '\0') {
-        resolved_path = puls_get_helper_path ();
-        bin = resolved_path;
+/**
+ * puls_elevation_mode_to_string:
+ * @mode: A #PulsElevationMode.
+ *
+ * Returns: Human-readable label for logging and diagnostics.
+ */
+const gchar *
+puls_elevation_mode_to_string (PulsElevationMode mode)
+{
+    switch (mode) {
+    case PULS_ELEVATION_DIRECT_ROOT:
+        return "direct-root";
+    case PULS_ELEVATION_DIRECT_GROUP:
+        return "direct-group";
+    case PULS_ELEVATION_PKEXEC:
+        return "pkexec";
+    case PULS_ELEVATION_SUDO:
+        return "sudo";
+    case PULS_ELEVATION_NONE:
+    default:
+        return "none";
+    }
+}
+
+/**
+ * puls_group_list_has_storage_access:
+ * @group_names: (nullable): NULL-terminated array of group names.
+ *
+ * Checks whether any group in @group_names grants raw block device access
+ * (`"disk"` on Debian/Ubuntu/Fedora/RHEL or `"storage"` on Arch/derivatives).
+ *
+ * Returns: %TRUE if `"disk"` or `"storage"` is present.
+ */
+gboolean
+puls_group_list_has_storage_access (const gchar * const *group_names)
+{
+    if (group_names == NULL)
+        return FALSE;
+
+    for (gsize i = 0; group_names[i] != NULL; i++) {
+        if (g_strcmp0 (group_names[i], "disk") == 0 ||
+            g_strcmp0 (group_names[i], "storage") == 0) {
+            return TRUE;
+        }
     }
 
-    if (bin == NULL || *bin == '\0') {
-        g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
-                     "Helper executable not found");
+    return FALSE;
+}
+
+static gboolean
+parse_group_gid_from_text (const gchar *etc_group_text,
+                           const gchar *group_name,
+                           gid_t       *out_gid)
+{
+    if (etc_group_text == NULL || group_name == NULL || *group_name == '\0')
+        return FALSE;
+
+    gsize name_len = strlen (group_name);
+    const gchar *line = etc_group_text;
+
+    while (*line != '\0') {
+        const gchar *nl = strchr (line, '\n');
+        gsize line_len = nl ? (gsize)(nl - line) : strlen (line);
+
+        if (line_len > name_len + 2 &&
+            strncmp (line, group_name, name_len) == 0 &&
+            line[name_len] == ':') {
+            /* Format: name:passwd:gid:members */
+            const gchar *p = line + name_len + 1;
+            const gchar *end_line = line + line_len;
+            const gchar *second_colon = memchr (p, ':', (size_t)(end_line - p));
+            if (second_colon != NULL && second_colon + 1 < end_line) {
+                const gchar *gid_start = second_colon + 1;
+                const gchar *third_colon = memchr (gid_start, ':', (size_t)(end_line - gid_start));
+                gsize gid_len = third_colon ? (gsize)(third_colon - gid_start)
+                                            : (gsize)(end_line - gid_start);
+                if (gid_len > 0 && gid_len < 16) {
+                    gchar gid_buf[16];
+                    memcpy (gid_buf, gid_start, gid_len);
+                    gid_buf[gid_len] = '\0';
+                    if (g_ascii_isdigit (gid_buf[0])) {
+                        errno = 0;
+                        gchar *endptr = NULL;
+                        guint64 parsed = g_ascii_strtoull (gid_buf, &endptr, 10);
+                        if (errno == 0 && endptr != gid_buf && *endptr == '\0' &&
+                            parsed <= G_MAXUINT32) {
+                            *out_gid = (gid_t)parsed;
+                            return TRUE;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (nl == NULL)
+            break;
+        line = nl + 1;
+    }
+
+    return FALSE;
+}
+
+/**
+ * puls_user_in_storage_group:
+ *
+ * Checks whether the effective user belongs to the local `"disk"` or
+ * `"storage"` primary or supplementary UNIX group (resolved directly from
+ * `/etc/group` without blocking on network NSS backends).
+ *
+ * Returns: %TRUE if the current user has storage-group membership.
+ */
+gboolean
+puls_user_in_storage_group (void)
+{
+    g_autofree gchar *etc_group = NULL;
+    if (!g_file_get_contents ("/etc/group", &etc_group, NULL, NULL) || etc_group == NULL)
+        return FALSE;
+
+    gid_t target_gids[2];
+    gsize n_targets = 0;
+
+    gid_t gid = 0;
+    if (parse_group_gid_from_text (etc_group, "disk", &gid))
+        target_gids[n_targets++] = gid;
+    if (parse_group_gid_from_text (etc_group, "storage", &gid))
+        target_gids[n_targets++] = gid;
+
+    if (n_targets == 0)
+        return FALSE;
+
+    gid_t egid = getegid ();
+    for (gsize t = 0; t < n_targets; t++) {
+        if (egid == target_gids[t])
+            return TRUE;
+    }
+
+    int n_groups = getgroups (0, NULL);
+    if (n_groups <= 0)
+        return FALSE;
+
+    g_autofree gid_t *groups = g_new0 (gid_t, (gsize)n_groups);
+    int got = getgroups (n_groups, groups);
+    if (got <= 0)
+        return FALSE;
+
+    for (int i = 0; i < got; i++) {
+        for (gsize t = 0; t < n_targets; t++) {
+            if (groups[i] == target_gids[t])
+                return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
+static gboolean
+binary_is_setuid_root (const gchar * const *candidates)
+{
+    for (gsize i = 0; candidates[i] != NULL; i++) {
+        struct stat st;
+        if (stat (candidates[i], &st) == 0 &&
+            S_ISREG (st.st_mode) &&
+            st.st_uid == 0 &&
+            (st.st_mode & S_ISUID) != 0 &&
+            access (candidates[i], X_OK) == 0) {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+static gboolean
+detect_is_wsl (void)
+{
+    g_autofree gchar *release = NULL;
+    if (!g_file_get_contents ("/proc/sys/kernel/osrelease", &release, NULL, NULL) ||
+        release == NULL)
+        return FALSE;
+
+    g_autofree gchar *lower = g_ascii_strdown (release, -1);
+    return (strstr (lower, "microsoft") != NULL || strstr (lower, "wsl") != NULL);
+}
+
+static gboolean
+detect_is_container (void)
+{
+    if (g_file_test ("/.dockerenv", G_FILE_TEST_EXISTS) ||
+        g_file_test ("/run/.containerenv", G_FILE_TEST_EXISTS))
+        return TRUE;
+
+    const gchar *container_env = g_getenv ("container");
+    if (container_env != NULL && *container_env != '\0')
+        return TRUE;
+
+    return FALSE;
+}
+
+/**
+ * puls_is_polkit_available:
+ *
+ * Determines whether Polkit (`pkexec`) is usable in the current environment:
+ * requires a setuid-root `pkexec` binary, an active system D-Bus socket, and
+ * a non-WSL desktop/session context where a Polkit agent can respond.
+ *
+ * Returns: %TRUE if `pkexec` is expected to function, %FALSE otherwise.
+ */
+gboolean
+puls_is_polkit_available (void)
+{
+    static const gchar * const pkexec_paths[] = {
+        "/usr/bin/pkexec",
+        "/bin/pkexec",
+        NULL
+    };
+
+    if (!binary_is_setuid_root (pkexec_paths))
+        return FALSE;
+
+    struct stat bus_st;
+    gboolean has_system_bus =
+        (stat ("/run/dbus/system_bus_socket", &bus_st) == 0 && S_ISSOCK (bus_st.st_mode)) ||
+        (stat ("/var/run/dbus/system_bus_socket", &bus_st) == 0 && S_ISSOCK (bus_st.st_mode));
+    if (!has_system_bus)
+        return FALSE;
+
+    if (detect_is_wsl ())
+        return FALSE;
+
+    const gchar *display = g_getenv ("DISPLAY");
+    const gchar *wayland = g_getenv ("WAYLAND_DISPLAY");
+    const gchar *xdg_session = g_getenv ("XDG_SESSION_ID");
+
+    if ((display == NULL || *display == '\0') &&
+        (wayland == NULL || *wayland == '\0') &&
+        (xdg_session == NULL || *xdg_session == '\0')) {
         return FALSE;
     }
 
-    gchar *argv[3] = { NULL, NULL, NULL };
-    if (client->use_pkexec) {
-        argv[0] = (gchar *)"pkexec";
-        argv[1] = (gchar *)bin;
-    } else {
-        argv[0] = (gchar *)bin;
+    return TRUE;
+}
+
+/**
+ * puls_is_sudo_available:
+ *
+ * Checks whether a setuid-root `sudo` binary is installed and executable.
+ *
+ * Returns: %TRUE if `sudo` is available for fallback execution.
+ */
+gboolean
+puls_is_sudo_available (void)
+{
+    static const gchar * const sudo_paths[] = {
+        "/usr/bin/sudo",
+        "/bin/sudo",
+        NULL
+    };
+
+    return binary_is_setuid_root (sudo_paths);
+}
+
+/**
+ * puls_detect_elevation_caps:
+ * @out_caps: (out): Populated #PulsElevationCaps describing the runtime environment.
+ */
+void
+puls_detect_elevation_caps (PulsElevationCaps *out_caps)
+{
+    g_return_if_fail (out_caps != NULL);
+
+    memset (out_caps, 0, sizeof (*out_caps));
+    out_caps->is_root          = (geteuid () == 0);
+    out_caps->in_storage_group = puls_user_in_storage_group ();
+    out_caps->is_wsl           = detect_is_wsl ();
+    out_caps->is_container     = detect_is_container ();
+    out_caps->polkit_available = puls_is_polkit_available ();
+    out_caps->sudo_available   = puls_is_sudo_available ();
+}
+
+/**
+ * puls_resolve_elevation_mode:
+ * @caps: Environment capability snapshot.
+ *
+ * Deterministic priority resolver for privilege elevation:
+ * 1. Root (`PULS_ELEVATION_DIRECT_ROOT`)
+ * 2. `disk`/`storage` group membership (`PULS_ELEVATION_DIRECT_GROUP`)
+ * 3. Polkit `pkexec` (`PULS_ELEVATION_PKEXEC`)
+ * 4. Non-interactive `sudo -n` fallback (`PULS_ELEVATION_SUDO`)
+ * 5. Unprivileged direct attempt (`PULS_ELEVATION_NONE`)
+ *
+ * Returns: Selected #PulsElevationMode.
+ */
+PulsElevationMode
+puls_resolve_elevation_mode (const PulsElevationCaps *caps)
+{
+    g_return_val_if_fail (caps != NULL, PULS_ELEVATION_NONE);
+
+    if (caps->is_root)
+        return PULS_ELEVATION_DIRECT_ROOT;
+
+    if (caps->in_storage_group)
+        return PULS_ELEVATION_DIRECT_GROUP;
+
+    if (caps->polkit_available && !caps->is_wsl)
+        return PULS_ELEVATION_PKEXEC;
+
+    if (caps->sudo_available)
+        return PULS_ELEVATION_SUDO;
+
+    return PULS_ELEVATION_NONE;
+}
+
+/**
+ * puls_get_elevation_mode:
+ *
+ * Probes the live host environment and returns the optimal #PulsElevationMode.
+ */
+PulsElevationMode
+puls_get_elevation_mode (void)
+{
+    PulsElevationCaps caps;
+    puls_detect_elevation_caps (&caps);
+    return puls_resolve_elevation_mode (&caps);
+}
+
+/**
+ * puls_helper_build_spawn_argv:
+ * @mode: Selected #PulsElevationMode.
+ * @helper_bin: Absolute path to `puls-diskinfo-helper`.
+ *
+ * Builds the `NULL`-terminated `argv` vector for spawning the helper under
+ * @mode (`pkexec <bin>`, `sudo -n <bin>`, or direct `<bin>`).
+ *
+ * Returns: (transfer full): Newly allocated `GStrv` (free with g_strfreev()).
+ */
+gchar **
+puls_helper_build_spawn_argv (PulsElevationMode mode, const gchar *helper_bin)
+{
+    g_return_val_if_fail (helper_bin != NULL && *helper_bin != '\0', NULL);
+
+    gchar **argv = NULL;
+
+    switch (mode) {
+    case PULS_ELEVATION_PKEXEC:
+        argv = g_new0 (gchar *, 3);
+        argv[0] = g_strdup ("pkexec");
+        argv[1] = g_strdup (helper_bin);
+        break;
+    case PULS_ELEVATION_SUDO:
+        argv = g_new0 (gchar *, 4);
+        argv[0] = g_strdup ("sudo");
+        argv[1] = g_strdup ("-n");
+        argv[2] = g_strdup (helper_bin);
+        break;
+    case PULS_ELEVATION_DIRECT_ROOT:
+    case PULS_ELEVATION_DIRECT_GROUP:
+    case PULS_ELEVATION_NONE:
+    default:
+        argv = g_new0 (gchar *, 2);
+        argv[0] = g_strdup (helper_bin);
+        break;
+    }
+
+    return argv;
+}
+
+static gboolean
+spawn_helper_with_mode_locked (PulsHelperClient  *client,
+                               const gchar       *bin,
+                               PulsElevationMode  mode,
+                               GError           **error)
+{
+    g_auto(GStrv) argv = puls_helper_build_spawn_argv (mode, bin);
+    if (argv == NULL) {
+        g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                             "Failed to build helper spawn argv");
+        return FALSE;
     }
 
     GPid child_pid = 0;
@@ -674,17 +1031,69 @@ spawn_helper_locked (PulsHelperClient *client, GError **error)
             PULS_LOG_WARN ("Helper Protocol %s handshake failed (%s)",
                            PULS_HELPER_PROTO_TAG, hello_err);
         } else {
-            PULS_LOG_DEBUG ("Helper Protocol %s handshake unavailable (transport closed)",
-                            PULS_HELPER_PROTO_TAG);
+            PULS_LOG_DEBUG ("Helper Protocol %s handshake unavailable via %s (transport closed)",
+                            PULS_HELPER_PROTO_TAG, puls_elevation_mode_to_string (mode));
         }
         terminate_and_reap_helper_locked (client, FALSE, FALSE);
         return FALSE;
     }
 
+    client->elevation_mode = mode;
     client->launch_count++;
-    PULS_LOG_DEBUG ("Helper Protocol %s handshake succeeded (pid=%d, launches=%u)",
-                    PULS_HELPER_PROTO_TAG, (int)client->pid, client->launch_count);
+    PULS_LOG_DEBUG ("Helper Protocol %s handshake succeeded via %s (pid=%d, launches=%u)",
+                    PULS_HELPER_PROTO_TAG, puls_elevation_mode_to_string (mode),
+                    (int)client->pid, client->launch_count);
     return TRUE;
+}
+
+static gboolean
+spawn_helper_locked (PulsHelperClient *client, GError **error)
+{
+    ignore_sigpipe_once ();
+
+    g_autofree gchar *resolved_path = NULL;
+    const gchar *bin = client->helper_path;
+    if (bin == NULL || *bin == '\0') {
+        resolved_path = puls_get_helper_path ();
+        bin = resolved_path;
+    }
+
+    if (bin == NULL || *bin == '\0') {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                     "Helper executable not found");
+        return FALSE;
+    }
+
+    GError *primary_err = NULL;
+    if (spawn_helper_with_mode_locked (client, bin, client->elevation_mode, &primary_err))
+        return TRUE;
+
+    /* Automatic runtime fallback when Polkit is unavailable or declined/headless */
+    if (client->allow_fallback && client->elevation_mode == PULS_ELEVATION_PKEXEC) {
+        if (puls_is_sudo_available ()) {
+            PULS_LOG_INFO ("Polkit elevation failed (%s); falling back to sudo -n",
+                           primary_err ? primary_err->message : "unavailable");
+            GError *sudo_err = NULL;
+            if (spawn_helper_with_mode_locked (client, bin, PULS_ELEVATION_SUDO, &sudo_err)) {
+                g_clear_error (&primary_err);
+                return TRUE;
+            }
+            g_clear_error (&sudo_err);
+        }
+
+        if (puls_user_in_storage_group ()) {
+            PULS_LOG_INFO ("Falling back to direct storage-group helper execution");
+            GError *grp_err = NULL;
+            if (spawn_helper_with_mode_locked (client, bin, PULS_ELEVATION_DIRECT_GROUP, &grp_err)) {
+                g_clear_error (&primary_err);
+                return TRUE;
+            }
+            g_clear_error (&grp_err);
+        }
+    }
+
+    g_propagate_error (error, primary_err);
+    return FALSE;
 }
 
 static gboolean
@@ -694,6 +1103,28 @@ ensure_helper_running_locked (PulsHelperClient *client, GError **error)
         return TRUE;
 
     return spawn_helper_locked (client, error);
+}
+
+/**
+ * puls_helper_client_new_with_mode:
+ * @helper_path: (nullable): Explicit path to helper binary, or %NULL to auto-discover.
+ * @mode: Explicit #PulsElevationMode to use when spawning the helper.
+ *
+ * Creates an isolated helper IPC client configured with @mode, built-in crash
+ * watchdog, and `waitpid()` zombie reaping.
+ *
+ * Returns: (transfer full): A new #PulsHelperClient.
+ */
+PulsHelperClient *
+puls_helper_client_new_with_mode (const gchar       *helper_path,
+                                  PulsElevationMode  mode)
+{
+    PulsHelperClient *client = g_new0 (PulsHelperClient, 1);
+    g_mutex_init (&client->mutex);
+    client->helper_path = g_strdup (helper_path);
+    client->elevation_mode = mode;
+    client->allow_fallback = FALSE;
+    return client;
 }
 
 /**
@@ -709,11 +1140,9 @@ ensure_helper_running_locked (PulsHelperClient *client, GError **error)
 PulsHelperClient *
 puls_helper_client_new (const gchar *helper_path, gboolean use_pkexec)
 {
-    PulsHelperClient *client = g_new0 (PulsHelperClient, 1);
-    g_mutex_init (&client->mutex);
-    client->helper_path = g_strdup (helper_path);
-    client->use_pkexec = use_pkexec;
-    return client;
+    return puls_helper_client_new_with_mode (
+        helper_path,
+        use_pkexec ? PULS_ELEVATION_PKEXEC : PULS_ELEVATION_DIRECT_ROOT);
 }
 
 /**
@@ -945,11 +1374,12 @@ puls_helper_client_get_stats (PulsHelperClient *client, PulsHelperStats *out_sta
     g_return_if_fail (out_stats != NULL);
 
     g_mutex_lock (&client->mutex);
-    out_stats->pid          = client->pid;
-    out_stats->running      = (client->pid > 0);
-    out_stats->launch_count = client->launch_count;
-    out_stats->crash_count  = client->crash_count;
-    out_stats->reaped_count = client->reaped_count;
+    out_stats->pid            = client->pid;
+    out_stats->running        = (client->pid > 0);
+    out_stats->launch_count   = client->launch_count;
+    out_stats->crash_count    = client->crash_count;
+    out_stats->reaped_count   = client->reaped_count;
+    out_stats->elevation_mode = client->elevation_mode;
     g_mutex_unlock (&client->mutex);
 }
 
@@ -959,7 +1389,10 @@ get_default_helper_client (void)
     if (g_once_init_enter (&default_helper_client_init)) {
         memset (&default_helper_client, 0, sizeof (default_helper_client));
         g_mutex_init (&default_helper_client.mutex);
-        default_helper_client.use_pkexec = (geteuid () != 0);
+        default_helper_client.elevation_mode = puls_get_elevation_mode ();
+        default_helper_client.allow_fallback = TRUE;
+        PULS_LOG_DEBUG ("Initialized helper elevation mode: %s",
+                        puls_elevation_mode_to_string (default_helper_client.elevation_mode));
         atexit (puls_helper_shutdown);
         g_once_init_leave (&default_helper_client_init, 1);
     }
@@ -1066,6 +1499,33 @@ puls_run_smartctl_finish (GAsyncResult *result, GError **error)
     return g_task_propagate_pointer (G_TASK (result), error);
 }
 
+static gchar *
+spawn_smartctl_fallback_sync (const gchar       *cmdline,
+                              PulsElevationMode  mode,
+                              GError           **error)
+{
+    gchar *stdout_buf = NULL;
+    gchar *stderr_buf = NULL;
+    gint exit_status = 0;
+
+    if (mode == PULS_ELEVATION_SUDO && puls_is_sudo_available ()) {
+        g_autofree gchar *sudo_cmd = g_strdup_printf ("sudo -n %s", cmdline);
+        GError *sudo_err = NULL;
+        if (g_spawn_command_line_sync (sudo_cmd, &stdout_buf, &stderr_buf, &exit_status, &sudo_err) &&
+            stdout_buf != NULL && *stdout_buf != '\0') {
+            g_free (stderr_buf);
+            return stdout_buf;
+        }
+        g_clear_pointer (&stdout_buf, g_free);
+        g_clear_pointer (&stderr_buf, g_free);
+        g_clear_error (&sudo_err);
+    }
+
+    g_spawn_command_line_sync (cmdline, &stdout_buf, &stderr_buf, &exit_status, error);
+    g_free (stderr_buf);
+    return stdout_buf;
+}
+
 gchar *
 puls_run_smartctl_sync_with_options (const gchar *device_path,
                                      gboolean     check_standby,
@@ -1078,21 +1538,21 @@ puls_run_smartctl_sync_with_options (const gchar *device_path,
         return NULL;
     }
 
-    g_autofree gchar *cmd = puls_build_helper_read_command (device_path, check_standby);
-    gchar *res = communicate_with_helper (cmd, error);
-    if (res != NULL)
-        return res;
+    PulsElevationMode mode = puls_get_elevation_mode ();
 
-    if (error)
-        g_clear_error (error);
+    /* Use privileged or group-credential helper when elevation/group access applies */
+    if (mode != PULS_ELEVATION_NONE) {
+        g_autofree gchar *cmd = puls_build_helper_read_command (device_path, check_standby);
+        gchar *res = communicate_with_helper (cmd, error);
+        if (res != NULL)
+            return res;
+
+        if (error)
+            g_clear_error (error);
+    }
 
     g_autofree gchar *cmdline = puls_build_smartctl_read_command (device_path, check_standby);
-    gchar *stdout_buf = NULL;
-    gchar *stderr_buf = NULL;
-    gint exit_status = 0;
-    g_spawn_command_line_sync (cmdline, &stdout_buf, &stderr_buf, &exit_status, error);
-    g_free (stderr_buf);
-    return stdout_buf;
+    return spawn_smartctl_fallback_sync (cmdline, mode, error);
 }
 
 gchar *
@@ -2698,13 +3158,17 @@ puls_run_smartctl_action_sync (const gchar *device_path, const gchar *action, GE
         return NULL;
     }
 
-    g_autofree gchar *cmd = puls_helper_format_action (device_path, action);
-    gchar *res = communicate_with_helper (cmd, error);
-    if (res != NULL)
-        return res;
+    PulsElevationMode mode = puls_get_elevation_mode ();
 
-    if (error)
-        g_clear_error (error);
+    if (mode != PULS_ELEVATION_NONE) {
+        g_autofree gchar *cmd = puls_helper_format_action (device_path, action);
+        gchar *res = communicate_with_helper (cmd, error);
+        if (res != NULL)
+            return res;
+
+        if (error)
+            g_clear_error (error);
+    }
 
     g_autofree gchar *cmdline = NULL;
     if (g_strcmp0 (action, PULS_HELPER_ACTION_SHORT) == 0) {
@@ -2719,12 +3183,7 @@ puls_run_smartctl_action_sync (const gchar *device_path, const gchar *action, GE
         return NULL;
     }
 
-    gchar *stdout_buf = NULL;
-    gchar *stderr_buf = NULL;
-    gint exit_status = 0;
-    g_spawn_command_line_sync (cmdline, &stdout_buf, &stderr_buf, &exit_status, error);
-    g_free (stderr_buf);
-
+    gchar *stdout_buf = spawn_smartctl_fallback_sync (cmdline, mode, error);
     return stdout_buf ? stdout_buf : g_strdup ("");
 }
 
