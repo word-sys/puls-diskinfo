@@ -30,7 +30,7 @@ Linux için GTK4 ve C ile geliştirilmiş, kapsamlı bir depolama sağlığı ve
 - **NVMe'ye Özgü Günlükler**: NVMe SSD'ler için kapsamlı sağlık ölçümleri (kullanılabilir yedek, kullanım yüzdesi, medya hataları vb.).
 - **Başsız (Headless) ve Uçbirim Kipi**: Ekran sunucusu olmadan doğrudan uçbirimden disk taraması (`--headless`) veya JSON çıktısı (`--json`) alma desteği.
 - **Donanım Simülatörü**: Yerleşik sanal sürücülerle (`--mock-disk`) test ve önizleme yapabilme.
-- **Polkit Entegrasyonu**: Temiz ayrıcalık ayrımı. Ana GUI ayrıcalıksız çalışır; S.M.A.R.T. verilerini sorgularken `pkexec` aracılığıyla küçük, denetlenebilir bir yardımcı çalıştırılabilir dosya çağrılır.
+- **Güçlendirilmiş Polkit Yardımcısı, Sıfır Yükseltme (Zero-Elevation) ve Yedekleme**: Sürümlü, uzunluk çerçeveli Protokol v2 IPC kanalı (`HELLO v2`), katı yol temizleme (`realpath`, `O_NOFOLLOW`, `fstat`), ayrıntılı komut beyaz listesi, otomatik çökme kurtarma ve `waitpid()` zombi süreç temizliği, Türkçe/İngilizce yerelleştirilmiş `auth_admin_keep` Polkit politikası, çift yönlü parçalı yüzey taraması akışı, başsız/WSL2/konteyner ortamları için `sudo -n` ve `disk`/`storage` grubu yedeklemeleri ile aygıt izinleri uygun olduğunda şifresiz doğrudan `smartctl` çalıştırma (Zero-Elevation) desteği.
 - **Türkçe / İngilizce Dil Desteği**: Başlık çubuğundaki dil düğmesiyle anında geçiş yapılabilir; tercih kaydedilir.
 
 ---
@@ -101,9 +101,14 @@ Derlenmiş ikili dosyayı doğrudan çalıştırın:
 ```
 
 ### 4. Testleri ve Denetleyicileri Çalıştırma
-Otomatik birim test paketini çalıştırın:
+Otomatik test paketini (birim testleri, smartctl JSON ayrıştırıcı testleri, yardımcı güvenlik/fuzzing paketi ve Polkit/metadata doğrulayıcıları) çalıştırın:
 ```bash
 meson test -C build --verbose
+```
+
+Bağımsız ayrıcalıklı yardımcı güvenlik ve fuzzing test paketini doğrudan çalıştırın:
+```bash
+meson test -C build -t 10 test-helper --verbose
 ```
 
 AddressSanitizer (ASan) ve UndefinedBehaviorSanitizer (UBSan) ile derleyip test edin:
@@ -124,7 +129,7 @@ Dağıtımınıza uygun en son sürümü [GitHub Sürümleri](https://github.com
 
 #### A. Debian / Ubuntu Paketi (`.deb`)
 ```bash
-sudo dpkg -i puls-diskinfo_1.1.5_amd64.deb
+sudo dpkg -i puls-diskinfo_1.1.6_amd64.deb
 # Bağımlılık eksikliği varsa:
 sudo apt-get install -f
 ```
@@ -132,15 +137,15 @@ sudo apt-get install -f
 #### B. Bağımsız Evrensel AppImage (`.AppImage`)
 Neredeyse tüm modern Linux dağıtımlarında kurulum gerektirmeden çalışır:
 ```bash
-chmod +x puls-diskinfo-1.1.5-linux-x86_64.AppImage
-./puls-diskinfo-1.1.5-linux-x86_64.AppImage
+chmod +x puls-diskinfo-1.1.6-linux-x86_64.AppImage
+./puls-diskinfo-1.1.6-linux-x86_64.AppImage
 ```
 
 #### C. Taşınabilir Sürüm Arşivi (`.tar.gz`)
 İkili dosyaları, Polkit yardımcısını, masaüstü entegrasyonunu ve otomatik kurulum betiklerini içerir:
 ```bash
-tar xzf puls-diskinfo-1.1.5-linux-x86_64.tar.gz
-cd puls-diskinfo-1.1.5-linux-x86_64
+tar xzf puls-diskinfo-1.1.6-linux-x86_64.tar.gz
+cd puls-diskinfo-1.1.6-linux-x86_64
 sudo ./install.sh
 ```
 Daha sonra kaldırmak için:
@@ -186,13 +191,13 @@ Dağıtılabilir paketler üretmek için yerleşik paketleme betiklerini kullan�
   ```bash
   ./packaging/build-binary.sh
   ```
-  `dist/puls-diskinfo-1.1.5-linux-x86_64.tar.gz` ve `.zip` üretilir.
+  `dist/puls-diskinfo-1.1.6-linux-x86_64.tar.gz` ve `.zip` üretilir.
 
 - **Evrensel AppImage Derleme**:
   ```bash
   ./packaging/build-appimage.sh
   ```
-  `dist/puls-diskinfo-1.1.5-linux-x86_64.AppImage` üretilir.
+  `dist/puls-diskinfo-1.1.6-linux-x86_64.AppImage` üretilir.
 
 ---
 

@@ -22,7 +22,7 @@
 #include <json-glib/json-glib.h>
 
 #ifndef PULS_VERSION
-#define PULS_VERSION "1.1.5"
+#define PULS_VERSION "1.1.6"
 #endif
 
 static gboolean opt_version = FALSE;

@@ -1,3 +1,17 @@
+puls-diskinfo (1.1.6) bookworm; urgency=medium
+
+  * Hardened privileged helper with Protocol v2 length-framed IPC and HELLO v2 handshake
+  * Multi-layer path sanitization and anti-hijacking guard (realpath, lstat, fstat, O_NOFOLLOW)
+  * Granular helper command whitelist with trusted absolute smartctl execve() and O(1) line reader
+  * Updated Polkit policy with English/Turkish localizations, auth_admin_keep, and allow_gui=false
+  * Helper crash recovery watchdog with automatic restart and waitpid() zombie reaping
+  * Sudo (-n) and disk/storage group fallback mechanisms for headless, WSL2, and container hosts
+  * Zero-elevation mode bypassing pkexec/helper when device nodes grant direct R_OK | W_OK access
+  * Bidirectional chunked IPC streaming (CHUNK frames + mid-stream CANCEL) integrated with surface scan
+  * Standalone helper test harness and deterministic fuzzing suite (test-helper)
+
+ -- Barın Güzeldemirci <baringuzeldemir@gmail.com>  Mon, 23 Nov 2026 17:40:00 +0300
+
 puls-diskinfo (1.1.5) bookworm; urgency=medium
 
   * Real-time drive hotplug monitoring via kernel udev netlink and GVolumeMonitor

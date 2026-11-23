@@ -32,7 +32,7 @@ A highly detailed storage health and S.M.A.R.T. monitoring application for Linux
 - **NVMe Specific Logs**: Comprehensive health metrics for NVMe SSDs (available spare, percentage used, media errors, controller busy time, etc.).
 - **Headless & CLI Mode**: Run comprehensive disk scans directly in the terminal (`--headless`) or output structured JSON (`--json`) without a display server.
 - **Hardware Simulator**: Test and preview storage metrics with built-in mock drives (`--mock-disk`).
-- **Polkit Integration**: Clean privilege separation. The main GUI runs unprivileged, calling a small, auditable helper executable via `pkexec` when querying privileged S.M.A.R.T. data.
+- **Hardened Polkit Helper, Zero-Elevation & Fallbacks**: Clean privilege separation over a versioned, length-framed Protocol v2 IPC channel (`HELLO v2`) with strict path sanitization (`realpath`, `O_NOFOLLOW`, `fstat`), granular command whitelisting, automatic crash recovery and `waitpid()` zombie reaping, localized English/Turkish Polkit `auth_admin_keep` prompts, bidirectional chunked surface-scan streaming, automatic `sudo -n` / `disk` & `storage` group fallbacks (headless/WSL2/containers), and Zero-Elevation direct `smartctl` execution when device node permissions allow.
 
 ---
 
@@ -102,9 +102,14 @@ Run the compiled binary directly:
 ```
 
 ### 4. Run Tests & Sanitizers
-Run the automated test suite:
+Run the automated test suite (unit tests, smartctl JSON parser tests, helper security & fuzzing harness, and metadata/Polkit policy validators):
 ```bash
 meson test -C build --verbose
+```
+
+Run the standalone privileged helper security & fuzzing harness directly:
+```bash
+meson test -C build -t 10 test-helper --verbose
 ```
 
 Build and test with AddressSanitizer (ASan) and UndefinedBehaviorSanitizer (UBSan):
@@ -125,7 +130,7 @@ Download the latest release for your distribution from [GitHub Releases](https:/
 
 #### A. Debian / Ubuntu Package (`.deb`)
 ```bash
-sudo dpkg -i puls-diskinfo_1.1.5_amd64.deb
+sudo dpkg -i puls-diskinfo_1.1.6_amd64.deb
 # If dependencies are missing:
 sudo apt-get install -f
 ```
@@ -133,15 +138,15 @@ sudo apt-get install -f
 #### B. Standalone Universal AppImage (`.AppImage`)
 Runs on almost any modern Linux distribution without installation:
 ```bash
-chmod +x puls-diskinfo-1.1.5-linux-x86_64.AppImage
-./puls-diskinfo-1.1.5-linux-x86_64.AppImage
+chmod +x puls-diskinfo-1.1.6-linux-x86_64.AppImage
+./puls-diskinfo-1.1.6-linux-x86_64.AppImage
 ```
 
 #### C. Portable Release Tarball (`.tar.gz`)
 Includes binaries, Polkit helper, desktop integration, and automated install scripts:
 ```bash
-tar xzf puls-diskinfo-1.1.5-linux-x86_64.tar.gz
-cd puls-diskinfo-1.1.5-linux-x86_64
+tar xzf puls-diskinfo-1.1.6-linux-x86_64.tar.gz
+cd puls-diskinfo-1.1.6-linux-x86_64
 sudo ./install.sh
 ```
 To uninstall later:
@@ -187,13 +192,13 @@ Use the built-in packaging scripts to produce distributable packages:
   ```bash
   ./packaging/build-binary.sh
   ```
-  Generates `dist/puls-diskinfo-1.1.5-linux-x86_64.tar.gz` and `.zip`.
+  Generates `dist/puls-diskinfo-1.1.6-linux-x86_64.tar.gz` and `.zip`.
 
 - **Build Universal AppImage**:
   ```bash
   ./packaging/build-appimage.sh
   ```
-  Generates `dist/puls-diskinfo-1.1.5-linux-x86_64.AppImage`.
+  Generates `dist/puls-diskinfo-1.1.6-linux-x86_64.AppImage`.
 
 ---
 

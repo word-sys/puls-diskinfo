@@ -4,6 +4,21 @@ All notable changes to **PULS DiskInfo** will be documented in this file.
 
 ---
 
+## [1.1.6] - 2026-11-23
+
+### Added
+- **Privileged Helper IPC Protocol v2 Framing & Handshake**: Replaced raw line-delimited helper I/O with a strict length-framed protocol (`HELLO v2`, `OK <len>`, `ERR <code> <len>`, `CHUNK <seq> <len>`) supporting `READ_SMART`, `ACTION`, `STREAM_SCAN`, `CANCEL`, and `QUIT`.
+- **Enhanced Path Sanitization & Anti-Injection Guard**: Hardened both the privileged helper and `PulsUtils` against directory traversal (`..`), shell metacharacters, partition/pseudo-device spoofing, and symlink hijacking using strict syntactic whitelisting, `lstat()`, canonical `realpath()` verification, `O_NOFOLLOW`, and `fstat()` inode/`rdev` TOCTOU checks.
+- **Granular Helper Command Whitelist & Hardened Execution**: Restricted helper capabilities strictly to SMART reads (`default`/`standby`), self-test actions (`short`/`long`/`abort`), and read-only sector probing; replaced `execlp()` with `execve()` against trusted absolute `smartctl` paths with a sanitized minimal environment and O(1) bounded line reading.
+- **Localized Polkit Policy Update (`io.github.word_sys.puls_diskinfo.policy`)**: Added granular Polkit action IDs (`smart-read`, `smart-selftest`, `surface-scan`) with full English and Turkish explanations, `auth_admin_keep` session persistence, `allow_gui=false` hardening, and automated PolicyKit XML validation.
+- **Helper Crash Recovery & Zombie Process Cleanup**: Implemented a thread-safe `PulsHelperClient` watchdog with `waitpid()` zombie reaping, `SIGPIPE` suppression, periodic main-loop health polling, and transparent automatic restart + retry if the helper terminates unexpectedly.
+- **Sudo & Storage-Group Fallback Mechanisms**: Added environment capability probing (root, `disk`/`storage` UNIX groups, Polkit, non-interactive `sudo -n`, WSL2, containers) so PULS DiskInfo operates seamlessly across desktop, headless server, WSL2, and containerized Linux systems.
+- **Zero-Elevation Mode for Group-Readable Nodes**: Probes device node `R_OK | W_OK` permissions (`access()`) to run `smartctl` directly without invoking `pkexec`, `sudo`, or the helper whenever user/group permissions suffice, with transparent fallback on kernel ioctl permission denial.
+- **Bidirectional IPC Streaming Channel**: Added chunked streaming telemetry (`CHUNK <seq> <len>`) and non-blocking `poll()` mid-stream `CANCEL` support to `STREAM_SCAN`, replacing legacy `popen("pkexec dd ...")` shell execution in `PulsSurfaceScan`.
+- **Standalone Helper Test Harness & Fuzzing Suite (`tests/test-helper.c`)**: Added dedicated Meson test target (`test-helper`) covering handshake state transitions, oversized line DoS draining, control/NUL byte rejection, 32-path injection matrix, 64-bit integer overflow boundaries, CLI exit codes, 500+ deterministic live IPC fuzz mutations, and 5,000 in-process parser fuzz iterations under ASan/UBSan.
+
+---
+
 ## [1.1.5] - 2026-11-21
 
 ### Added

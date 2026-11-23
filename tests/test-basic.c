@@ -24,7 +24,7 @@
 #include "puls-settings.h"
 
 #ifndef PULS_VERSION
-#define PULS_VERSION "1.1.5"
+#define PULS_VERSION "1.1.6"
 #endif
 
 GResource *puls_diskinfo_get_resource (void);

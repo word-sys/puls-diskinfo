@@ -56,6 +56,11 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="1.1.6" date="2026-11-23">
+      <description>
+        <p>Hardened privileged helper, Polkit policy, and secure IPC release: Protocol v2 length-framed IPC with HELLO v2 handshake, multi-layer path sanitization and symlink/TOCTOU protection (realpath, lstat, fstat, O_NOFOLLOW), strict helper command whitelisting with trusted execve() and O(1) bounded line reading, localized English and Turkish Polkit policy with auth_admin_keep session persistence, helper crash recovery watchdog with waitpid() zombie reaping, sudo and disk/storage group fallbacks, zero-elevation direct access for group-writable nodes, bidirectional chunked IPC streaming with mid-stream CANCEL for surface scans, and a standalone helper security fuzzing test harness.</p>
+      </description>
+    </release>
     <release version="1.1.5" date="2026-11-21">
       <description>
         <p>Enhanced device enumeration and hardware topology release: Real-time USB/external drive hotplug monitoring via udev netlink and GVolumeMonitor, NVMe controller vs namespace topology separation, hardened pseudo-device filtering, SCSI generic (/dev/sg*) mapping with SMART passthrough, mdadm software RAID and ZFS pool member detection, physical form factor detection badges (M.2 2280/2242/2230, 2.5", 3.5", U.2/U.3, PCIe AIC), rotational HDD standby detection (-n standby), and thread-safe asynchronous scanning with cancellation.</p>
