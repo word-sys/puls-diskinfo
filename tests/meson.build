@@ -20,6 +20,14 @@ test_smart_parser = executable('test-smart-parser',
 
 test('test-smart-parser', test_smart_parser)
 
+test_helper = executable('test-helper',
+  'test-helper.c',
+  c_args: test_c_args,
+  dependencies: puls_dep,
+)
+
+test('test-helper', test_helper, depends: helper_exe, timeout: 10)
+
 desktop_file_validate = find_program('desktop-file-validate', required: false)
 if desktop_file_validate.found()
   test('validate-desktop',

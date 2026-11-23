@@ -24,6 +24,7 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -665,9 +666,61 @@ dispatch_protocol_line (char *line, int *handshake_done)
     return 0;
 }
 
+/**
+ * read_bounded_line:
+ * @fp: Input stream (`stdin`).
+ * @buf: Caller-provided buffer of at least `max_len + 1` bytes.
+ * @max_len: Maximum permitted line length (excluding NUL terminator).
+ * @out_len: (out): Exact number of bytes read (up to @max_len).
+ * @out_too_long: (out): Set to 1 if the line exceeded @max_len bytes.
+ *
+ * Reads one newline-delimited protocol line using O(1) bounded memory.
+ * If an input line exceeds @max_len, the remaining bytes up to the next `\n`
+ * or `EOF` are drained safely without allocating unbounded memory.
+ *
+ * Returns: 1 if a line was read, 0 on immediate EOF.
+ */
+static int
+read_bounded_line (FILE   *fp,
+                   char   *buf,
+                   size_t  max_len,
+                   size_t *out_len,
+                   int    *out_too_long)
+{
+    size_t len = 0;
+    int too_long = 0;
+    int ch;
+
+    while ((ch = fgetc (fp)) != EOF) {
+        if (ch == '\n') {
+            if (!too_long && len < max_len) {
+                buf[len++] = '\n';
+            } else if (!too_long) {
+                too_long = 1;
+            }
+            break;
+        }
+        if (len < max_len) {
+            buf[len++] = (char)ch;
+        } else {
+            too_long = 1;
+        }
+    }
+
+    if (len == 0 && !too_long && ch == EOF)
+        return 0;
+
+    buf[len] = '\0';
+    *out_len = len;
+    *out_too_long = too_long;
+    return 1;
+}
+
 int
 main (int argc, char *argv[])
 {
+    signal (SIGPIPE, SIG_IGN);
+
     if (argc >= 2) {
         if (argc > 3) {
             fprintf (stderr, "Error: Too many arguments (usage: puls-diskinfo-helper <dev> [standby|short|long|abort])\n");
@@ -679,19 +732,19 @@ main (int argc, char *argv[])
         return 0;
     }
 
-    char *line = NULL;
-    size_t line_cap = 0;
-    ssize_t line_len;
+    char line[PULS_HELPER_MAX_LINE_LEN + 1];
+    size_t line_len = 0;
+    int too_long = 0;
     int handshake_done = 0;
 
-    while ((line_len = getline (&line, &line_cap, stdin)) != -1) {
-        if ((size_t)line_len > PULS_HELPER_MAX_LINE_LEN) {
+    while (read_bounded_line (stdin, line, PULS_HELPER_MAX_LINE_LEN, &line_len, &too_long)) {
+        if (too_long) {
             send_frame_err (PULS_HELPER_ERR_INVALID_ARG,
                             "{\"error\":\"Command line exceeds maximum length\"}\n");
             continue;
         }
 
-        if (line_has_forbidden_chars (line, (size_t)line_len)) {
+        if (line_has_forbidden_chars (line, line_len)) {
             send_frame_err (PULS_HELPER_ERR_INVALID_ARG,
                             "{\"error\":\"Command line contains forbidden control or NUL characters\"}\n");
             continue;
@@ -713,6 +766,5 @@ main (int argc, char *argv[])
             break;
     }
 
-    free (line);
     return 0;
 }
