@@ -4086,6 +4086,149 @@ test_bidirectional_ipc_streaming (void)
 #endif
 }
 
+static void
+test_phase4_final_integration (void)
+{
+    g_autoptr(GError) err = NULL;
+
+    /* 1. Polkit policy XML & localized action annotations verified */
+#ifdef TEST_POLICY_FILE
+    g_autoptr(GPtrArray) policy_actions = NULL;
+    g_assert_true (puls_polkit_validate_policy_file (TEST_POLICY_FILE, &policy_actions, &err));
+    g_assert_no_error (err);
+    g_assert_cmpuint (policy_actions->len, ==, 3);
+#endif
+
+    /* 2. Default helper stats & elevation pipeline introspection */
+    PulsHelperStats def_stats = { 0 };
+    puls_helper_get_stats (&def_stats);
+    g_assert_nonnull (puls_elevation_mode_to_string (def_stats.elevation_mode));
+
+    /* 3. PulsUtils STREAM_SCAN entry guards enforce path & range sanitization */
+    g_assert_false (puls_run_stream_scan_sync ("/dev/../etc/passwd", 0, 4096, 512,
+                                               NULL, NULL, NULL, &err));
+    g_assert_error (err, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+    g_clear_error (&err);
+
+    g_assert_false (puls_run_stream_scan_sync ("/dev/sda;reboot", 0, 4096, 512,
+                                               NULL, NULL, NULL, &err));
+    g_assert_error (err, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+    g_clear_error (&err);
+
+    g_assert_false (puls_run_stream_scan_sync ("/dev/sda", 0, 0, 512,
+                                               NULL, NULL, NULL, &err));
+    g_assert_error (err, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+    g_clear_error (&err);
+
+    g_assert_false (puls_run_stream_scan_sync ("/dev/sda", 0, 4096, 128,
+                                               NULL, NULL, NULL, &err));
+    g_assert_error (err, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+    g_clear_error (&err);
+
+#ifdef TEST_HELPER_BIN
+    /* 4. Full End-to-End Phase 4 Pipeline against live compiled helper */
+    PulsHelperClient *client = puls_helper_client_new_with_mode (
+        TEST_HELPER_BIN, PULS_ELEVATION_DIRECT_GROUP);
+    g_assert_nonnull (client);
+
+    gboolean ok = FALSE;
+    g_autofree gchar *err_code = NULL;
+    g_autofree gchar *payload = NULL;
+
+    /* 4a. Protocol v2 handshake & capability verification */
+    g_assert_true (puls_helper_client_exchange (client, "HELLO v2\n",
+                                                &ok, &err_code, &payload, &err));
+    g_assert_no_error (err);
+    g_assert_true (ok);
+    g_assert_nonnull (strstr (payload, "\"protocol\":\"v2\""));
+    g_assert_nonnull (strstr (payload, "\"streaming\":true"));
+    g_assert_nonnull (strstr (payload, "\"actions\":[\"short\",\"long\",\"abort\"]"));
+    g_clear_pointer (&payload, g_free);
+
+    /* 4b. Anti-injection & command whitelist verification on same live session */
+    g_assert_true (puls_helper_client_exchange (client, "READ_SMART /dev/../etc/passwd\n",
+                                                &ok, &err_code, &payload, &err));
+    g_assert_no_error (err);
+    g_assert_false (ok);
+    g_assert_cmpstr (err_code, ==, PULS_HELPER_ERR_INVALID_DEVICE);
+    g_clear_pointer (&err_code, g_free);
+    g_clear_pointer (&payload, g_free);
+
+    g_assert_true (puls_helper_client_exchange (client, "ACTION /dev/sda standby\n",
+                                                &ok, &err_code, &payload, &err));
+    g_assert_no_error (err);
+    g_assert_false (ok);
+    g_assert_cmpstr (err_code, ==, PULS_HELPER_ERR_INVALID_ACTION);
+    g_clear_pointer (&err_code, g_free);
+    g_clear_pointer (&payload, g_free);
+
+    g_assert_true (puls_helper_client_exchange (client, "READ_SMART /dev/sda raw\n",
+                                                &ok, &err_code, &payload, &err));
+    g_assert_no_error (err);
+    g_assert_false (ok);
+    g_assert_cmpstr (err_code, ==, PULS_HELPER_ERR_INVALID_SUBCMD);
+    g_clear_pointer (&err_code, g_free);
+    g_clear_pointer (&payload, g_free);
+
+    g_assert_true (puls_helper_client_exchange (client, "EXEC /bin/sh\n",
+                                                &ok, &err_code, &payload, &err));
+    g_assert_no_error (err);
+    g_assert_false (ok);
+    g_assert_cmpstr (err_code, ==, PULS_HELPER_ERR_UNKNOWN_CMD);
+    g_clear_pointer (&err_code, g_free);
+    g_clear_pointer (&payload, g_free);
+
+    /* 4c. Streaming command & idle CANCEL synchronization */
+    g_assert_true (puls_helper_client_stream (client, "STREAM_SCAN /dev/sdzz 0 8192 4096\n",
+                                              NULL, NULL, &ok, &err_code, &payload, &err));
+    g_assert_no_error (err);
+    g_assert_false (ok);
+    g_assert_cmpstr (err_code, ==, PULS_HELPER_ERR_NOT_FOUND);
+    g_clear_pointer (&err_code, g_free);
+    g_clear_pointer (&payload, g_free);
+
+    g_assert_true (puls_helper_client_exchange (client, "CANCEL\n",
+                                                &ok, &err_code, &payload, &err));
+    g_assert_no_error (err);
+    g_assert_true (ok);
+    g_clear_pointer (&payload, g_free);
+
+    /* 4d. Crash recovery + zombie reaping + transparent re-launch */
+    PulsHelperStats st = { 0 };
+    puls_helper_client_get_stats (client, &st);
+    GPid old_pid = st.pid;
+    g_assert_cmpint ((gint)old_pid, >, 0);
+    g_assert_cmpint (kill ((pid_t)old_pid, SIGKILL), ==, 0);
+    g_usleep (20000);
+
+    g_assert_true (puls_helper_client_exchange (client, "HELLO v2\n",
+                                                &ok, &err_code, &payload, &err));
+    g_assert_no_error (err);
+    g_assert_true (ok);
+    g_assert_nonnull (strstr (payload, "\"version\":2"));
+    g_clear_pointer (&payload, g_free);
+
+    puls_helper_client_get_stats (client, &st);
+    g_assert_true (st.running);
+    g_assert_cmpint ((gint)st.pid, !=, (gint)old_pid);
+    g_assert_cmpuint (st.launch_count, ==, 2);
+    g_assert_cmpuint (st.crash_count, ==, 1);
+    g_assert_cmpuint (st.reaped_count, ==, 1);
+
+    int wstatus = 0;
+    errno = 0;
+    g_assert_cmpint (waitpid ((pid_t)old_pid, &wstatus, WNOHANG), ==, -1);
+    g_assert_cmpint (errno, ==, ECHILD);
+
+    GPid final_pid = st.pid;
+    puls_helper_client_free (client);
+
+    errno = 0;
+    g_assert_cmpint (waitpid ((pid_t)final_pid, &wstatus, WNOHANG), ==, -1);
+    g_assert_cmpint (errno, ==, ECHILD);
+#endif
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -4129,6 +4272,7 @@ main (int argc, char *argv[])
     g_test_add_func ("/basic/elevation-fallback-mechanisms", test_elevation_fallback_mechanisms);
     g_test_add_func ("/basic/zero-elevation-mode", test_zero_elevation_mode);
     g_test_add_func ("/basic/bidirectional-ipc-streaming", test_bidirectional_ipc_streaming);
+    g_test_add_func ("/basic/phase4-final-integration", test_phase4_final_integration);
 
     int result = g_test_run ();
 

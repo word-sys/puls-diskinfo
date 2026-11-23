@@ -1731,6 +1731,112 @@ puls_helper_shutdown (void)
     puls_helper_client_shutdown (&default_helper_client);
 }
 
+/**
+ * puls_helper_get_stats:
+ * @out_stats: (out): Snapshot of the default helper client's status and counters.
+ */
+void
+puls_helper_get_stats (PulsHelperStats *out_stats)
+{
+    g_return_if_fail (out_stats != NULL);
+
+    if (g_atomic_pointer_get (&default_helper_client_init) == 0) {
+        memset (out_stats, 0, sizeof (*out_stats));
+        out_stats->elevation_mode = puls_get_elevation_mode ();
+        return;
+    }
+
+    puls_helper_client_get_stats (&default_helper_client, out_stats);
+}
+
+/**
+ * puls_run_stream_scan_sync:
+ * @device_path: Verified storage device path under `/dev`.
+ * @start_offset: Starting byte offset.
+ * @length: Bytes to read (`1 .. PULS_HELPER_MAX_STREAM_SCAN_LEN`).
+ * @chunk_bytes: Telemetry chunk size (`0` for default 64 KiB, or `512 .. 1 MiB`).
+ * @chunk_cb: (nullable) (scope call): Callback invoked on each `CHUNK` frame;
+ *   return %FALSE to send bidirectional `CANCEL\n` mid-stream.
+ * @user_data: Context pointer for @chunk_cb.
+ * @out_summary_json: (out) (optional): Final terminal JSON summary on success.
+ * @error: (out) (optional): Return location for a #GError.
+ *
+ * Streams read-only sector/throughput telemetry through the default hardened
+ * privileged helper IPC pipeline (`STREAM_SCAN`).
+ *
+ * Returns: %TRUE if the helper returned terminal `OK`, %FALSE on validation,
+ * cancellation (`G_IO_ERROR_CANCELLED`), or I/O failure.
+ */
+gboolean
+puls_run_stream_scan_sync (const gchar              *device_path,
+                           guint64                   start_offset,
+                           guint64                   length,
+                           guint64                   chunk_bytes,
+                           PulsHelperStreamCallback  chunk_cb,
+                           gpointer                  user_data,
+                           gchar                   **out_summary_json,
+                           GError                  **error)
+{
+    if (out_summary_json != NULL)
+        *out_summary_json = NULL;
+
+    if (!puls_device_path_is_valid (device_path)) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                     "Invalid or unsafe device path for STREAM_SCAN: %s",
+                     device_path ? device_path : "(null)");
+        return FALSE;
+    }
+
+    if (length == 0 ||
+        length > PULS_HELPER_MAX_STREAM_SCAN_LEN ||
+        start_offset > (guint64)G_MAXINT64 ||
+        length > (guint64)G_MAXINT64 - start_offset) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                     "Invalid STREAM_SCAN range: start=%" G_GUINT64_FORMAT " len=%" G_GUINT64_FORMAT,
+                     start_offset, length);
+        return FALSE;
+    }
+
+    guint64 effective_chunk = (chunk_bytes == 0) ? PULS_HELPER_DEFAULT_STREAM_CHUNK : chunk_bytes;
+    if (effective_chunk < PULS_HELPER_MIN_STREAM_CHUNK ||
+        effective_chunk > PULS_HELPER_MAX_STREAM_CHUNK) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                     "Invalid STREAM_SCAN chunk_bytes: %" G_GUINT64_FORMAT, effective_chunk);
+        return FALSE;
+    }
+
+    g_autofree gchar *cmd = puls_helper_format_stream_scan_chunked (
+        device_path, start_offset, length, effective_chunk);
+    gboolean resp_ok = FALSE;
+    g_autofree gchar *err_code = NULL;
+    gchar *payload = NULL;
+
+    if (!puls_helper_client_stream (get_default_helper_client (), cmd,
+                                    chunk_cb, user_data,
+                                    &resp_ok, &err_code, &payload, error)) {
+        return FALSE;
+    }
+
+    if (!resp_ok) {
+        GIOErrorEnum code = (g_strcmp0 (err_code, PULS_HELPER_ERR_CANCELLED) == 0)
+                            ? G_IO_ERROR_CANCELLED
+                            : G_IO_ERROR_FAILED;
+        g_set_error (error, G_IO_ERROR, code,
+                     "Helper STREAM_SCAN rejected (%s): %s",
+                     err_code ? err_code : PULS_HELPER_ERR_INTERNAL,
+                     payload ? payload : "");
+        g_free (payload);
+        return FALSE;
+    }
+
+    if (out_summary_json != NULL)
+        *out_summary_json = payload;
+    else
+        g_free (payload);
+
+    return TRUE;
+}
+
 static gchar *
 communicate_with_helper (const gchar *command, GError **error)
 {

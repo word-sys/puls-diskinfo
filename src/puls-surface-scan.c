@@ -14,6 +14,8 @@
 
 #define _GNU_SOURCE
 #include "puls-surface-scan.h"
+#include "puls-utils.h"
+#include "../helper/puls-helper-protocol.h"
 
 #include <stdio.h>
 #include <fcntl.h>
@@ -108,25 +110,107 @@ emit_finished (PulsSurfaceFinishedFunc cb,
     g_idle_add (emit_finished_idle, f);
 }
 
-static ssize_t
-read_block_full (int fd, void *buf, gsize count, gboolean is_pipe, off_t offset)
+typedef struct {
+    ScanTaskData          *task_data;
+    GCancellable          *cancellable;
+    PulsSurfaceScanResult *result;
+    guint64                last_emit_ms;
+} HelperScanCtx;
+
+static gboolean
+helper_stream_chunk_cb (guint64      seq G_GNUC_UNUSED,
+                        const gchar *chunk_payload,
+                        gpointer     user_data)
 {
-    if (!is_pipe) {
-        return pread (fd, buf, count, offset);
+    HelperScanCtx *ctx = (HelperScanCtx *)user_data;
+
+    PulsHelperStreamChunk chunk = { 0 };
+    if (puls_helper_parse_stream_chunk_json (chunk_payload, &chunk)) {
+        guint64 sectors_in_chunk = chunk.chunk_bytes / 512;
+        guint64 lba = chunk.offset / 512;
+        ctx->result->sectors_scanned += sectors_in_chunk;
+
+        PulsSectorState state = (chunk.chunk_ms >= (gdouble)PULS_SURFACE_SLOW_THRESHOLD_MS)
+                                ? PULS_SECTOR_SLOW
+                                : PULS_SECTOR_OK;
+        if (state == PULS_SECTOR_SLOW)
+            ctx->result->sectors_slow += sectors_in_chunk;
+        else
+            ctx->result->sectors_ok += sectors_in_chunk;
+
+        guint64 now_ms = (guint64)(g_get_monotonic_time () / 1000);
+        if (state != PULS_SECTOR_OK || (now_ms - ctx->last_emit_ms) >= 50) {
+            ctx->last_emit_ms = now_ms;
+            emit_progress (ctx->task_data->progress_cb,
+                           ctx->result->sectors_scanned,
+                           ctx->result->total_sectors,
+                           lba, state, ctx->task_data->user_data);
+        }
     }
 
-    gsize total = 0;
-    gchar *ptr = (gchar *)buf;
-    while (total < count) {
-        ssize_t nr = read (fd, ptr + total, count - total);
-        if (nr < 0) {
-            if (errno == EINTR) continue;
-            return (total > 0) ? (ssize_t)total : -1;
-        }
-        if (nr == 0) break;
-        total += nr;
+    return !g_cancellable_is_cancelled (ctx->cancellable);
+}
+
+static void
+run_helper_stream_surface_scan (ScanTaskData          *d,
+                                GCancellable          *cancellable,
+                                guint64                dev_size,
+                                PulsSurfaceScanResult *result)
+{
+    if (dev_size == 0) {
+        emit_finished (d->finished_cb, result, FALSE,
+                       "Cannot determine device size for helper surface scan",
+                       d->user_data);
+        return;
     }
-    return (ssize_t)total;
+
+    result->total_sectors = dev_size / 512;
+    gboolean scan_cancelled = FALSE;
+    g_autofree gchar *error_msg = NULL;
+
+    HelperScanCtx hctx = {
+        .task_data    = d,
+        .cancellable  = cancellable,
+        .result       = result,
+        .last_emit_ms = 0,
+    };
+
+    guint64 offset = 0;
+    while (offset < dev_size) {
+        if (g_cancellable_is_cancelled (cancellable)) {
+            scan_cancelled = TRUE;
+            break;
+        }
+
+        guint64 window = MIN ((guint64)PULS_HELPER_MAX_STREAM_SCAN_LEN, dev_size - offset);
+        guint64 chunk_sz = MIN ((guint64)PULS_SURFACE_BLOCK_SIZE, window);
+        if (chunk_sz < PULS_HELPER_MIN_STREAM_CHUNK)
+            chunk_sz = PULS_HELPER_MIN_STREAM_CHUNK;
+
+        g_autoptr(GError) err = NULL;
+        g_autofree gchar *summary = NULL;
+        if (!puls_run_stream_scan_sync (d->device_path, offset, window, chunk_sz,
+                                        helper_stream_chunk_cb, &hctx,
+                                        &summary, &err)) {
+            if (g_error_matches (err, G_IO_ERROR, G_IO_ERROR_CANCELLED) ||
+                g_cancellable_is_cancelled (cancellable)) {
+                scan_cancelled = TRUE;
+                break;
+            }
+            guint64 sectors_in_window = window / 512;
+            result->sectors_error += sectors_in_window;
+            result->sectors_scanned += sectors_in_window;
+            emit_progress (d->progress_cb,
+                           result->sectors_scanned, result->total_sectors,
+                           offset / 512, PULS_SECTOR_ERROR, d->user_data);
+            error_msg = g_strdup (err ? err->message : "Privileged helper surface scan failed");
+            break;
+        }
+
+        offset += window;
+    }
+
+    emit_finished (d->finished_cb, result, scan_cancelled, error_msg, d->user_data);
 }
 
 static void
@@ -141,6 +225,14 @@ surface_scan_thread (GTask        *task G_GNUC_UNUSED,
     gboolean scan_cancelled = FALSE;
     gchar   *error_msg      = NULL;
 
+    if (!puls_device_path_is_valid (d->device_path)) {
+        error_msg = g_strdup_printf ("Invalid or unsafe device path: %s",
+                                     d->device_path ? d->device_path : "(null)");
+        emit_finished (d->finished_cb, &result, FALSE, error_msg, d->user_data);
+        g_free (error_msg);
+        return;
+    }
+
     const gchar *dev_name = strrchr (d->device_path, '/');
     dev_name = dev_name ? dev_name + 1 : d->device_path;
 
@@ -151,18 +243,16 @@ surface_scan_thread (GTask        *task G_GNUC_UNUSED,
         dev_size = (guint64)g_ascii_strtoull (size_str, NULL, 10) * 512ULL;
     }
 
-    int fd = open (d->device_path, O_RDONLY | O_DIRECT | O_CLOEXEC);
+    /* Zero-elevation direct read with O_NOFOLLOW when device permissions allow */
+    int fd = open (d->device_path, O_RDONLY | O_DIRECT | O_NOFOLLOW | O_CLOEXEC);
     if (fd < 0) {
-        fd = open (d->device_path, O_RDONLY | O_CLOEXEC);
+        fd = open (d->device_path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
     }
 
-    FILE *pipe_fp = NULL;
     if (fd < 0 && errno == EACCES) {
-        g_autofree gchar *cmd = g_strdup_printf ("pkexec dd if=%s bs=1M status=none 2>/dev/null", d->device_path);
-        pipe_fp = popen (cmd, "r");
-        if (pipe_fp) {
-            fd = fileno (pipe_fp);
-        }
+        /* Route through hardened Protocol v2 STREAM_SCAN helper instead of shell dd */
+        run_helper_stream_surface_scan (d, cancellable, dev_size, &result);
+        return;
     }
 
     if (fd < 0) {
@@ -176,7 +266,7 @@ surface_scan_thread (GTask        *task G_GNUC_UNUSED,
     if (dev_size == 0) {
         if (ioctl (fd, BLKGETSIZE64, &dev_size) < 0 || dev_size == 0) {
             error_msg = g_strdup ("Cannot determine device size");
-            if (pipe_fp) pclose (pipe_fp); else close (fd);
+            close (fd);
             emit_finished (d->finished_cb, &result, FALSE, error_msg, d->user_data);
             g_free (error_msg);
             return;
@@ -187,7 +277,7 @@ surface_scan_thread (GTask        *task G_GNUC_UNUSED,
     void *buf = NULL;
     if (posix_memalign (&buf, 4096, block_size) != 0) {
         error_msg = g_strdup ("Memory allocation failed");
-        if (pipe_fp) pclose (pipe_fp); else close (fd);
+        close (fd);
         emit_finished (d->finished_cb, &result, FALSE, error_msg, d->user_data);
         g_free (error_msg);
         return;
@@ -209,7 +299,7 @@ surface_scan_thread (GTask        *task G_GNUC_UNUSED,
 
         struct timespec t0, t1;
         clock_gettime (CLOCK_MONOTONIC, &t0);
-        ssize_t nr = read_block_full (fd, buf, to_read, (pipe_fp != NULL), (off_t)offset);
+        ssize_t nr = pread (fd, buf, to_read, (off_t)offset);
         clock_gettime (CLOCK_MONOTONIC, &t1);
 
         guint64 elapsed_ms = ((guint64)(t1.tv_sec - t0.tv_sec)) * 1000
@@ -242,12 +332,7 @@ surface_scan_thread (GTask        *task G_GNUC_UNUSED,
     }
 
     free (buf);
-    if (pipe_fp) {
-        pclose (pipe_fp);
-        sync ();
-    } else {
-        close (fd);
-    }
+    close (fd);
 
     emit_finished (d->finished_cb, &result, scan_cancelled, error_msg, d->user_data);
 }

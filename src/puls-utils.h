@@ -233,6 +233,15 @@ gboolean          puls_helper_watchdog_check        (void);
 void              puls_helper_watchdog_start        (guint             interval_ms);
 void              puls_helper_watchdog_stop         (void);
 void              puls_helper_shutdown              (void);
+void              puls_helper_get_stats             (PulsHelperStats  *out_stats);
+gboolean          puls_run_stream_scan_sync         (const gchar              *device_path,
+                                                     guint64                   start_offset,
+                                                     guint64                   length,
+                                                     guint64                   chunk_bytes,
+                                                     PulsHelperStreamCallback  chunk_cb,
+                                                     gpointer                  user_data,
+                                                     gchar                   **out_summary_json,
+                                                     GError                  **error);
 
 /* Polkit Policy XML Introspection & Validation */
 typedef struct {
