@@ -289,7 +289,41 @@ gchar   *puls_run_smartctl_action_sync   (const gchar          *device_path,
                                           GError              **error);
 
 
-gboolean puls_detect_smartmontools          (gchar **version_out);
+/* smartmontools Feature & Version Negotiation */
+typedef struct {
+    gboolean available;
+    guint    major;
+    guint    minor;
+    guint    patch;
+    guint    svn_rev;
+    gchar    version_string[32];
+    gchar    release_date[16];
+    gchar    raw_banner[128];
+    gboolean supports_json;         /* smartctl >= 7.0 (`-j` / `--json`, JSON v1.0) */
+    guint    json_schema_major;     /* 1 when supports_json, else 0 */
+    guint    json_schema_minor;     /* 0 when supports_json, else 0 */
+    gboolean supports_sat;          /* smartctl >= 5.39 (`-d sat`) */
+    gboolean supports_sntjmicron;   /* smartctl >= 7.1 (`-d sntjmicron`) */
+    gboolean supports_sntasmedia;   /* smartctl >= 7.2 (`-d sntasmedia`) */
+    gboolean supports_sntrealtek;   /* smartctl >= 7.2 (`-d sntrealtek`) */
+    gboolean supports_json_compact; /* smartctl >= 7.3 (`--json=c`) */
+} PulsSmartctlCaps;
+
+gboolean                puls_detect_smartmontools                (gchar                 **version_out);
+gboolean                puls_parse_smartctl_version              (const gchar            *version_output,
+                                                                  PulsSmartctlCaps       *out_caps);
+gboolean                puls_smartctl_version_at_least           (const PulsSmartctlCaps *caps,
+                                                                  guint                   req_major,
+                                                                  guint                   req_minor);
+gboolean                puls_smartctl_probe_capabilities         (PulsSmartctlCaps       *out_caps);
+const PulsSmartctlCaps *puls_smartctl_get_capabilities           (void);
+gchar                  *puls_smartctl_format_capabilities_summary(const PulsSmartctlCaps *caps);
+gboolean                puls_smartctl_parse_json_format_version  (const gchar            *json_str,
+                                                                  guint                  *out_major,
+                                                                  guint                  *out_minor);
+gchar                  *puls_build_smartctl_read_command_for_caps(const gchar            *device_path,
+                                                                  gboolean                check_standby,
+                                                                  const PulsSmartctlCaps *caps);
 gboolean puls_device_path_is_valid          (const gchar *path);
 gboolean puls_validate_device_node_in_dir   (const gchar *dev_root,
                                              const gchar *device_path,

@@ -4229,6 +4229,146 @@ test_phase4_final_integration (void)
 #endif
 }
 
+static void
+test_smartctl_version_negotiation (void)
+{
+    PulsSmartctlCaps caps;
+
+    /* 1. Legacy smartctl 6.6 (no JSON support, no USB NVMe bridge flags) */
+    static const gchar *banner_66 =
+        "smartctl 6.6 2017-11-05 r4594 [x86_64-linux-4.15.0] (local build)\n"
+        "Copyright (C) 2002-17, Bruce Allen, Christian Franke\n";
+    g_assert_true (puls_parse_smartctl_version (banner_66, &caps));
+    g_assert_true (caps.available);
+    g_assert_cmpuint (caps.major, ==, 6);
+    g_assert_cmpuint (caps.minor, ==, 6);
+    g_assert_cmpuint (caps.patch, ==, 0);
+    g_assert_cmpuint (caps.svn_rev, ==, 4594);
+    g_assert_cmpstr (caps.version_string, ==, "6.6");
+    g_assert_cmpstr (caps.release_date, ==, "2017-11-05");
+    g_assert_false (caps.supports_json);
+    g_assert_cmpuint (caps.json_schema_major, ==, 0);
+    g_assert_true  (caps.supports_sat);
+    g_assert_false (caps.supports_sntjmicron);
+    g_assert_false (caps.supports_sntasmedia);
+    g_assert_false (caps.supports_sntrealtek);
+    g_assert_false (caps.supports_json_compact);
+
+    g_autofree gchar *cmd_66 = puls_build_smartctl_read_command_for_caps ("/dev/sda", FALSE, &caps);
+    g_autofree gchar *cmd_66_sb = puls_build_smartctl_read_command_for_caps ("/dev/sda", TRUE, &caps);
+    g_assert_cmpstr (cmd_66, ==, "smartctl -a /dev/sda");
+    g_assert_cmpstr (cmd_66_sb, ==, "smartctl -n standby -a /dev/sda");
+
+    g_autofree gchar *sum_66 = puls_smartctl_format_capabilities_summary (&caps);
+    g_assert_nonnull (strstr (sum_66, "6.6"));
+    g_assert_nonnull (strstr (sum_66, "legacy"));
+
+    /* 2. smartctl 7.0 (introduces JSON format v1.0) */
+    static const gchar *banner_70 =
+        "smartctl 7.0 2018-12-30 r4883 [x86_64-linux-5.0.0] (local build)\n";
+    g_assert_true (puls_parse_smartctl_version (banner_70, &caps));
+    g_assert_cmpuint (caps.major, ==, 7);
+    g_assert_cmpuint (caps.minor, ==, 0);
+    g_assert_true  (caps.supports_json);
+    g_assert_cmpuint (caps.json_schema_major, ==, 1);
+    g_assert_cmpuint (caps.json_schema_minor, ==, 0);
+    g_assert_false (caps.supports_sntjmicron);
+    g_assert_false (caps.supports_sntasmedia);
+    g_assert_false (caps.supports_sntrealtek);
+
+    g_autofree gchar *cmd_70 = puls_build_smartctl_read_command_for_caps ("/dev/nvme0n1", FALSE, &caps);
+    g_assert_cmpstr (cmd_70, ==, "smartctl -a -j /dev/nvme0n1");
+
+    /* 3. smartctl 7.1 (adds -d sntjmicron) */
+    static const gchar *banner_71 = "smartctl 7.1 2019-12-30 r5022 [x86_64-linux]\n";
+    g_assert_true (puls_parse_smartctl_version (banner_71, &caps));
+    g_assert_true  (caps.supports_json);
+    g_assert_true  (caps.supports_sntjmicron);
+    g_assert_false (caps.supports_sntasmedia);
+    g_assert_false (caps.supports_sntrealtek);
+    g_assert_false (caps.supports_json_compact);
+
+    /* 4. smartctl 7.2 (adds -d sntasmedia & -d sntrealtek) */
+    static const gchar *banner_72 =
+        "smartctl 7.2 2020-12-30 r5155 [x86_64-linux-6.8.0-149-generic] (local build)\n"
+        "smartmontools SVN rev 5155 dated 2020-12-30 at 16:49:18\n";
+    g_assert_true (puls_parse_smartctl_version (banner_72, &caps));
+    g_assert_cmpuint (caps.major, ==, 7);
+    g_assert_cmpuint (caps.minor, ==, 2);
+    g_assert_cmpuint (caps.svn_rev, ==, 5155);
+    g_assert_true  (caps.supports_json);
+    g_assert_true  (caps.supports_sat);
+    g_assert_true  (caps.supports_sntjmicron);
+    g_assert_true  (caps.supports_sntasmedia);
+    g_assert_true  (caps.supports_sntrealtek);
+    g_assert_false (caps.supports_json_compact);
+
+    g_autofree gchar *sum_72 = puls_smartctl_format_capabilities_summary (&caps);
+    g_assert_nonnull (strstr (sum_72, "7.2"));
+    g_assert_nonnull (strstr (sum_72, "JSON v1.0"));
+    g_assert_nonnull (strstr (sum_72, "ASMedia"));
+
+    /* 5. smartctl 7.4.1 (3-part version + compact JSON >= 7.3) */
+    static const gchar *banner_741 = "smartctl 7.4.1 2024-01-15 r5600 [x86_64-linux]\n";
+    g_assert_true (puls_parse_smartctl_version (banner_741, &caps));
+    g_assert_cmpuint (caps.major, ==, 7);
+    g_assert_cmpuint (caps.minor, ==, 4);
+    g_assert_cmpuint (caps.patch, ==, 1);
+    g_assert_cmpstr (caps.version_string, ==, "7.4.1");
+    g_assert_true (caps.supports_json_compact);
+
+    /* Version comparison helper boundaries */
+    g_assert_true  (puls_smartctl_version_at_least (&caps, 7, 0));
+    g_assert_true  (puls_smartctl_version_at_least (&caps, 7, 4));
+    g_assert_false (puls_smartctl_version_at_least (&caps, 7, 5));
+    g_assert_false (puls_smartctl_version_at_least (&caps, 8, 0));
+    g_assert_true  (puls_smartctl_version_at_least (&caps, 6, 99));
+
+    /* 6. Alternate "smartmontools release X.Y" format & malformed input rejection */
+    g_assert_true (puls_parse_smartctl_version ("smartmontools release 7.3 dated 2022-02-28\nsmartmontools SVN rev 5338\n", &caps));
+    g_assert_cmpuint (caps.major, ==, 7);
+    g_assert_cmpuint (caps.minor, ==, 3);
+    g_assert_cmpuint (caps.svn_rev, ==, 5338);
+    g_assert_true (caps.supports_json_compact);
+
+    g_assert_false (puls_parse_smartctl_version (NULL, &caps));
+    g_assert_false (caps.available);
+    g_assert_false (puls_parse_smartctl_version ("", &caps));
+    g_assert_false (puls_parse_smartctl_version ("unrelated tool v1.0\n", &caps));
+    g_assert_false (puls_parse_smartctl_version ("smartctl bogus\n", &caps));
+
+    g_autofree gchar *sum_none = puls_smartctl_format_capabilities_summary (&caps);
+    g_assert_nonnull (strstr (sum_none, "not installed"));
+
+    /* 7. Runtime JSON format version extraction */
+    guint jmaj = 0, jmin = 0;
+    g_assert_true (puls_smartctl_parse_json_format_version (
+        "{\"json_format_version\":[1,0],\"smartctl\":{\"version\":[7,2]}}", &jmaj, &jmin));
+    g_assert_cmpuint (jmaj, ==, 1);
+    g_assert_cmpuint (jmin, ==, 0);
+
+    g_assert_true (puls_smartctl_parse_json_format_version (
+        "{\"json_format_version\":[1,2]}", &jmaj, &jmin));
+    g_assert_cmpuint (jmaj, ==, 1);
+    g_assert_cmpuint (jmin, ==, 2);
+
+    g_assert_false (puls_smartctl_parse_json_format_version ("{}", &jmaj, &jmin));
+    g_assert_false (puls_smartctl_parse_json_format_version ("{bad json", &jmaj, &jmin));
+    g_assert_false (puls_smartctl_parse_json_format_version (NULL, &jmaj, &jmin));
+
+    /* 8. Live host smartctl --version probe */
+    PulsSmartctlCaps live_caps;
+    if (puls_smartctl_probe_capabilities (&live_caps)) {
+        g_assert_true (live_caps.available);
+        g_assert_cmpuint (live_caps.major, >=, 6);
+        g_assert_cmpstr (live_caps.version_string, !=, "");
+        const PulsSmartctlCaps *cached = puls_smartctl_get_capabilities ();
+        g_assert_true (cached->available);
+        g_assert_cmpuint (cached->major, ==, live_caps.major);
+        g_assert_cmpuint (cached->minor, ==, live_caps.minor);
+    }
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -4273,6 +4413,7 @@ main (int argc, char *argv[])
     g_test_add_func ("/basic/zero-elevation-mode", test_zero_elevation_mode);
     g_test_add_func ("/basic/bidirectional-ipc-streaming", test_bidirectional_ipc_streaming);
     g_test_add_func ("/basic/phase4-final-integration", test_phase4_final_integration);
+    g_test_add_func ("/basic/smartctl-version-negotiation", test_smartctl_version_negotiation);
 
     int result = g_test_run ();
 

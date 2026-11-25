@@ -437,6 +437,27 @@ puls_smart_parser_parse_json (const gchar *json_str,
     }
 
     JsonObject *root = json_node_get_object (root_node);
+
+    /* Negotiate / verify smartctl JSON schema version (1.x supported) */
+    if (json_object_has_member (root, "json_format_version")) {
+        JsonNode *vnode = json_object_get_member (root, "json_format_version");
+        if (JSON_NODE_HOLDS_ARRAY (vnode)) {
+            JsonArray *varr = json_node_get_array (vnode);
+            if (varr != NULL && json_array_get_length (varr) >= 2) {
+                JsonNode *e0 = json_array_get_element (varr, 0);
+                JsonNode *e1 = json_array_get_element (varr, 1);
+                if (JSON_NODE_HOLDS_VALUE (e0) && JSON_NODE_HOLDS_VALUE (e1)) {
+                    gint64 vmaj = json_node_get_int (e0);
+                    gint64 vmin = json_node_get_int (e1);
+                    if (vmaj != 1) {
+                        PULS_LOG_WARN ("Unexpected smartctl JSON schema version %" G_GINT64_FORMAT ".%" G_GINT64_FORMAT " (expected 1.x); attempting best-effort parse",
+                                       vmaj, vmin);
+                    }
+                }
+            }
+        }
+    }
+
     PulsSmartData *data = puls_smart_data_new ();
 
     parse_device_info (root, data);

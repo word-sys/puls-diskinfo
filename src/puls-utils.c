@@ -2093,7 +2093,8 @@ prod_smartctl_direct_read (const gchar  *device_path,
                            gpointer      user_data G_GNUC_UNUSED,
                            GError      **error)
 {
-    g_autofree gchar *cmdline = puls_build_smartctl_read_command (device_path, check_standby);
+    const PulsSmartctlCaps *caps = puls_smartctl_get_capabilities ();
+    g_autofree gchar *cmdline = puls_build_smartctl_read_command_for_caps (device_path, check_standby, caps);
     return spawn_smartctl_direct_sync (cmdline, error);
 }
 
@@ -2116,7 +2117,8 @@ prod_smartctl_helper_read (const gchar  *device_path,
             g_clear_error (error);
     }
 
-    g_autofree gchar *cmdline = puls_build_smartctl_read_command (device_path, check_standby);
+    const PulsSmartctlCaps *caps = puls_smartctl_get_capabilities ();
+    g_autofree gchar *cmdline = puls_build_smartctl_read_command_for_caps (device_path, check_standby, caps);
     return spawn_smartctl_fallback_sync (cmdline, mode, error);
 }
 
@@ -2160,24 +2162,402 @@ puls_run_smartctl_sync (const gchar *device_path, GError **error)
     return puls_run_smartctl_sync_with_options (device_path, use_standby, error);
 }
 
+/**
+ * puls_smartctl_version_at_least:
+ * @caps: A #PulsSmartctlCaps struct.
+ * @req_major: Minimum required major version.
+ * @req_minor: Minimum required minor version.
+ *
+ * Returns: %TRUE if @caps reports an available smartmontools version
+ * `>= req_major.req_minor`.
+ */
+gboolean
+puls_smartctl_version_at_least (const PulsSmartctlCaps *caps,
+                                guint                   req_major,
+                                guint                   req_minor)
+{
+    if (caps == NULL || !caps->available)
+        return FALSE;
+
+    if (caps->major > req_major)
+        return TRUE;
+    if (caps->major < req_major)
+        return FALSE;
+
+    return (caps->minor >= req_minor);
+}
+
+static void
+populate_smartctl_capabilities (PulsSmartctlCaps *caps)
+{
+    caps->supports_json         = puls_smartctl_version_at_least (caps, 7, 0);
+    caps->json_schema_major     = caps->supports_json ? 1U : 0U;
+    caps->json_schema_minor     = 0U;
+    caps->supports_sat          = puls_smartctl_version_at_least (caps, 5, 39);
+    caps->supports_sntjmicron   = puls_smartctl_version_at_least (caps, 7, 1);
+    caps->supports_sntasmedia   = puls_smartctl_version_at_least (caps, 7, 2);
+    caps->supports_sntrealtek   = puls_smartctl_version_at_least (caps, 7, 2);
+    caps->supports_json_compact = puls_smartctl_version_at_least (caps, 7, 3);
+}
+
+static gboolean
+parse_uint_prefix (const gchar *str, guint *out_val, const gchar **out_end)
+{
+    if (str == NULL || !g_ascii_isdigit (*str))
+        return FALSE;
+
+    errno = 0;
+    gchar *end = NULL;
+    guint64 v = g_ascii_strtoull (str, &end, 10);
+    if (errno != 0 || end == str || v > G_MAXUINT)
+        return FALSE;
+
+    *out_val = (guint)v;
+    if (out_end != NULL)
+        *out_end = end;
+    return TRUE;
+}
+
+static gboolean
+extract_version_tuple (const gchar *p,
+                       guint       *out_major,
+                       guint       *out_minor,
+                       guint       *out_patch,
+                       gboolean    *out_has_patch,
+                       const gchar **out_after)
+{
+    guint maj = 0, min = 0, pat = 0;
+    const gchar *cur = NULL;
+
+    if (!parse_uint_prefix (p, &maj, &cur) || *cur != '.')
+        return FALSE;
+    cur++;
+
+    if (!parse_uint_prefix (cur, &min, &cur))
+        return FALSE;
+
+    gboolean has_patch = FALSE;
+    if (*cur == '.' && g_ascii_isdigit (*(cur + 1))) {
+        cur++;
+        if (!parse_uint_prefix (cur, &pat, &cur))
+            return FALSE;
+        has_patch = TRUE;
+    }
+
+    if (*cur != '\0' && !g_ascii_isspace (*cur) && *cur != ',' && *cur != ')')
+        return FALSE;
+
+    *out_major = maj;
+    *out_minor = min;
+    *out_patch = pat;
+    *out_has_patch = has_patch;
+    if (out_after != NULL)
+        *out_after = cur;
+    return TRUE;
+}
+
+/**
+ * puls_parse_smartctl_version:
+ * @version_output: Raw stdout text from `smartctl --version`.
+ * @out_caps: (out): Populated #PulsSmartctlCaps structure.
+ *
+ * Parses the smartmontools version banner (e.g.
+ * `"smartctl 7.2 2020-12-30 r5155 [x86_64-linux-...]"`) and negotiates
+ * supported JSON schema (`>= 7.0` -> JSON v1.0) and USB bridge flags
+ * (`sat`, `sntjmicron`, `sntasmedia`, `sntrealtek`, `--json=c`).
+ *
+ * Returns: %TRUE if a valid smartctl version tuple was extracted, %FALSE otherwise.
+ */
+gboolean
+puls_parse_smartctl_version (const gchar      *version_output,
+                             PulsSmartctlCaps *out_caps)
+{
+    g_return_val_if_fail (out_caps != NULL, FALSE);
+    memset (out_caps, 0, sizeof (*out_caps));
+
+    if (version_output == NULL || *version_output == '\0')
+        return FALSE;
+
+    /* Copy first line as raw_banner */
+    const gchar *nl = strchr (version_output, '\n');
+    gsize first_len = nl ? (gsize)(nl - version_output) : strlen (version_output);
+    while (first_len > 0 && (version_output[first_len - 1] == '\r' ||
+                             version_output[first_len - 1] == ' '))
+        first_len--;
+    gsize copy_len = MIN (first_len, sizeof (out_caps->raw_banner) - 1);
+    memcpy (out_caps->raw_banner, version_output, copy_len);
+    out_caps->raw_banner[copy_len] = '\0';
+
+    /* Locate version tuple after "smartctl " or "smartmontools release " */
+    const gchar *search = strstr (version_output, "smartctl ");
+    if (search != NULL) {
+        search += 9;
+    } else {
+        search = strstr (version_output, "smartmontools release ");
+        if (search != NULL)
+            search += 22;
+    }
+
+    if (search == NULL)
+        return FALSE;
+
+    while (*search == ' ' || *search == '\t')
+        search++;
+
+    guint maj = 0, min = 0, pat = 0;
+    gboolean has_patch = FALSE;
+    const gchar *after = NULL;
+    if (!extract_version_tuple (search, &maj, &min, &pat, &has_patch, &after))
+        return FALSE;
+
+    out_caps->available = TRUE;
+    out_caps->major     = maj;
+    out_caps->minor     = min;
+    out_caps->patch     = pat;
+
+    if (has_patch)
+        g_snprintf (out_caps->version_string, sizeof (out_caps->version_string),
+                    "%u.%u.%u", maj, min, pat);
+    else
+        g_snprintf (out_caps->version_string, sizeof (out_caps->version_string),
+                    "%u.%u", maj, min);
+
+    /* Extract optional YYYY-MM-DD release date and SVN revision rNNNN / SVN rev NNNN */
+    const gchar *p = after;
+    while (*p != '\0' && *p != '\n') {
+        while (*p == ' ' || *p == '\t')
+            p++;
+        if (*p == '\0' || *p == '\n')
+            break;
+
+        if (out_caps->release_date[0] == '\0' &&
+            strlen (p) >= 10 &&
+            g_ascii_isdigit (p[0]) && g_ascii_isdigit (p[1]) &&
+            g_ascii_isdigit (p[2]) && g_ascii_isdigit (p[3]) &&
+            p[4] == '-' &&
+            g_ascii_isdigit (p[5]) && g_ascii_isdigit (p[6]) &&
+            p[7] == '-' &&
+            g_ascii_isdigit (p[8]) && g_ascii_isdigit (p[9])) {
+            memcpy (out_caps->release_date, p, 10);
+            out_caps->release_date[10] = '\0';
+        } else if (out_caps->svn_rev == 0 && p[0] == 'r' && g_ascii_isdigit (p[1])) {
+            guint rev = 0;
+            const gchar *rev_end = NULL;
+            if (parse_uint_prefix (p + 1, &rev, &rev_end) &&
+                (*rev_end == '\0' || g_ascii_isspace (*rev_end))) {
+                out_caps->svn_rev = rev;
+            }
+        }
+
+        while (*p != '\0' && *p != ' ' && *p != '\t' && *p != '\n')
+            p++;
+    }
+
+    if (out_caps->svn_rev == 0) {
+        const gchar *svn = strstr (version_output, "SVN rev ");
+        if (svn != NULL) {
+            guint rev = 0;
+            if (parse_uint_prefix (svn + 8, &rev, NULL))
+                out_caps->svn_rev = rev;
+        }
+    }
+
+    populate_smartctl_capabilities (out_caps);
+    return TRUE;
+}
+
+static gboolean
+spawn_smartctl_version_raw (gchar **stdout_out)
+{
+    static const gchar * const candidates[] = {
+        "smartctl --version",
+        "/usr/sbin/smartctl --version",
+        "/sbin/smartctl --version",
+        "/usr/bin/smartctl --version",
+        NULL
+    };
+
+    for (gsize i = 0; candidates[i] != NULL; i++) {
+        gchar *stdout_buf = NULL;
+        gchar *stderr_buf = NULL;
+        gint exit_status = 0;
+        GError *err = NULL;
+
+        gboolean ok = g_spawn_command_line_sync (candidates[i],
+                                                 &stdout_buf,
+                                                 &stderr_buf,
+                                                 &exit_status,
+                                                 &err);
+        g_free (stderr_buf);
+        g_clear_error (&err);
+
+        if (ok && stdout_buf != NULL && *stdout_buf != '\0') {
+            *stdout_out = stdout_buf;
+            return TRUE;
+        }
+        g_free (stdout_buf);
+    }
+
+    *stdout_out = NULL;
+    return FALSE;
+}
+
+/**
+ * puls_smartctl_probe_capabilities:
+ * @out_caps: (out): Populated #PulsSmartctlCaps probed from the installed binary.
+ *
+ * Executes `smartctl --version` (falling back to `/usr/sbin/smartctl`) and
+ * negotiates feature and JSON schema capabilities.
+ *
+ * Returns: %TRUE if `smartctl` was found and parsed, %FALSE otherwise.
+ */
+gboolean
+puls_smartctl_probe_capabilities (PulsSmartctlCaps *out_caps)
+{
+    g_return_val_if_fail (out_caps != NULL, FALSE);
+    memset (out_caps, 0, sizeof (*out_caps));
+
+    g_autofree gchar *raw = NULL;
+    if (!spawn_smartctl_version_raw (&raw))
+        return FALSE;
+
+    return puls_parse_smartctl_version (raw, out_caps);
+}
+
+/**
+ * puls_smartctl_get_capabilities:
+ *
+ * Thread-safe cached probe of the installed `smartctl` version and negotiated
+ * capabilities. Probed once per process.
+ *
+ * Returns: (transfer none): Pointer to immutable static #PulsSmartctlCaps.
+ */
+const PulsSmartctlCaps *
+puls_smartctl_get_capabilities (void)
+{
+    static PulsSmartctlCaps cached_caps;
+    static gsize initialized = 0;
+
+    if (g_once_init_enter (&initialized)) {
+        (void)puls_smartctl_probe_capabilities (&cached_caps);
+        g_autofree gchar *summary = puls_smartctl_format_capabilities_summary (&cached_caps);
+        PULS_LOG_DEBUG ("Negotiated smartmontools capabilities: %s", summary);
+        g_once_init_leave (&initialized, 1);
+    }
+
+    return &cached_caps;
+}
+
+/**
+ * puls_smartctl_format_capabilities_summary:
+ * @caps: A #PulsSmartctlCaps struct.
+ *
+ * Returns: (transfer full): Human-readable capability summary string.
+ */
+gchar *
+puls_smartctl_format_capabilities_summary (const PulsSmartctlCaps *caps)
+{
+    if (caps == NULL || !caps->available)
+        return g_strdup ("smartmontools not installed");
+
+    if (!caps->supports_json) {
+        return g_strdup_printf ("smartmontools %s (legacy text-only; JSON v1.0 requires >= 7.0)",
+                                caps->version_string);
+    }
+
+    GString *s = g_string_new (NULL);
+    g_string_append_printf (s, "smartmontools %s (JSON v%u.%u",
+                            caps->version_string,
+                            caps->json_schema_major,
+                            caps->json_schema_minor);
+    if (caps->supports_sat)
+        g_string_append (s, ", SAT");
+    if (caps->supports_sntasmedia || caps->supports_sntjmicron || caps->supports_sntrealtek) {
+        g_string_append (s, ", NVMe-USB:");
+        gboolean first = TRUE;
+        if (caps->supports_sntasmedia) {
+            g_string_append (s, " ASMedia");
+            first = FALSE;
+        }
+        if (caps->supports_sntjmicron) {
+            g_string_append (s, first ? " JMicron" : "/JMicron");
+            first = FALSE;
+        }
+        if (caps->supports_sntrealtek) {
+            g_string_append (s, first ? " Realtek" : "/Realtek");
+        }
+    }
+    g_string_append_c (s, ')');
+    return g_string_free (s, FALSE);
+}
+
+/**
+ * puls_smartctl_parse_json_format_version:
+ * @json_str: JSON payload emitted by `smartctl -j`.
+ * @out_major: (out) (optional): Parsed major schema version (e.g. 1).
+ * @out_minor: (out) (optional): Parsed minor schema version (e.g. 0).
+ *
+ * Extracts the `"json_format_version": [major, minor]` tuple from a smartctl
+ * JSON response for runtime schema compatibility verification.
+ *
+ * Returns: %TRUE if a valid `[major, minor]` version array was found.
+ */
+gboolean
+puls_smartctl_parse_json_format_version (const gchar *json_str,
+                                         guint       *out_major,
+                                         guint       *out_minor)
+{
+    if (out_major)
+        *out_major = 0;
+    if (out_minor)
+        *out_minor = 0;
+
+    if (json_str == NULL || *json_str == '\0')
+        return FALSE;
+
+    g_autoptr(JsonParser) parser = json_parser_new ();
+    if (!json_parser_load_from_data (parser, json_str, -1, NULL))
+        return FALSE;
+
+    JsonNode *root = json_parser_get_root (parser);
+    if (root == NULL || !JSON_NODE_HOLDS_OBJECT (root))
+        return FALSE;
+
+    JsonObject *obj = json_node_get_object (root);
+    if (!json_object_has_member (obj, "json_format_version"))
+        return FALSE;
+
+    JsonNode *ver_node = json_object_get_member (obj, "json_format_version");
+    if (ver_node == NULL || !JSON_NODE_HOLDS_ARRAY (ver_node))
+        return FALSE;
+
+    JsonArray *arr = json_node_get_array (ver_node);
+    if (arr == NULL || json_array_get_length (arr) < 2)
+        return FALSE;
+
+    JsonNode *n0 = json_array_get_element (arr, 0);
+    JsonNode *n1 = json_array_get_element (arr, 1);
+    if (!JSON_NODE_HOLDS_VALUE (n0) || !JSON_NODE_HOLDS_VALUE (n1))
+        return FALSE;
+
+    gint64 maj = json_node_get_int (n0);
+    gint64 min = json_node_get_int (n1);
+    if (maj < 0 || min < 0)
+        return FALSE;
+
+    if (out_major)
+        *out_major = (guint)maj;
+    if (out_minor)
+        *out_minor = (guint)min;
+
+    return TRUE;
+}
+
 gboolean
 puls_detect_smartmontools (gchar **version_out)
 {
-    gchar *stdout_buf = NULL;
-    gchar *stderr_buf = NULL;
-    gint exit_status = 0;
-    GError *error = NULL;
-
-    gboolean ok = g_spawn_command_line_sync ("smartctl --version",
-                                             &stdout_buf,
-                                             &stderr_buf,
-                                             &exit_status,
-                                             &error);
-    g_free (stderr_buf);
-    g_clear_error (&error);
-
-    if (!ok || stdout_buf == NULL) {
-        g_free (stdout_buf);
+    g_autofree gchar *stdout_buf = NULL;
+    if (!spawn_smartctl_version_raw (&stdout_buf)) {
         if (version_out)
             *version_out = NULL;
         return FALSE;
@@ -2186,12 +2566,11 @@ puls_detect_smartmontools (gchar **version_out)
     if (version_out) {
         gchar *line_end = strchr (stdout_buf, '\n');
         if (line_end)
-            *version_out = g_strndup (stdout_buf, line_end - stdout_buf);
+            *version_out = g_strndup (stdout_buf, (gsize)(line_end - stdout_buf));
         else
             *version_out = g_strdup (stdout_buf);
     }
 
-    g_free (stdout_buf);
     return TRUE;
 }
 
@@ -5741,16 +6120,40 @@ puls_should_use_standby_check (const gchar *device_path)
  *
  * Returns: (transfer full): Command line string for `smartctl`.
  */
+/**
+ * puls_build_smartctl_read_command_for_caps:
+ * @device_path: Device node path.
+ * @check_standby: Whether to include `-n standby`.
+ * @caps: (nullable): Negotiated smartmontools capabilities. When non-NULL and
+ *   `available && !supports_json` (smartctl < 7.0), omits `-j` gracefully.
+ *
+ * Returns: (transfer full): Command line string for `smartctl`.
+ */
+gchar *
+puls_build_smartctl_read_command_for_caps (const gchar            *device_path,
+                                           gboolean                check_standby,
+                                           const PulsSmartctlCaps *caps)
+{
+    g_return_val_if_fail (device_path != NULL, NULL);
+
+    gboolean use_json = (caps == NULL || !caps->available || caps->supports_json);
+
+    if (use_json) {
+        if (check_standby)
+            return g_strdup_printf ("smartctl -n standby -a -j %s", device_path);
+        return g_strdup_printf ("smartctl -a -j %s", device_path);
+    }
+
+    if (check_standby)
+        return g_strdup_printf ("smartctl -n standby -a %s", device_path);
+    return g_strdup_printf ("smartctl -a %s", device_path);
+}
+
 gchar *
 puls_build_smartctl_read_command (const gchar *device_path,
                                   gboolean     check_standby)
 {
-    g_return_val_if_fail (device_path != NULL, NULL);
-
-    if (check_standby)
-        return g_strdup_printf ("smartctl -n standby -a -j %s", device_path);
-
-    return g_strdup_printf ("smartctl -a -j %s", device_path);
+    return puls_build_smartctl_read_command_for_caps (device_path, check_standby, NULL);
 }
 
 /**
