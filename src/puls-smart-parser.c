@@ -419,6 +419,49 @@ parse_self_test_status (JsonObject    *root,
     }
 }
 
+static gint
+extract_exit_status_from_root (JsonObject *root)
+{
+    if (root == NULL || !json_object_has_member (root, "smartctl"))
+        return -1;
+
+    JsonNode *sc_node = json_object_get_member (root, "smartctl");
+    if (sc_node == NULL || !JSON_NODE_HOLDS_OBJECT (sc_node))
+        return -1;
+
+    JsonObject *sc = json_node_get_object (sc_node);
+    gint64 val = json_object_get_int_safe (sc, "exit_status", -1);
+    return (val < 0) ? -1 : (gint)(val & 0xFF);
+}
+
+static void
+parse_smartctl_exit_status (JsonObject    *root,
+                            PulsSmartData *data)
+{
+    gint exit_status = extract_exit_status_from_root (root);
+    if (exit_status < 0)
+        return;
+
+    puls_smart_data_set_smartctl_exit_status (data, exit_status);
+
+    PulsSmartctlExitInfo info;
+    puls_smartctl_decode_exit_status (exit_status, &info);
+
+    if (info.has_disk_failing) {
+        puls_smart_data_set_health (data, PULS_HEALTH_BAD);
+        puls_smart_data_set_smart_enabled (data, TRUE);
+    } else if (info.has_prefail_warn) {
+        PulsHealthStatus cur = puls_smart_data_get_health (data);
+        if (cur == PULS_HEALTH_GOOD || cur == PULS_HEALTH_UNKNOWN)
+            puls_smart_data_set_health (data, PULS_HEALTH_CAUTION);
+    }
+
+    if (exit_status > 0) {
+        g_autofree gchar *desc = puls_smartctl_format_exit_status (exit_status);
+        PULS_LOG_DEBUG ("smartctl exited with bitmask status: %s", desc);
+    }
+}
+
 PulsSmartData *
 puls_smart_parser_parse_json (const gchar *json_str,
                               GError     **error)
@@ -468,6 +511,7 @@ puls_smart_parser_parse_json (const gchar *json_str,
     parse_power_on_stats (root, data);
     parse_nvme_health (root, data);
     parse_self_test_status (root, data);
+    parse_smartctl_exit_status (root, data);
 
     PulsPowerState pstate = puls_parse_smartctl_standby_json (json_str);
     if (pstate != PULS_POWER_STATE_UNKNOWN)
@@ -841,7 +885,149 @@ puls_smart_json_has_device_data (const gchar *json_str)
         return TRUE;
     }
 
+    gint exit_status = extract_exit_status_from_root (root);
+    if (exit_status > 0 && !puls_smartctl_exit_status_is_fatal (exit_status)) {
+        guint mask = (guint)(exit_status & 0xFF);
+        if ((mask & (PULS_SMARTCTL_EXIT_DISK_FAILING |
+                     PULS_SMARTCTL_EXIT_PREFAIL_WARN |
+                     PULS_SMARTCTL_EXIT_ERROR_LOG |
+                     PULS_SMARTCTL_EXIT_SELFTEST_ERR)) != 0 &&
+            (json_object_has_member (root, "model_name") ||
+             json_object_has_member (root, "serial_number"))) {
+            return TRUE;
+        }
+    }
+
     return FALSE;
+}
+
+/**
+ * puls_smartctl_decode_exit_status:
+ * @exit_status: Raw `smartctl` exit code (`-1` if unavailable, `0..255` otherwise).
+ * @out_info: (out): Caller-allocated #PulsSmartctlExitInfo to populate.
+ *
+ * Decodes smartmontools exit bitmasks:
+ * - Bit 0 (`1`): Command line did not parse
+ * - Bit 1 (`2`): Device open failed / standby power mode
+ * - Bit 2 (`4`): Checksum or SMART command error
+ * - Bit 3 (`8`): SMART status check returned DISK FAILING
+ * - Bit 4 (`16`): Pre-fail attribute(s) <= threshold warning
+ * - Bit 5 (`32`): Error log / past threshold warning
+ * - Bit 6 (`64`): Self-test errors present
+ */
+void
+puls_smartctl_decode_exit_status (gint                  exit_status,
+                                  PulsSmartctlExitInfo *out_info)
+{
+    g_return_if_fail (out_info != NULL);
+
+    memset (out_info, 0, sizeof (*out_info));
+    if (exit_status < 0) {
+        out_info->raw_status = -1;
+        return;
+    }
+
+    guint mask = ((guint)exit_status) & 0xFFu;
+    out_info->raw_status         = (gint)mask;
+    out_info->mask               = mask;
+    out_info->has_cmdline_error  = (mask & PULS_SMARTCTL_EXIT_CMDLINE) != 0;
+    out_info->has_open_failed    = (mask & PULS_SMARTCTL_EXIT_OPEN_FAILED) != 0;
+    out_info->has_checksum_error = (mask & PULS_SMARTCTL_EXIT_CHECKSUM) != 0;
+    out_info->has_disk_failing   = (mask & PULS_SMARTCTL_EXIT_DISK_FAILING) != 0;
+    out_info->has_prefail_warn   = (mask & PULS_SMARTCTL_EXIT_PREFAIL_WARN) != 0;
+    out_info->has_error_log      = (mask & PULS_SMARTCTL_EXIT_ERROR_LOG) != 0;
+    out_info->has_selftest_error = (mask & PULS_SMARTCTL_EXIT_SELFTEST_ERR) != 0;
+
+    guint fatal_bits = PULS_SMARTCTL_EXIT_CMDLINE | PULS_SMARTCTL_EXIT_OPEN_FAILED;
+    out_info->is_fatal = ((mask & fatal_bits) != 0 && (mask & ~fatal_bits) == 0);
+}
+
+/**
+ * puls_smartctl_exit_status_is_fatal:
+ * @exit_status: Raw `smartctl` exit code.
+ *
+ * Exit codes with health/log/checksum bits (e.g. `4`, `8`, `16`, `32`, `64`, `68`)
+ * still produce parseable SMART JSON and are never treated as fatal.
+ *
+ * Returns: %TRUE only if @exit_status exclusively reports bit 0 or bit 1 errors.
+ */
+gboolean
+puls_smartctl_exit_status_is_fatal (gint exit_status)
+{
+    PulsSmartctlExitInfo info;
+    puls_smartctl_decode_exit_status (exit_status, &info);
+    return info.is_fatal;
+}
+
+/**
+ * puls_smartctl_format_exit_status:
+ * @exit_status: Raw `smartctl` exit code (`-1` if unknown).
+ *
+ * Formats a human-readable summary of all active exit bitmask flags.
+ *
+ * Returns: (transfer full): Newly allocated description string.
+ */
+gchar *
+puls_smartctl_format_exit_status (gint exit_status)
+{
+    if (exit_status < 0)
+        return g_strdup ("Unknown");
+
+    guint mask = ((guint)exit_status) & 0xFFu;
+    if (mask == 0)
+        return g_strdup ("OK (0)");
+
+    static const struct {
+        guint        bit;
+        const gchar *label;
+    } bit_labels[] = {
+        { PULS_SMARTCTL_EXIT_CMDLINE,      "Command line error" },
+        { PULS_SMARTCTL_EXIT_OPEN_FAILED,  "Device open failed" },
+        { PULS_SMARTCTL_EXIT_CHECKSUM,     "Checksum/command error" },
+        { PULS_SMARTCTL_EXIT_DISK_FAILING, "Disk failing" },
+        { PULS_SMARTCTL_EXIT_PREFAIL_WARN, "Pre-fail warning" },
+        { PULS_SMARTCTL_EXIT_ERROR_LOG,    "Error log entries" },
+        { PULS_SMARTCTL_EXIT_SELFTEST_ERR, "Self-test errors" },
+        { PULS_SMARTCTL_EXIT_RESERVED_B7,  "Self-test log bit 7" },
+    };
+
+    g_autoptr(GString) s = g_string_new (NULL);
+    for (gsize i = 0; i < G_N_ELEMENTS (bit_labels); i++) {
+        if ((mask & bit_labels[i].bit) != 0) {
+            if (s->len > 0)
+                g_string_append (s, ", ");
+            g_string_append (s, bit_labels[i].label);
+        }
+    }
+
+    g_string_append_printf (s, " (%u)", mask);
+    return g_string_free (g_steal_pointer (&s), FALSE);
+}
+
+/**
+ * puls_smart_parser_extract_exit_status:
+ * @json_str: (nullable): Raw `smartctl -j` JSON string.
+ *
+ * Extracts `smartctl.exit_status` from @json_str without failing if SMART
+ * telemetry sections are absent.
+ *
+ * Returns: Raw exit code (`0..255`), or `-1` if missing/invalid JSON.
+ */
+gint
+puls_smart_parser_extract_exit_status (const gchar *json_str)
+{
+    if (json_str == NULL || *json_str == '\0')
+        return -1;
+
+    g_autoptr(JsonParser) parser = json_parser_new ();
+    if (!json_parser_load_from_data (parser, json_str, -1, NULL))
+        return -1;
+
+    JsonNode *root_node = json_parser_get_root (parser);
+    if (root_node == NULL || !JSON_NODE_HOLDS_OBJECT (root_node))
+        return -1;
+
+    return extract_exit_status_from_root (json_node_get_object (root_node));
 }
 
 /**

@@ -170,6 +170,16 @@ run_headless_scan (gboolean json_output)
                 json_builder_set_member_name (builder, "power_state");
                 json_builder_add_string_value (builder, puls_power_state_to_string (pstate));
             }
+            gint smartctl_exit = puls_smart_data_get_smartctl_exit_status (data);
+            if (smartctl_exit >= 0) {
+                json_builder_set_member_name (builder, "smartctl_exit_status");
+                json_builder_add_int_value (builder, (gint64)smartctl_exit);
+            }
+            gint sc_exit = puls_smart_data_get_smartctl_exit_status (data);
+            if (sc_exit >= 0) {
+                json_builder_set_member_name (builder, "smartctl_exit_status");
+                json_builder_add_int_value (builder, sc_exit);
+            }
 
             GList *parts = puls_get_disk_partitions (path);
             if (parts) {

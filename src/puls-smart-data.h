@@ -246,15 +246,29 @@ void    puls_smart_data_add_thermal_sensor   (PulsSmartData *self,
 void    puls_smart_data_clear_thermal_sensors (PulsSmartData *self);
 
 
+typedef enum {
+    PULS_SMARTCTL_EXIT_NONE         = 0,
+    PULS_SMARTCTL_EXIT_CMDLINE      = 1 << 0, /* Bit 0 (1): cmdline error */
+    PULS_SMARTCTL_EXIT_OPEN_FAILED  = 1 << 1, /* Bit 1 (2): open device failed / standby */
+    PULS_SMARTCTL_EXIT_CHECKSUM     = 1 << 2, /* Bit 2 (4): checksum / SMART cmd error */
+    PULS_SMARTCTL_EXIT_DISK_FAILING = 1 << 3, /* Bit 3 (8): SMART status DISK FAILING */
+    PULS_SMARTCTL_EXIT_PREFAIL_WARN = 1 << 4, /* Bit 4 (16): pre-fail attr <= threshold */
+    PULS_SMARTCTL_EXIT_ERROR_LOG    = 1 << 5, /* Bit 5 (32): error log / past threshold */
+    PULS_SMARTCTL_EXIT_SELFTEST_ERR = 1 << 6, /* Bit 6 (64): self-test errors */
+    PULS_SMARTCTL_EXIT_RESERVED_B7  = 1 << 7, /* Bit 7 (128): reserved non-fatal bit */
+} PulsSmartctlExitBit;
+
 PulsHealthStatus puls_smart_data_get_health          (PulsSmartData *self);
 gboolean         puls_smart_data_get_smart_enabled   (PulsSmartData *self);
 gint             puls_smart_data_get_temperature     (PulsSmartData *self);
 PulsPowerState   puls_smart_data_get_power_state     (PulsSmartData *self);
+gint             puls_smart_data_get_smartctl_exit_status (PulsSmartData *self);
 
 void puls_smart_data_set_health        (PulsSmartData *self, PulsHealthStatus val);
 void puls_smart_data_set_smart_enabled (PulsSmartData *self, gboolean val);
 void puls_smart_data_set_temperature   (PulsSmartData *self, gint val);
 void puls_smart_data_set_power_state   (PulsSmartData *self, PulsPowerState state);
+void puls_smart_data_set_smartctl_exit_status (PulsSmartData *self, gint exit_status);
 
 
 guint64 puls_smart_data_get_power_on_hours      (PulsSmartData *self);

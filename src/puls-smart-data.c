@@ -178,6 +178,7 @@ struct _PulsSmartData {
     gchar             *zfs_member_status;
     PulsFormFactor     form_factor_enum;
     PulsPowerState     power_state;
+    gint               smartctl_exit_status;
 };
 
 G_DEFINE_TYPE (PulsSmartData, puls_smart_data, G_TYPE_OBJECT)
@@ -311,6 +312,7 @@ puls_smart_data_init (PulsSmartData *self)
     self->zfs_member_status        = NULL;
     self->form_factor_enum         = PULS_FORM_FACTOR_UNKNOWN;
     self->power_state              = PULS_POWER_STATE_UNKNOWN;
+    self->smartctl_exit_status     = -1;
 }
 
 
@@ -1408,6 +1410,21 @@ puls_smart_data_set_power_state (PulsSmartData  *self,
 {
     g_return_if_fail (PULS_IS_SMART_DATA (self));
     self->power_state = state;
+}
+
+gint
+puls_smart_data_get_smartctl_exit_status (PulsSmartData *self)
+{
+    g_return_val_if_fail (PULS_IS_SMART_DATA (self), -1);
+    return self->smartctl_exit_status;
+}
+
+void
+puls_smart_data_set_smartctl_exit_status (PulsSmartData *self,
+                                          gint           exit_status)
+{
+    g_return_if_fail (PULS_IS_SMART_DATA (self));
+    self->smartctl_exit_status = (exit_status < 0) ? -1 : (exit_status & 0xFF);
 }
 
 const gchar *

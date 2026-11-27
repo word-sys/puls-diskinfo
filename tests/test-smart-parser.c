@@ -333,6 +333,148 @@ test_parser_usb_bridge_resolver (void)
     g_assert_cmpuint (ctx3.call_count, ==, 4);
 }
 
+static void
+test_parser_exit_status_bitmask (void)
+{
+    /* 1. Bitmask decoding across bits 0..6 and composite code 68 (64 | 4) */
+    PulsSmartctlExitInfo info;
+
+    puls_smartctl_decode_exit_status (-1, &info);
+    g_assert_cmpint (info.raw_status, ==, -1);
+    g_assert_cmpuint (info.mask, ==, 0);
+    g_assert_false (info.is_fatal);
+
+    puls_smartctl_decode_exit_status (0, &info);
+    g_assert_cmpint (info.raw_status, ==, 0);
+    g_assert_false (info.is_fatal);
+
+    puls_smartctl_decode_exit_status (1, &info);
+    g_assert_true (info.has_cmdline_error);
+    g_assert_false (info.has_open_failed);
+    g_assert_true (info.is_fatal);
+
+    puls_smartctl_decode_exit_status (2, &info);
+    g_assert_true (info.has_open_failed);
+    g_assert_true (info.is_fatal);
+
+    puls_smartctl_decode_exit_status (68, &info); /* 64 (self-test errors) | 4 (checksum error) */
+    g_assert_cmpuint (info.mask, ==, (PULS_SMARTCTL_EXIT_SELFTEST_ERR | PULS_SMARTCTL_EXIT_CHECKSUM));
+    g_assert_false (info.has_cmdline_error);
+    g_assert_false (info.has_open_failed);
+    g_assert_true (info.has_checksum_error);
+    g_assert_false (info.has_disk_failing);
+    g_assert_false (info.has_prefail_warn);
+    g_assert_false (info.has_error_log);
+    g_assert_true (info.has_selftest_error);
+    g_assert_false (info.is_fatal);
+
+    /* Exit codes 8, 16, 32, 64, 68 are never fatal */
+    g_assert_true (puls_smartctl_exit_status_is_fatal (1));
+    g_assert_true (puls_smartctl_exit_status_is_fatal (2));
+    g_assert_true (puls_smartctl_exit_status_is_fatal (3));
+    g_assert_false (puls_smartctl_exit_status_is_fatal (4));
+    g_assert_false (puls_smartctl_exit_status_is_fatal (8));
+    g_assert_false (puls_smartctl_exit_status_is_fatal (16));
+    g_assert_false (puls_smartctl_exit_status_is_fatal (32));
+    g_assert_false (puls_smartctl_exit_status_is_fatal (64));
+    g_assert_false (puls_smartctl_exit_status_is_fatal (68));
+
+    g_autofree gchar *fmt0 = puls_smartctl_format_exit_status (0);
+    g_assert_cmpstr (fmt0, ==, "OK (0)");
+    g_autofree gchar *fmt_neg = puls_smartctl_format_exit_status (-1);
+    g_assert_cmpstr (fmt_neg, ==, "Unknown");
+    g_autofree gchar *fmt68 = puls_smartctl_format_exit_status (68);
+    g_assert_cmpstr (fmt68, ==, "Checksum/command error, Self-test errors (68)");
+
+    /* 2. Parsing complete SATA SMART JSON when smartctl returns exit code 68 */
+    const gchar *exit68_sata_json =
+        "{"
+        "  \"json_format_version\": [1, 0],"
+        "  \"smartctl\": { \"exit_status\": 68 },"
+        "  \"device\": { \"name\": \"/dev/sdb\", \"protocol\": \"ATA\" },"
+        "  \"model_name\": \"ST4000VN008-2DR166\","
+        "  \"serial_number\": \"ZGY68TEST\","
+        "  \"firmware_version\": \"SC60\","
+        "  \"user_capacity\": { \"bytes\": 4000787030016 },"
+        "  \"rotation_rate\": 5900,"
+        "  \"smart_status\": { \"passed\": true },"
+        "  \"temperature\": { \"current\": 37 },"
+        "  \"power_on_time\": { \"hours\": 14200 },"
+        "  \"power_cycle_count\": 210,"
+        "  \"ata_smart_attributes\": {"
+        "    \"table\": [{"
+        "      \"id\": 197, \"name\": \"Current_Pending_Sector\","
+        "      \"value\": 100, \"worst\": 100, \"thresh\": 0,"
+        "      \"raw\": { \"value\": 0, \"string\": \"0\" }"
+        "    }]"
+        "  },"
+        "  \"ata_smart_error_log\": { \"summary\": { \"count\": 2 } }"
+        "}";
+    g_assert_true (puls_smart_json_has_device_data (exit68_sata_json));
+    g_assert_cmpint (puls_smart_parser_extract_exit_status (exit68_sata_json), ==, 68);
+
+    GError *err = NULL;
+    g_autoptr(PulsSmartData) data68 = puls_smart_parser_parse_json (exit68_sata_json, &err);
+    g_assert_no_error (err);
+    g_assert_nonnull (data68);
+    g_assert_cmpstr (puls_smart_data_get_model_name (data68), ==, "ST4000VN008-2DR166");
+    g_assert_cmpstr (puls_smart_data_get_serial_number (data68), ==, "ZGY68TEST");
+    g_assert_cmpint (puls_smart_data_get_temperature (data68), ==, 37);
+    g_assert_cmpuint (puls_smart_data_get_power_on_hours (data68), ==, 14200);
+    g_assert_cmpuint (puls_smart_data_get_error_count_total (data68), ==, 2);
+    g_assert_cmpint (puls_smart_data_get_smartctl_exit_status (data68), ==, 68);
+    g_assert_cmpint (puls_smart_data_get_health (data68), ==, PULS_HEALTH_GOOD);
+
+    /* 3. Exit code 8 (disk failing) marks health BAD even when smart_status is omitted */
+    const gchar *exit8_json =
+        "{"
+        "  \"smartctl\": { \"exit_status\": 8 },"
+        "  \"device\": { \"name\": \"/dev/sdc\", \"protocol\": \"ATA\" },"
+        "  \"model_name\": \"FAILING_HDD_8\","
+        "  \"serial_number\": \"FAIL8\","
+        "  \"temperature\": { \"current\": 49 }"
+        "}";
+    g_assert_true (puls_smart_json_has_device_data (exit8_json));
+    g_autoptr(PulsSmartData) data8 = puls_smart_parser_parse_json (exit8_json, &err);
+    g_assert_no_error (err);
+    g_assert_nonnull (data8);
+    g_assert_cmpint (puls_smart_data_get_health (data8), ==, PULS_HEALTH_BAD);
+    g_assert_true (puls_smart_data_get_smart_enabled (data8));
+    g_assert_cmpint (puls_smart_data_get_smartctl_exit_status (data8), ==, 8);
+
+    /* 4. Exit code 16 (pre-fail warning) upgrades GOOD to CAUTION; 32/64 preserve full parse */
+    const gchar *exit16_json =
+        "{"
+        "  \"smartctl\": { \"exit_status\": 16 },"
+        "  \"model_name\": \"WARN_SSD_16\","
+        "  \"smart_status\": { \"passed\": true },"
+        "  \"temperature\": { \"current\": 43 }"
+        "}";
+    g_autoptr(PulsSmartData) data16 = puls_smart_parser_parse_json (exit16_json, &err);
+    g_assert_no_error (err);
+    g_assert_nonnull (data16);
+    g_assert_cmpint (puls_smart_data_get_health (data16), ==, PULS_HEALTH_CAUTION);
+    g_assert_cmpint (puls_smart_data_get_smartctl_exit_status (data16), ==, 16);
+
+    const gchar *exit32_nvme_json =
+        "{"
+        "  \"smartctl\": { \"exit_status\": 32 },"
+        "  \"model_name\": \"NVME_ERR_LOG_32\","
+        "  \"smart_status\": { \"passed\": true },"
+        "  \"nvme_smart_health_information_log\": {"
+        "    \"critical_warning\": 0, \"temperature\": 40,"
+        "    \"available_spare\": 100, \"available_spare_threshold\": 10,"
+        "    \"percentage_used\": 3, \"power_on_hours\": 900"
+        "  }"
+        "}";
+    g_autoptr(PulsSmartData) data32 = puls_smart_parser_parse_json (exit32_nvme_json, &err);
+    g_assert_no_error (err);
+    g_assert_nonnull (data32);
+    g_assert_cmpint (puls_smart_data_get_smartctl_exit_status (data32), ==, 32);
+    g_assert_cmpuint (puls_smart_data_get_power_on_hours (data32), ==, 900);
+    g_assert_cmpint (puls_smart_data_get_temperature (data32), ==, 40);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -346,6 +488,7 @@ main (int argc, char **argv)
     g_test_add_func ("/parser/failing-drive", test_parser_failing_drive);
     g_test_add_func ("/parser/invalid-json", test_parser_invalid_json);
     g_test_add_func ("/parser/usb-bridge-resolver", test_parser_usb_bridge_resolver);
+    g_test_add_func ("/parser/exit-status-bitmask", test_parser_exit_status_bitmask);
 
     return g_test_run ();
 }

@@ -34,8 +34,27 @@ typedef gchar *(*PulsSmartProbeFunc) (const gchar         *device_path,
                                       gpointer             user_data,
                                       GError             **error);
 
+typedef struct {
+    gint     raw_status;         /* -1 if unknown/missing, else 0..255 */
+    guint    mask;               /* Bitmask of PulsSmartctlExitBit */
+    gboolean has_cmdline_error;  /* Bit 0 (1) */
+    gboolean has_open_failed;    /* Bit 1 (2) */
+    gboolean has_checksum_error; /* Bit 2 (4) */
+    gboolean has_disk_failing;   /* Bit 3 (8) */
+    gboolean has_prefail_warn;   /* Bit 4 (16) */
+    gboolean has_error_log;      /* Bit 5 (32) */
+    gboolean has_selftest_error; /* Bit 6 (64) */
+    gboolean is_fatal;           /* TRUE if cmdline/open error with no data bits */
+} PulsSmartctlExitInfo;
+
 PulsSmartData       *puls_smart_parser_parse_json        (const gchar             *json_str,
                                                           GError                 **error);
+
+void                 puls_smartctl_decode_exit_status    (gint                     exit_status,
+                                                          PulsSmartctlExitInfo    *out_info);
+gboolean             puls_smartctl_exit_status_is_fatal  (gint                     exit_status);
+gchar               *puls_smartctl_format_exit_status    (gint                     exit_status);
+gint                 puls_smart_parser_extract_exit_status (const gchar           *json_str);
 
 const gchar         *puls_smart_device_type_to_flag      (PulsSmartDeviceType      dev_type);
 PulsSmartDeviceType  puls_smart_device_type_from_usb_ids (const gchar             *vid,
