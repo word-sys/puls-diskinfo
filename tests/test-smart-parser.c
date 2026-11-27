@@ -475,6 +475,157 @@ test_parser_exit_status_bitmask (void)
     g_assert_cmpint (puls_smart_data_get_temperature (data32), ==, 40);
 }
 
+static void
+test_parser_schema_validation_and_recovery (void)
+{
+    /* 1. Standard fixtures pass schema validation cleanly with 0 anomalies */
+    g_autofree gchar *nvme_json = load_fixture ("nvme-samsung-980.json");
+    guint warnings = 999;
+    GError *err = NULL;
+    g_assert_true (puls_smart_parser_validate_schema (nvme_json, &warnings, &err));
+    g_assert_no_error (err);
+    g_assert_cmpuint (warnings, ==, 0);
+
+    /* 2. Malformed sub-objects are safely contained without crashing or losing valid sections */
+    const gchar *corrupted_sections_json =
+        "{"
+        "  \"json_format_version\": \"invalid-version\","
+        "  \"smartctl\": { \"exit_status\": 0 },"
+        "  \"device\": \"/dev/sde-scalar-instead-of-object\","
+        "  \"model_name\": \"CORRUPT_CONTAINED_SSD\","
+        "  \"serial_number\": \"SC000999\","
+        "  \"firmware_version\": \"FW2.1\","
+        "  \"user_capacity\": { \"bytes\": -42 },"
+        "  \"logical_block_size\": 512,"
+        "  \"physical_block_size\": 4096,"
+        "  \"form_factor\": [1, 2, 3],"
+        "  \"ata_version\": 12345,"
+        "  \"interface_speed\": { \"current\": null, \"max\": \"6Gb/s\" },"
+        "  \"smart_status\": { \"passed\": \"not-a-boolean\" },"
+        "  \"temperature\": { \"current\": \"NaN\" },"
+        "  \"power_on_time\": \"1200h\","
+        "  \"power_cycle_count\": -9,"
+        "  \"nvme_smart_health_information_log\": [\"malformed\"],"
+        "  \"current_testing\": [],"
+        "  \"ata_cache\": \"bad\","
+        "  \"ata_smart_error_log\": { \"summary\": 99 },"
+        "  \"ata_smart_attributes\": {"
+        "    \"table\": ["
+        "      null,"
+        "      \"broken-row\","
+        "      42,"
+        "      { \"id\": 5, \"name\": \"Reallocated_Sector_Ct\", \"value\": 100, \"worst\": 100, \"thresh\": 10, \"raw\": \"invalid-raw-obj\" },"
+        "      { \"id\": 194, \"name\": \"Temperature_Celsius\", \"value\": 64, \"worst\": 50, \"thresh\": 0, \"raw\": { \"value\": 36, \"string\": \"36\" } }"
+        "    ]"
+        "  }"
+        "}";
+
+    g_assert_true (puls_smart_parser_validate_schema (corrupted_sections_json, &warnings, &err));
+    g_assert_no_error (err);
+    g_assert_cmpuint (warnings, >=, 8);
+
+    gboolean recovered = TRUE;
+    guint parse_warnings = 0;
+    g_autoptr(PulsSmartData) contained = puls_smart_parser_parse_json_with_recovery (
+        corrupted_sections_json, &recovered, &parse_warnings, &err);
+    g_assert_no_error (err);
+    g_assert_nonnull (contained);
+    g_assert_false (recovered);
+    g_assert_cmpuint (parse_warnings, ==, warnings);
+
+    g_assert_cmpstr (puls_smart_data_get_model_name (contained), ==, "CORRUPT_CONTAINED_SSD");
+    g_assert_cmpstr (puls_smart_data_get_serial_number (contained), ==, "SC000999");
+    g_assert_cmpstr (puls_smart_data_get_firmware_version (contained), ==, "FW2.1");
+    g_assert_cmpuint (puls_smart_data_get_logical_sector_size (contained), ==, 512);
+    g_assert_cmpuint (puls_smart_data_get_physical_sector_size (contained), ==, 4096);
+    /* Corrupt negative power_cycle_count & user_capacity must not underflow */
+    g_assert_cmpuint (puls_smart_data_get_power_cycle_count (contained), ==, 0);
+    g_assert_cmpuint (puls_smart_data_get_capacity_bytes (contained), ==, 0);
+    /* Corrupt boolean in smart_status leaves health unknown rather than crashing or false BAD */
+    g_assert_cmpint (puls_smart_data_get_health (contained), ==, PULS_HEALTH_UNKNOWN);
+
+    /* Only the 2 valid ATA rows from the 5-element table should be retained */
+    GArray *attrs = puls_smart_data_get_ata_attributes (contained);
+    g_assert_nonnull (attrs);
+    g_assert_cmpuint (attrs->len, ==, 2);
+    PulsSmartAttribute *row0 = &g_array_index (attrs, PulsSmartAttribute, 0);
+    PulsSmartAttribute *row1 = &g_array_index (attrs, PulsSmartAttribute, 1);
+    g_assert_cmpuint (row0->id, ==, 5);
+    g_assert_cmpstr (row0->raw_string, ==, "invalid-raw-obj");
+    g_assert_cmpuint (row1->id, ==, 194);
+    g_assert_cmpuint (row1->raw_value, ==, 36);
+
+    /* 3. Truncated JSON recovery preserves intact prefix fields cleanly */
+    const gchar *truncated_smart =
+        "{"
+        "  \"json_format_version\": [1, 0],"
+        "  \"device\": { \"name\": \"/dev/sdb\", \"protocol\": \"ATA\" },"
+        "  \"model_name\": \"TRUNCATED_VALID_PREFIX\","
+        "  \"serial_number\": \"TRUNC123\","
+        "  \"smart_status\": { \"passed\": true },"
+        "  \"temperature\": { \"current\": 44 },"
+        "  \"power_on_time\": { \"hours\": 3100 },"
+        "  \"ata_smart_attributes\": {"
+        "    \"table\": ["
+        "      { \"id\": 5, \"name\": \"Reallocated_Sector_Ct\", \"value\": 100, \"worst\": 100, \"thresh\": 10, \"raw\": { \"value\": 0 } },"
+        "      { \"id\": 9, \"name\": \"Power_On_Ho";
+
+    g_autofree gchar *repaired = puls_smart_parser_recover_json_string (truncated_smart);
+    g_assert_nonnull (repaired);
+    g_assert_true (puls_smart_json_has_device_data (truncated_smart));
+
+    recovered = FALSE;
+    g_autoptr(PulsSmartData) trunc_data = puls_smart_parser_parse_json_with_recovery (
+        truncated_smart, &recovered, &parse_warnings, &err);
+    g_assert_no_error (err);
+    g_assert_nonnull (trunc_data);
+    g_assert_true (recovered);
+    g_assert_cmpstr (puls_smart_data_get_model_name (trunc_data), ==, "TRUNCATED_VALID_PREFIX");
+    g_assert_cmpstr (puls_smart_data_get_serial_number (trunc_data), ==, "TRUNC123");
+    g_assert_cmpint (puls_smart_data_get_health (trunc_data), ==, PULS_HEALTH_GOOD);
+    g_assert_cmpint (puls_smart_data_get_temperature (trunc_data), ==, 44);
+    g_assert_cmpuint (puls_smart_data_get_power_on_hours (trunc_data), ==, 3100);
+    g_assert_cmpuint (puls_smart_data_get_ata_attributes (trunc_data)->len, ==, 1);
+
+    /* 4. Leading/trailing driver warning noise around JSON is stripped automatically */
+    const gchar *noisy_wrapped_json =
+        "Warning: ATA pass-through returned partial log page\n"
+        "{\"model_name\":\"NOISY_WRAP_SSD\",\"smart_status\":{\"passed\":true},\"temperature\":{\"current\":35}}\n"
+        "smartctl exit complete.\n";
+    recovered = FALSE;
+    g_autoptr(PulsSmartData) noisy_data = puls_smart_parser_parse_json_with_recovery (
+        noisy_wrapped_json, &recovered, NULL, &err);
+    g_assert_no_error (err);
+    g_assert_nonnull (noisy_data);
+    g_assert_true (recovered);
+    g_assert_cmpstr (puls_smart_data_get_model_name (noisy_data), ==, "NOISY_WRAP_SSD");
+    g_assert_cmpint (puls_smart_data_get_temperature (noisy_data), ==, 35);
+
+    /* 5. Nested array truncation closes valid object cleanly, while empty/invalid JSON fails */
+    g_autofree gchar *array_repaired = puls_smart_parser_recover_json_string ("{\"a\": [1, 2, {");
+    g_assert_nonnull (array_repaired);
+    g_assert_true (puls_smart_parser_validate_schema (array_repaired, NULL, &err));
+    g_assert_no_error (err);
+    g_assert_nonnull (strstr (array_repaired, "[1, 2"));
+
+    static const gchar * const unrecoverable[] = {
+        "",
+        "totally corrupted text",
+        "{ bad_syntax: 123",
+        "[1, 2, 3]",
+        "{\"model_name\":",
+        "{\"a\": [{\"bad\":",
+        NULL
+    };
+    for (gsize i = 0; unrecoverable[i] != NULL; i++) {
+        g_assert_null (puls_smart_parser_recover_json_string (unrecoverable[i]));
+        g_autoptr(PulsSmartData) bad = puls_smart_parser_parse_json (unrecoverable[i], &err);
+        g_assert_null (bad);
+        g_assert_nonnull (err);
+        g_clear_error (&err);
+    }
+}
+
 int
 main (int argc, char **argv)
 {
@@ -489,6 +640,7 @@ main (int argc, char **argv)
     g_test_add_func ("/parser/invalid-json", test_parser_invalid_json);
     g_test_add_func ("/parser/usb-bridge-resolver", test_parser_usb_bridge_resolver);
     g_test_add_func ("/parser/exit-status-bitmask", test_parser_exit_status_bitmask);
+    g_test_add_func ("/parser/schema-validation-and-recovery", test_parser_schema_validation_and_recovery);
 
     return g_test_run ();
 }

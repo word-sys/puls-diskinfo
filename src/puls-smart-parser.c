@@ -15,19 +15,65 @@
 #include "puls-smart-parser.h"
 #include "puls-utils.h"
 #include "../helper/puls-helper-protocol.h"
+#include <errno.h>
 #include <json-glib/json-glib.h>
+#include <stdlib.h>
 #include <string.h>
+
+static JsonObject *
+json_object_get_object_safe (JsonObject  *obj,
+                             const gchar *member)
+{
+    if (obj == NULL || member == NULL || !json_object_has_member (obj, member))
+        return NULL;
+
+    JsonNode *node = json_object_get_member (obj, member);
+    if (node == NULL || !JSON_NODE_HOLDS_OBJECT (node))
+        return NULL;
+
+    return json_node_get_object (node);
+}
+
+static JsonArray *
+json_object_get_array_safe (JsonObject  *obj,
+                            const gchar *member)
+{
+    if (obj == NULL || member == NULL || !json_object_has_member (obj, member))
+        return NULL;
+
+    JsonNode *node = json_object_get_member (obj, member);
+    if (node == NULL || !JSON_NODE_HOLDS_ARRAY (node))
+        return NULL;
+
+    return json_node_get_array (node);
+}
+
+static JsonObject *
+json_array_get_object_safe (JsonArray *arr,
+                            guint      index)
+{
+    if (arr == NULL || index >= json_array_get_length (arr))
+        return NULL;
+
+    JsonNode *node = json_array_get_element (arr, index);
+    if (node == NULL || !JSON_NODE_HOLDS_OBJECT (node))
+        return NULL;
+
+    return json_node_get_object (node);
+}
 
 static const gchar *
 json_object_get_string_safe (JsonObject  *obj,
                              const gchar *member)
 {
-    if (!json_object_has_member (obj, member))
+    if (obj == NULL || member == NULL || !json_object_has_member (obj, member))
         return NULL;
 
     JsonNode *node = json_object_get_member (obj, member);
-    if (JSON_NODE_HOLDS_VALUE (node))
+    if (node != NULL && JSON_NODE_HOLDS_VALUE (node) &&
+        json_node_get_value_type (node) == G_TYPE_STRING) {
         return json_node_get_string (node);
+    }
 
     return NULL;
 }
@@ -37,12 +83,28 @@ json_object_get_int_safe (JsonObject  *obj,
                           const gchar *member,
                           gint64       default_val)
 {
-    if (!json_object_has_member (obj, member))
+    if (obj == NULL || member == NULL || !json_object_has_member (obj, member))
         return default_val;
 
     JsonNode *node = json_object_get_member (obj, member);
-    if (JSON_NODE_HOLDS_VALUE (node))
+    if (node == NULL || !JSON_NODE_HOLDS_VALUE (node))
+        return default_val;
+
+    GType vtype = json_node_get_value_type (node);
+    if (vtype == G_TYPE_INT64 || vtype == G_TYPE_INT || vtype == G_TYPE_UINT64)
         return json_node_get_int (node);
+    if (vtype == G_TYPE_DOUBLE)
+        return (gint64)json_node_get_double (node);
+    if (vtype == G_TYPE_STRING) {
+        const gchar *s = json_node_get_string (node);
+        if (s != NULL && *s != '\0') {
+            gchar *endptr = NULL;
+            errno = 0;
+            gint64 parsed = g_ascii_strtoll (s, &endptr, 10);
+            if (errno == 0 && endptr != s && *endptr == '\0')
+                return parsed;
+        }
+    }
 
     return default_val;
 }
@@ -52,14 +114,47 @@ json_object_get_boolean_safe (JsonObject  *obj,
                               const gchar *member,
                               gboolean     default_val)
 {
-    if (!json_object_has_member (obj, member))
+    if (obj == NULL || member == NULL || !json_object_has_member (obj, member))
         return default_val;
 
     JsonNode *node = json_object_get_member (obj, member);
-    if (JSON_NODE_HOLDS_VALUE (node))
+    if (node == NULL || !JSON_NODE_HOLDS_VALUE (node))
+        return default_val;
+
+    GType vtype = json_node_get_value_type (node);
+    if (vtype == G_TYPE_BOOLEAN)
         return json_node_get_boolean (node);
+    if (vtype == G_TYPE_INT64 || vtype == G_TYPE_INT)
+        return json_node_get_int (node) != 0;
 
     return default_val;
+}
+
+static gboolean
+json_object_has_valid_boolean (JsonObject  *obj,
+                               const gchar *member,
+                               gboolean    *out_val)
+{
+    if (obj == NULL || member == NULL || !json_object_has_member (obj, member))
+        return FALSE;
+
+    JsonNode *node = json_object_get_member (obj, member);
+    if (node == NULL || !JSON_NODE_HOLDS_VALUE (node))
+        return FALSE;
+
+    GType vtype = json_node_get_value_type (node);
+    if (vtype == G_TYPE_BOOLEAN) {
+        if (out_val)
+            *out_val = json_node_get_boolean (node);
+        return TRUE;
+    }
+    if (vtype == G_TYPE_INT64 || vtype == G_TYPE_INT) {
+        if (out_val)
+            *out_val = json_node_get_int (node) != 0;
+        return TRUE;
+    }
+
+    return FALSE;
 }
 
 static const gchar *
@@ -80,97 +175,96 @@ static void
 parse_device_info (JsonObject    *root,
                    PulsSmartData *data)
 {
-    if (json_object_has_member (root, "device")) {
-        JsonObject *device = json_object_get_object_member (root, "device");
+    JsonObject *device = json_object_get_object_safe (root, "device");
+    if (device != NULL) {
         const gchar *name = json_object_get_string_safe (device, "name");
-        if (name)
+        if (name && *name)
             puls_smart_data_set_device_path (data, name);
 
         const gchar *protocol = json_object_get_string_safe (device, "protocol");
-        if (protocol)
+        if (protocol && *protocol)
             puls_smart_data_set_interface_type (data, protocol);
     }
 
     const gchar *model = json_object_get_string_safe (root, "model_name");
-    if (model)
+    if (model && *model)
         puls_smart_data_set_model_name (data, model);
 
     const gchar *serial = json_object_get_string_safe (root, "serial_number");
-    if (serial)
+    if (serial && *serial)
         puls_smart_data_set_serial_number (data, serial);
 
     const gchar *fw = json_object_get_string_safe (root, "firmware_version");
-    if (fw)
+    if (fw && *fw)
         puls_smart_data_set_firmware_version (data, fw);
 
-    if (json_object_has_member (root, "user_capacity")) {
-        JsonObject *cap = json_object_get_object_member (root, "user_capacity");
-        gint64 bytes = json_object_get_int_safe (cap, "bytes", 0);
-        puls_smart_data_set_capacity_bytes (data, (guint64)bytes);
+    JsonObject *cap = json_object_get_object_safe (root, "user_capacity");
+    if (cap != NULL) {
+        gint64 bytes = json_object_get_int_safe (cap, "bytes", -1);
+        if (bytes >= 0)
+            puls_smart_data_set_capacity_bytes (data, (guint64)bytes);
     }
 
     gint64 lbs = json_object_get_int_safe (root, "logical_block_size", 0);
-    if (lbs > 0)
+    if (lbs > 0 && lbs <= 65536)
         puls_smart_data_set_logical_sector_size (data, (guint32)lbs);
 
     gint64 pbs = json_object_get_int_safe (root, "physical_block_size", 0);
-    if (pbs > 0)
+    if (pbs > 0 && pbs <= 65536)
         puls_smart_data_set_physical_sector_size (data, (guint32)pbs);
 
-    if (json_object_has_member (root, "form_factor")) {
-        JsonObject *ff_obj = json_object_get_object_member (root, "form_factor");
+    JsonObject *ff_obj = json_object_get_object_safe (root, "form_factor");
+    if (ff_obj != NULL) {
         const gchar *ff_name = json_object_get_string_safe (ff_obj, "name");
-        if (ff_name == NULL) {
+        if (ff_name == NULL)
             ff_name = json_object_get_string_safe (ff_obj, "string");
-        }
-        if (ff_name) {
+        if (ff_name && *ff_name)
             puls_smart_data_set_form_factor (data, ff_name);
-        }
     }
 
     gint64 rpm = json_object_get_int_safe (root, "rotation_rate", -1);
-    puls_smart_data_set_rotation_rpm (data, (gint)rpm);
+    if (rpm >= 0 && rpm <= 100000)
+        puls_smart_data_set_rotation_rpm (data, (gint)rpm);
 
-    if (json_object_has_member (root, "ata_version")) {
-        JsonObject *v_obj = json_object_get_object_member (root, "ata_version");
-        const gchar *v_str = json_object_get_string_safe (v_obj, "string");
-        if (v_str)
+    JsonObject *ata_v = json_object_get_object_safe (root, "ata_version");
+    if (ata_v != NULL) {
+        const gchar *v_str = json_object_get_string_safe (ata_v, "string");
+        if (v_str && *v_str)
             puls_smart_data_set_standard (data, v_str);
     }
 
-    if (json_object_has_member (root, "nvme_version")) {
-        JsonObject *v_obj = json_object_get_object_member (root, "nvme_version");
-        const gchar *v_str = json_object_get_string_safe (v_obj, "string");
-        if (v_str) {
+    JsonObject *nvme_v = json_object_get_object_safe (root, "nvme_version");
+    if (nvme_v != NULL) {
+        const gchar *v_str = json_object_get_string_safe (nvme_v, "string");
+        if (v_str && *v_str) {
             g_autofree gchar *fmt = g_strdup_printf ("NVMe %s", v_str);
             puls_smart_data_set_standard (data, fmt);
         }
     }
 
-    if (json_object_has_member (root, "sata_version")) {
-        JsonObject *v_obj = json_object_get_object_member (root, "sata_version");
-        const gchar *v_str = json_object_get_string_safe (v_obj, "string");
-        if (v_str && !puls_smart_data_get_standard (data)) {
+    JsonObject *sata_v = json_object_get_object_safe (root, "sata_version");
+    if (sata_v != NULL) {
+        const gchar *v_str = json_object_get_string_safe (sata_v, "string");
+        if (v_str && *v_str && !puls_smart_data_get_standard (data))
             puls_smart_data_set_standard (data, v_str);
-        }
     }
 
-    if (json_object_has_member (root, "interface_speed")) {
-        JsonObject *speed_obj = json_object_get_object_member (root, "interface_speed");
+    JsonObject *speed_obj = json_object_get_object_safe (root, "interface_speed");
+    if (speed_obj != NULL) {
         const gchar *curr_mode = NULL;
         const gchar *max_mode = NULL;
 
-        if (json_object_has_member (speed_obj, "current")) {
-            JsonObject *curr_obj = json_object_get_object_member (speed_obj, "current");
+        JsonObject *curr_obj = json_object_get_object_safe (speed_obj, "current");
+        if (curr_obj != NULL) {
             const gchar *s = json_object_get_string_safe (curr_obj, "string");
             curr_mode = sata_speed_to_mode (s);
-            if (s) {
+            if (s && *s) {
                 g_autofree gchar *iface = g_strdup_printf ("SATA %s", s);
                 puls_smart_data_set_interface_type (data, iface);
             }
         }
-        if (json_object_has_member (speed_obj, "max")) {
-            JsonObject *max_obj = json_object_get_object_member (speed_obj, "max");
+        JsonObject *max_obj = json_object_get_object_safe (speed_obj, "max");
+        if (max_obj != NULL) {
             const gchar *s = json_object_get_string_safe (max_obj, "string");
             max_mode = sata_speed_to_mode (s);
         }
@@ -183,46 +277,44 @@ parse_device_info (JsonObject    *root,
         }
     }
 
-    if (json_object_has_member (root, "smart_status")) {
+    JsonObject *smart_status_obj = json_object_get_object_safe (root, "smart_status");
+    if (smart_status_obj != NULL)
         puls_smart_data_set_smart_enabled (data, TRUE);
-    }
 
-    if (json_object_has_member (root, "trim")) {
-        JsonObject *trim_obj = json_object_get_object_member (root, "trim");
+    JsonObject *trim_obj = json_object_get_object_safe (root, "trim");
+    if (trim_obj != NULL) {
         gboolean trim_supported = json_object_get_boolean_safe (trim_obj, "supported", FALSE);
         puls_smart_data_set_supports_trim (data, trim_supported);
     }
 
-    if (json_object_has_member (root, "apm")) {
-        JsonObject *apm_obj = json_object_get_object_member (root, "apm");
+    JsonObject *apm_obj = json_object_get_object_safe (root, "apm");
+    if (apm_obj != NULL) {
         gboolean apm_supported = json_object_get_boolean_safe (apm_obj, "supported", FALSE);
         puls_smart_data_set_supports_apm (data, apm_supported);
     }
 
-    if (json_object_has_member (root, "aam")) {
-        JsonObject *aam_obj = json_object_get_object_member (root, "aam");
+    JsonObject *aam_obj = json_object_get_object_safe (root, "aam");
+    if (aam_obj != NULL) {
         gboolean aam_supported = json_object_get_boolean_safe (aam_obj, "supported", FALSE);
         puls_smart_data_set_supports_aam (data, aam_supported);
     }
 
-    if (json_object_has_member (root, "write_cache")) {
-        JsonObject *wc_obj = json_object_get_object_member (root, "write_cache");
-        gboolean wc_enabled = json_object_get_boolean_safe (wc_obj, "enabled", FALSE);
-        puls_smart_data_set_supports_write_cache (data, wc_enabled);
-    } else if (json_object_has_member (root, "wcache")) {
-        JsonObject *wc_obj = json_object_get_object_member (root, "wcache");
+    JsonObject *wc_obj = json_object_get_object_safe (root, "write_cache");
+    if (wc_obj == NULL)
+        wc_obj = json_object_get_object_safe (root, "wcache");
+    if (wc_obj != NULL) {
         gboolean wc_enabled = json_object_get_boolean_safe (wc_obj, "enabled", FALSE);
         puls_smart_data_set_supports_write_cache (data, wc_enabled);
     }
 
-    if (json_object_has_member (root, "sata_ncq")) {
-        JsonObject *ncq_obj = json_object_get_object_member (root, "sata_ncq");
+    JsonObject *ncq_obj = json_object_get_object_safe (root, "sata_ncq");
+    if (ncq_obj != NULL) {
         gboolean ncq_supported = json_object_get_boolean_safe (ncq_obj, "supported", FALSE);
         puls_smart_data_set_supports_ncq (data, ncq_supported);
     }
 
-    if (json_object_has_member (root, "sata_devsleep")) {
-        JsonObject *ds_obj = json_object_get_object_member (root, "sata_devsleep");
+    JsonObject *ds_obj = json_object_get_object_safe (root, "sata_devsleep");
+    if (ds_obj != NULL) {
         gboolean ds_supported = json_object_get_boolean_safe (ds_obj, "supported", FALSE);
         puls_smart_data_set_supports_devsleep (data, ds_supported);
     }
@@ -232,11 +324,13 @@ static void
 parse_health_status (JsonObject    *root,
                      PulsSmartData *data)
 {
-    if (!json_object_has_member (root, "smart_status"))
+    JsonObject *status = json_object_get_object_safe (root, "smart_status");
+    if (status == NULL)
         return;
 
-    JsonObject *status = json_object_get_object_member (root, "smart_status");
-    gboolean passed = json_object_get_boolean_safe (status, "passed", FALSE);
+    gboolean passed = FALSE;
+    if (!json_object_has_valid_boolean (status, "passed", &passed))
+        return;
 
     puls_smart_data_set_health (data, passed ? PULS_HEALTH_GOOD : PULS_HEALTH_BAD);
 }
@@ -245,55 +339,80 @@ static void
 parse_temperature (JsonObject    *root,
                    PulsSmartData *data)
 {
-    if (!json_object_has_member (root, "temperature"))
-        return;
+    gint64 current = -1;
+    JsonObject *temp = json_object_get_object_safe (root, "temperature");
+    if (temp != NULL) {
+        current = json_object_get_int_safe (temp, "current", -1);
+    } else if (json_object_has_member (root, "temperature")) {
+        /* Some non-standard bridges or legacy exports emit scalar integer temperature */
+        current = json_object_get_int_safe (root, "temperature", -1);
+    }
 
-    JsonObject *temp = json_object_get_object_member (root, "temperature");
-    gint64 current = json_object_get_int_safe (temp, "current", -1);
-    puls_smart_data_set_temperature (data, (gint)current);
+    if (current >= -50 && current <= 200)
+        puls_smart_data_set_temperature (data, (gint)current);
 }
 
 static void
 parse_ata_attributes (JsonObject    *root,
                       PulsSmartData *data)
 {
-    if (!json_object_has_member (root, "ata_smart_attributes"))
+    JsonObject *smart_attrs = json_object_get_object_safe (root, "ata_smart_attributes");
+    if (smart_attrs == NULL)
         return;
 
-    JsonObject *smart_attrs = json_object_get_object_member (root, "ata_smart_attributes");
-    if (!json_object_has_member (smart_attrs, "table"))
+    JsonArray *table = json_object_get_array_safe (smart_attrs, "table");
+    if (table == NULL)
         return;
 
-    JsonArray *table = json_object_get_array_member (smart_attrs, "table");
     guint len = json_array_get_length (table);
     gboolean has_caution = FALSE;
 
     for (guint i = 0; i < len; i++) {
-        JsonObject *entry = json_array_get_object_element (table, i);
+        JsonObject *entry = json_array_get_object_safe (table, i);
+        if (entry == NULL)
+            continue;
+
+        gint64 id_val = json_object_get_int_safe (entry, "id", 0);
+        const gchar *attr_name = json_object_get_string_safe (entry, "name");
+        if (id_val <= 0 || id_val > 255) {
+            if (attr_name == NULL || *attr_name == '\0')
+                continue;
+            id_val = 0;
+        }
+        if ((attr_name == NULL || *attr_name == '\0') &&
+            !json_object_has_member (entry, "value") &&
+            !json_object_has_member (entry, "raw")) {
+            continue;
+        }
 
         PulsSmartAttribute attr = { 0 };
-        attr.id = (guint8)json_object_get_int_safe (entry, "id", 0);
-        attr.name = g_strdup (json_object_get_string_safe (entry, "name"));
-
+        attr.id        = (guint8)id_val;
+        attr.name      = g_strdup (attr_name);
         attr.current   = (gint)json_object_get_int_safe (entry, "value", 0);
         attr.worst     = (gint)json_object_get_int_safe (entry, "worst", 0);
         attr.threshold = (gint)json_object_get_int_safe (entry, "thresh", 0);
 
-        if (json_object_has_member (entry, "raw")) {
-            JsonObject *raw = json_object_get_object_member (entry, "raw");
-            attr.raw_value = (guint64)json_object_get_int_safe (raw, "value", 0);
+        JsonObject *raw = json_object_get_object_safe (entry, "raw");
+        if (raw != NULL) {
+            gint64 rval = json_object_get_int_safe (raw, "value", 0);
+            attr.raw_value = (rval >= 0) ? (guint64)rval : 0;
             attr.raw_string = g_strdup (json_object_get_string_safe (raw, "string"));
+        } else if (json_object_has_member (entry, "raw")) {
+            /* Graceful containment when "raw" is encoded as scalar or string */
+            gint64 rval = json_object_get_int_safe (entry, "raw", -1);
+            if (rval >= 0)
+                attr.raw_value = (guint64)rval;
+            else
+                attr.raw_string = g_strdup (json_object_get_string_safe (entry, "raw"));
         }
 
-        if (json_object_has_member (entry, "when_failed")) {
-            const gchar *when = json_object_get_string_safe (entry, "when_failed");
-            if (when) {
-                if (g_strcmp0 (when, "past") == 0)
-                    attr.failed_past = TRUE;
-                else if (g_strcmp0 (when, "now") == 0 ||
-                         g_strcmp0 (when, "FAILING_NOW") == 0)
-                    attr.failing_now = TRUE;
-            }
+        const gchar *when = json_object_get_string_safe (entry, "when_failed");
+        if (when != NULL) {
+            if (g_strcmp0 (when, "past") == 0)
+                attr.failed_past = TRUE;
+            else if (g_strcmp0 (when, "now") == 0 ||
+                     g_strcmp0 (when, "FAILING_NOW") == 0)
+                attr.failing_now = TRUE;
         }
 
         if (attr.threshold > 0 && attr.current > 0) {
@@ -302,9 +421,8 @@ parse_ata_attributes (JsonObject    *root,
                 has_caution = TRUE;
         }
 
-        if (attr.failing_now) {
+        if (attr.failing_now)
             puls_smart_data_set_health (data, PULS_HEALTH_BAD);
-        }
 
         puls_smart_data_add_ata_attribute (data, &attr);
 
@@ -312,52 +430,64 @@ parse_ata_attributes (JsonObject    *root,
         g_free (attr.raw_string);
     }
 
-    if (has_caution && puls_smart_data_get_health (data) == PULS_HEALTH_GOOD) {
+    if (has_caution && puls_smart_data_get_health (data) == PULS_HEALTH_GOOD)
         puls_smart_data_set_health (data, PULS_HEALTH_CAUTION);
-    }
 }
 
 static void
 parse_power_on_stats (JsonObject    *root,
                       PulsSmartData *data)
 {
-    if (json_object_has_member (root, "power_on_time")) {
-        JsonObject *pot = json_object_get_object_member (root, "power_on_time");
-        guint64 hours = (guint64)json_object_get_int_safe (pot, "hours", 0);
-        puls_smart_data_set_power_on_hours (data, hours);
+    JsonObject *pot = json_object_get_object_safe (root, "power_on_time");
+    if (pot != NULL) {
+        gint64 hours = json_object_get_int_safe (pot, "hours", -1);
+        if (hours >= 0)
+            puls_smart_data_set_power_on_hours (data, (guint64)hours);
     }
 
-    gint64 pcc = json_object_get_int_safe (root, "power_cycle_count", 0);
-    puls_smart_data_set_power_cycle_count (data, (guint64)pcc);
+    gint64 pcc = json_object_get_int_safe (root, "power_cycle_count", -1);
+    if (pcc >= 0)
+        puls_smart_data_set_power_cycle_count (data, (guint64)pcc);
+}
+
+static guint64
+clamp_nonneg_u64 (JsonObject *obj, const gchar *member)
+{
+    gint64 val = json_object_get_int_safe (obj, member, 0);
+    return (val >= 0) ? (guint64)val : 0;
 }
 
 static void
 parse_nvme_health (JsonObject    *root,
                    PulsSmartData *data)
 {
-    if (!json_object_has_member (root, "nvme_smart_health_information_log"))
+    JsonObject *log = json_object_get_object_safe (root, "nvme_smart_health_information_log");
+    if (log == NULL)
         return;
-
-    JsonObject *log = json_object_get_object_member (root,
-                          "nvme_smart_health_information_log");
 
     PulsNvmeHealth health = { 0 };
 
-    health.critical_warning          = (guint8)json_object_get_int_safe (log, "critical_warning", 0);
-    health.temperature               = (gint)json_object_get_int_safe (log, "temperature", -1);
-    health.available_spare           = (guint8)json_object_get_int_safe (log, "available_spare", 0);
-    health.available_spare_threshold = (guint8)json_object_get_int_safe (log, "available_spare_threshold", 0);
-    health.percentage_used           = (guint8)json_object_get_int_safe (log, "percentage_used", 0);
-    health.data_units_read           = (guint64)json_object_get_int_safe (log, "data_units_read", 0);
-    health.data_units_written        = (guint64)json_object_get_int_safe (log, "data_units_written", 0);
-    health.host_read_commands        = (guint64)json_object_get_int_safe (log, "host_reads", 0);
-    health.host_write_commands       = (guint64)json_object_get_int_safe (log, "host_writes", 0);
-    health.controller_busy_time      = (guint64)json_object_get_int_safe (log, "controller_busy_time", 0);
-    health.power_cycles              = (guint64)json_object_get_int_safe (log, "power_cycles", 0);
-    health.power_on_hours            = (guint64)json_object_get_int_safe (log, "power_on_hours", 0);
-    health.unsafe_shutdowns          = (guint64)json_object_get_int_safe (log, "unsafe_shutdowns", 0);
-    health.media_errors              = (guint64)json_object_get_int_safe (log, "media_errors", 0);
-    health.error_log_entries         = (guint64)json_object_get_int_safe (log, "num_err_log_entries", 0);
+    gint64 cw = json_object_get_int_safe (log, "critical_warning", 0);
+    gint64 spare = json_object_get_int_safe (log, "available_spare", 0);
+    gint64 spare_thresh = json_object_get_int_safe (log, "available_spare_threshold", 0);
+    gint64 pct_used = json_object_get_int_safe (log, "percentage_used", 0);
+    gint64 temp = json_object_get_int_safe (log, "temperature", -1);
+
+    health.critical_warning          = (guint8)CLAMP (cw, 0, 255);
+    health.temperature               = (temp >= -50 && temp <= 200) ? (gint)temp : -1;
+    health.available_spare           = (guint8)CLAMP (spare, 0, 100);
+    health.available_spare_threshold = (guint8)CLAMP (spare_thresh, 0, 100);
+    health.percentage_used           = (guint8)CLAMP (pct_used, 0, 255);
+    health.data_units_read           = clamp_nonneg_u64 (log, "data_units_read");
+    health.data_units_written        = clamp_nonneg_u64 (log, "data_units_written");
+    health.host_read_commands        = clamp_nonneg_u64 (log, "host_reads");
+    health.host_write_commands       = clamp_nonneg_u64 (log, "host_writes");
+    health.controller_busy_time      = clamp_nonneg_u64 (log, "controller_busy_time");
+    health.power_cycles              = clamp_nonneg_u64 (log, "power_cycles");
+    health.power_on_hours            = clamp_nonneg_u64 (log, "power_on_hours");
+    health.unsafe_shutdowns          = clamp_nonneg_u64 (log, "unsafe_shutdowns");
+    health.media_errors              = clamp_nonneg_u64 (log, "media_errors");
+    health.error_log_entries         = clamp_nonneg_u64 (log, "num_err_log_entries");
 
     puls_smart_data_set_nvme_health (data, &health);
 
@@ -378,7 +508,8 @@ parse_nvme_health (JsonObject    *root,
 
     if (health.critical_warning != 0) {
         puls_smart_data_set_health (data, PULS_HEALTH_BAD);
-    } else if (health.available_spare <= health.available_spare_threshold ||
+    } else if ((health.available_spare_threshold > 0 &&
+                health.available_spare <= health.available_spare_threshold) ||
                health.percentage_used >= 90) {
         if (puls_smart_data_get_health (data) != PULS_HEALTH_BAD)
             puls_smart_data_set_health (data, PULS_HEALTH_CAUTION);
@@ -389,7 +520,8 @@ static void
 parse_self_test_status (JsonObject    *root,
                         PulsSmartData *data)
 {
-    if (!json_object_has_member (root, "current_testing")) {
+    JsonObject *ct = json_object_get_object_safe (root, "current_testing");
+    if (ct == NULL) {
         puls_smart_data_set_self_test_in_progress (data, FALSE);
         puls_smart_data_set_self_test_percent (data, 0);
         puls_smart_data_set_self_test_status_str (data, NULL);
@@ -397,22 +529,21 @@ parse_self_test_status (JsonObject    *root,
         return;
     }
 
-    JsonObject *ct = json_object_get_object_member (root, "current_testing");
     puls_smart_data_set_self_test_in_progress (data, TRUE);
 
     gint64 remaining = json_object_get_int_safe (ct, "remaining_percent", 100);
-    gint percent = 100 - (gint)remaining;
+    gint percent = 100 - (gint)CLAMP (remaining, 0, 100);
     puls_smart_data_set_self_test_percent (data, percent);
 
-    if (json_object_has_member (ct, "status")) {
-        JsonObject *status_obj = json_object_get_object_member (ct, "status");
+    JsonObject *status_obj = json_object_get_object_safe (ct, "status");
+    if (status_obj != NULL) {
         const gchar *status_str = json_object_get_string_safe (status_obj, "string");
         if (status_str)
             puls_smart_data_set_self_test_status_str (data, status_str);
     }
 
-    if (json_object_has_member (ct, "type")) {
-        JsonObject *type_obj = json_object_get_object_member (ct, "type");
+    JsonObject *type_obj = json_object_get_object_safe (ct, "type");
+    if (type_obj != NULL) {
         const gchar *type_str = json_object_get_string_safe (type_obj, "string");
         if (type_str)
             puls_smart_data_set_self_test_type_str (data, type_str);
@@ -462,42 +593,303 @@ parse_smartctl_exit_status (JsonObject    *root,
     }
 }
 
-PulsSmartData *
-puls_smart_parser_parse_json (const gchar *json_str,
-                              GError     **error)
+static guint
+count_schema_anomalies (JsonObject *root)
 {
-    g_return_val_if_fail (json_str != NULL, NULL);
+    if (root == NULL)
+        return 1;
 
-    g_autoptr(JsonParser) parser = json_parser_new ();
+    guint warnings = 0;
 
-    if (!json_parser_load_from_data (parser, json_str, -1, error))
-        return NULL;
+    static const gchar * const obj_members[] = {
+        "smartctl",
+        "device",
+        "user_capacity",
+        "form_factor",
+        "ata_version",
+        "nvme_version",
+        "sata_version",
+        "interface_speed",
+        "smart_status",
+        "ata_smart_attributes",
+        "power_on_time",
+        "nvme_smart_health_information_log",
+        "current_testing",
+        "ata_smart_error_log",
+    };
 
-    JsonNode *root_node = json_parser_get_root (parser);
-    if (!JSON_NODE_HOLDS_OBJECT (root_node)) {
-        g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
-                     "smartctl JSON root is not an object");
-        return NULL;
+    for (gsize i = 0; i < G_N_ELEMENTS (obj_members); i++) {
+        if (json_object_has_member (root, obj_members[i]) &&
+            json_object_get_object_safe (root, obj_members[i]) == NULL) {
+            warnings++;
+        }
     }
 
-    JsonObject *root = json_node_get_object (root_node);
-
-    /* Negotiate / verify smartctl JSON schema version (1.x supported) */
     if (json_object_has_member (root, "json_format_version")) {
-        JsonNode *vnode = json_object_get_member (root, "json_format_version");
-        if (JSON_NODE_HOLDS_ARRAY (vnode)) {
-            JsonArray *varr = json_node_get_array (vnode);
-            if (varr != NULL && json_array_get_length (varr) >= 2) {
-                JsonNode *e0 = json_array_get_element (varr, 0);
-                JsonNode *e1 = json_array_get_element (varr, 1);
-                if (JSON_NODE_HOLDS_VALUE (e0) && JSON_NODE_HOLDS_VALUE (e1)) {
-                    gint64 vmaj = json_node_get_int (e0);
-                    gint64 vmin = json_node_get_int (e1);
-                    if (vmaj != 1) {
-                        PULS_LOG_WARN ("Unexpected smartctl JSON schema version %" G_GINT64_FORMAT ".%" G_GINT64_FORMAT " (expected 1.x); attempting best-effort parse",
-                                       vmaj, vmin);
-                    }
+        JsonArray *varr = json_object_get_array_safe (root, "json_format_version");
+        if (varr == NULL || json_array_get_length (varr) < 2)
+            warnings++;
+    }
+
+    JsonObject *smart_attrs = json_object_get_object_safe (root, "ata_smart_attributes");
+    if (smart_attrs != NULL && json_object_has_member (smart_attrs, "table")) {
+        JsonArray *table = json_object_get_array_safe (smart_attrs, "table");
+        if (table == NULL) {
+            warnings++;
+        } else {
+            guint len = json_array_get_length (table);
+            for (guint i = 0; i < len; i++) {
+                if (json_array_get_object_safe (table, i) == NULL)
+                    warnings++;
+            }
+        }
+    }
+
+    JsonObject *smart_status = json_object_get_object_safe (root, "smart_status");
+    if (smart_status != NULL && !json_object_has_valid_boolean (smart_status, "passed", NULL))
+        warnings++;
+
+    if (json_object_has_member (root, "temperature") &&
+        json_object_get_object_safe (root, "temperature") == NULL) {
+        warnings++;
+    }
+
+    return warnings;
+}
+
+static gboolean
+verify_recovered_object_json (const gchar *candidate)
+{
+    if (candidate == NULL || *candidate == '\0')
+        return FALSE;
+
+    g_autoptr(JsonParser) parser = json_parser_new ();
+    if (!json_parser_load_from_data (parser, candidate, -1, NULL))
+        return FALSE;
+
+    JsonNode *root_node = json_parser_get_root (parser);
+    if (root_node == NULL || !JSON_NODE_HOLDS_OBJECT (root_node))
+        return FALSE;
+
+    JsonObject *obj = json_node_get_object (root_node);
+    return (obj != NULL && json_object_get_size (obj) > 0);
+}
+
+static gchar *
+build_closed_json_candidate (const gchar *start,
+                             gsize        prefix_len,
+                             const gchar *stack,
+                             gsize        depth)
+{
+    while (prefix_len > 0) {
+        gchar c = start[prefix_len - 1];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == ',')
+            prefix_len--;
+        else
+            break;
+    }
+
+    if (prefix_len == 0)
+        return NULL;
+
+    g_autoptr(GString) out = g_string_new_len (start, prefix_len);
+    for (gsize i = depth; i > 0; i--)
+        g_string_append_c (out, (stack[i - 1] == '{') ? '}' : ']');
+
+    gchar *candidate = g_string_free (g_steal_pointer (&out), FALSE);
+    if (verify_recovered_object_json (candidate))
+        return candidate;
+
+    g_free (candidate);
+    return NULL;
+}
+
+/**
+ * puls_smart_parser_recover_json_string:
+ * @raw_input: (nullable): Raw stdout/stderr buffer that may be wrapped with
+ *   non-JSON warning lines or truncated mid-object.
+ *
+ * Attempts to recover a valid non-empty JSON object from wrapped or truncated
+ * `smartctl -j` output. Unrecoverable syntax errors (such as unquoted keys or
+ * empty/array roots) still return %NULL.
+ *
+ * Returns: (transfer full) (nullable): Validated JSON object string, or %NULL.
+ */
+gchar *
+puls_smart_parser_recover_json_string (const gchar *raw_input)
+{
+    if (raw_input == NULL || *raw_input == '\0')
+        return NULL;
+
+    const gchar *first_brace = strchr (raw_input, '{');
+    if (first_brace == NULL)
+        return NULL;
+
+    /* Walk with string/escape/nesting awareness to handle wrapped or truncated JSON */
+    gsize len = strlen (first_brace);
+    gchar stack[128];
+    gsize depth = 0;
+    gboolean in_string = FALSE;
+    gboolean escape = FALSE;
+
+    gsize last_comma_pos = 0;
+    gchar last_comma_stack[128];
+    gsize last_comma_depth = 0;
+
+    gsize last_value_end = 0;
+    gchar last_value_stack[128];
+    gsize last_value_depth = 0;
+
+    for (gsize i = 0; i < len; i++) {
+        gchar ch = first_brace[i];
+
+        if (in_string) {
+            if (escape) {
+                escape = FALSE;
+            } else if (ch == '\\') {
+                escape = TRUE;
+            } else if (ch == '"') {
+                in_string = FALSE;
+                /* Look ahead past whitespace for ':' to distinguish object key vs string value */
+                gsize k = i + 1;
+                while (k < len && (first_brace[k] == ' ' || first_brace[k] == '\t' ||
+                                   first_brace[k] == '\r' || first_brace[k] == '\n')) {
+                    k++;
                 }
+                if (k < len && first_brace[k] != ':' && depth > 0 && depth <= sizeof (stack)) {
+                    last_value_end = i + 1;
+                    last_value_depth = depth;
+                    memcpy (last_value_stack, stack, depth);
+                } else if (k == len && depth > 0 && stack[depth - 1] == '[') {
+                    last_value_end = i + 1;
+                    last_value_depth = depth;
+                    memcpy (last_value_stack, stack, depth);
+                }
+            }
+            continue;
+        }
+
+        if (ch == '"') {
+            in_string = TRUE;
+            continue;
+        }
+
+        if (ch == '{' || ch == '[') {
+            if (depth >= sizeof (stack))
+                return NULL;
+            stack[depth++] = ch;
+            continue;
+        }
+
+        if (ch == '}' || ch == ']') {
+            if (depth == 0)
+                break;
+            gchar expected = (ch == '}') ? '{' : '[';
+            if (stack[depth - 1] != expected)
+                return NULL;
+            depth--;
+            if (depth == 0) {
+                /* Complete top-level object extracted (strips leading/trailing noise) */
+                g_autofree gchar *exact = g_strndup (first_brace, i + 1);
+                if (verify_recovered_object_json (exact))
+                    return g_steal_pointer (&exact);
+                break;
+            }
+            last_value_end = i + 1;
+            last_value_depth = depth;
+            memcpy (last_value_stack, stack, depth);
+            continue;
+        }
+
+        if (ch == ',' && depth > 0) {
+            last_comma_pos = i;
+            last_comma_depth = depth;
+            memcpy (last_comma_stack, stack, depth);
+        }
+    }
+
+    /* Try closing directly after the last complete value outside strings (if unambiguous) */
+    if (!in_string && depth > 0) {
+        gchar *direct = build_closed_json_candidate (first_brace, len, stack, depth);
+        if (direct != NULL)
+            return direct;
+    }
+
+    if (last_value_end > 0) {
+        gchar *from_val = build_closed_json_candidate (first_brace, last_value_end,
+                                                       last_value_stack, last_value_depth);
+        if (from_val != NULL)
+            return from_val;
+    }
+
+    if (last_comma_pos > 0) {
+        gchar *from_comma = build_closed_json_candidate (first_brace, last_comma_pos,
+                                                         last_comma_stack, last_comma_depth);
+        if (from_comma != NULL)
+            return from_comma;
+    }
+
+    return NULL;
+}
+
+/**
+ * puls_smart_parser_validate_schema:
+ * @json_str: Input JSON string.
+ * @out_warning_count: (out) (optional): Number of malformed/unexpected sub-objects.
+ * @error: (out) (optional): Syntax or root-type error if JSON is not an object.
+ *
+ * Validates that @json_str parses into a JSON object root and counts any
+ * schema anomalies in known `smartctl` sections.
+ *
+ * Returns: %TRUE if @json_str is a valid JSON object root.
+ */
+gboolean
+puls_smart_parser_validate_schema (const gchar  *json_str,
+                                   guint        *out_warning_count,
+                                   GError      **error)
+{
+    g_return_val_if_fail (json_str != NULL, FALSE);
+
+    if (out_warning_count)
+        *out_warning_count = 0;
+
+    g_autoptr(JsonParser) parser = json_parser_new ();
+    if (!json_parser_load_from_data (parser, json_str, -1, error))
+        return FALSE;
+
+    JsonNode *root_node = json_parser_get_root (parser);
+    if (root_node == NULL || !JSON_NODE_HOLDS_OBJECT (root_node)) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                     "smartctl JSON root is not an object");
+        return FALSE;
+    }
+
+    if (out_warning_count)
+        *out_warning_count = count_schema_anomalies (json_node_get_object (root_node));
+
+    return TRUE;
+}
+
+static PulsSmartData *
+parse_smart_root_object (JsonObject  *root,
+                         const gchar *raw_json)
+{
+    /* Verify smartctl JSON schema version (1.x supported) safely */
+    JsonArray *varr = json_object_get_array_safe (root, "json_format_version");
+    if (varr != NULL && json_array_get_length (varr) >= 2) {
+        JsonNode *e0 = json_array_get_element (varr, 0);
+        JsonNode *e1 = json_array_get_element (varr, 1);
+        if (e0 != NULL && e1 != NULL &&
+            JSON_NODE_HOLDS_VALUE (e0) && JSON_NODE_HOLDS_VALUE (e1) &&
+            (json_node_get_value_type (e0) == G_TYPE_INT64 ||
+             json_node_get_value_type (e0) == G_TYPE_INT) &&
+            (json_node_get_value_type (e1) == G_TYPE_INT64 ||
+             json_node_get_value_type (e1) == G_TYPE_INT)) {
+            gint64 vmaj = json_node_get_int (e0);
+            gint64 vmin = json_node_get_int (e1);
+            if (vmaj != 1) {
+                PULS_LOG_WARN ("Unexpected smartctl JSON schema version %" G_GINT64_FORMAT ".%" G_GINT64_FORMAT " (expected 1.x); attempting best-effort parse",
+                               vmaj, vmin);
             }
         }
     }
@@ -513,7 +905,7 @@ puls_smart_parser_parse_json (const gchar *json_str,
     parse_self_test_status (root, data);
     parse_smartctl_exit_status (root, data);
 
-    PulsPowerState pstate = puls_parse_smartctl_standby_json (json_str);
+    PulsPowerState pstate = puls_parse_smartctl_standby_json (raw_json);
     if (pstate != PULS_POWER_STATE_UNKNOWN)
         puls_smart_data_set_power_state (data, pstate);
 
@@ -578,9 +970,8 @@ puls_smart_parser_parse_json (const gchar *json_str,
             guint64 hours_left = (total_hours_est > hours_used) ? (total_hours_est - hours_used) : 0;
             days_left = (gint)(hours_left / 24);
             gint min_expected_days = health_pct * 30;
-            if (days_left < min_expected_days) {
+            if (days_left < min_expected_days)
                 days_left = min_expected_days;
-            }
         } else {
             days_left = (gint)(health_pct * 36.5);
         }
@@ -589,32 +980,25 @@ puls_smart_parser_parse_json (const gchar *json_str,
         puls_smart_data_set_estimated_lifetime_days (data, 3650);
     }
 
-
     {
-        /* buffer_size_kb from "cache" key */
-        if (json_object_has_member (root, "ata_cache")) {
-            JsonObject *cache_obj = json_object_get_object_member (root, "ata_cache");
-            gint64 cache_kb = json_object_get_int_safe (cache_obj, "size", 0);
-            if (cache_kb > 0)
-                puls_smart_data_set_buffer_size_kb (data, (guint32)cache_kb);
-        }
-        if (puls_smart_data_get_buffer_size_kb (data) == 0 &&
-            json_object_has_member (root, "cache")) {
-            JsonObject *cache_obj = json_object_get_object_member (root, "cache");
+        JsonObject *cache_obj = json_object_get_object_safe (root, "ata_cache");
+        if (cache_obj == NULL)
+            cache_obj = json_object_get_object_safe (root, "cache");
+        if (cache_obj != NULL) {
             gint64 cache_kb = json_object_get_int_safe (cache_obj, "size", 0);
             if (cache_kb > 0)
                 puls_smart_data_set_buffer_size_kb (data, (guint32)cache_kb);
         }
 
-        if (json_object_has_member (root, "apm")) {
-            JsonObject *apm_obj = json_object_get_object_member (root, "apm");
+        JsonObject *apm_obj = json_object_get_object_safe (root, "apm");
+        if (apm_obj != NULL) {
             gint64 apm_val = json_object_get_int_safe (apm_obj, "level", -1);
             if (apm_val >= 0)
                 puls_smart_data_set_apm_level (data, (gint)apm_val);
         }
 
-        if (json_object_has_member (root, "aam")) {
-            JsonObject *aam_obj = json_object_get_object_member (root, "aam");
+        JsonObject *aam_obj = json_object_get_object_safe (root, "aam");
+        if (aam_obj != NULL) {
             gint64 aam_val = json_object_get_int_safe (aam_obj, "level", -1);
             if (aam_val >= 0)
                 puls_smart_data_set_aam_level (data, (gint)aam_val);
@@ -631,18 +1015,93 @@ puls_smart_parser_parse_json (const gchar *json_str,
             }
         }
 
-        if (json_object_has_member (root, "ata_smart_error_log")) {
-            JsonObject *elog = json_object_get_object_member (root, "ata_smart_error_log");
-            if (json_object_has_member (elog, "summary")) {
-                JsonObject *summary = json_object_get_object_member (elog, "summary");
-                gint64 count = json_object_get_int_safe (summary, "count", 0);
-                if (count > 0)
-                    puls_smart_data_set_error_count_total (data, (guint64)count);
-            }
+        JsonObject *elog = json_object_get_object_safe (root, "ata_smart_error_log");
+        JsonObject *summary = json_object_get_object_safe (elog, "summary");
+        if (summary != NULL) {
+            gint64 count = json_object_get_int_safe (summary, "count", 0);
+            if (count > 0)
+                puls_smart_data_set_error_count_total (data, (guint64)count);
         }
     }
 
     return data;
+}
+
+/**
+ * puls_smart_parser_parse_json_with_recovery:
+ * @json_str: Input `smartctl -j` JSON string.
+ * @out_recovered: (out) (optional): Set to %TRUE if truncation/noise recovery
+ *   was needed to repair the JSON document.
+ * @out_schema_warnings: (out) (optional): Count of non-fatal malformed sub-objects
+ *   safely contained while parsing remaining sections.
+ * @error: (out) (optional): Error location if the input is completely unparseable.
+ *
+ * Parses @json_str with full error containment across malformed sub-objects and
+ * best-effort recovery for wrapped or truncated JSON streams.
+ *
+ * Returns: (transfer full) (nullable): Parsed #PulsSmartData, or %NULL on fatal parse failure.
+ */
+PulsSmartData *
+puls_smart_parser_parse_json_with_recovery (const gchar  *json_str,
+                                            gboolean     *out_recovered,
+                                            guint        *out_schema_warnings,
+                                            GError      **error)
+{
+    g_return_val_if_fail (json_str != NULL, NULL);
+
+    if (out_recovered)
+        *out_recovered = FALSE;
+    if (out_schema_warnings)
+        *out_schema_warnings = 0;
+
+    g_autoptr(JsonParser) parser = json_parser_new ();
+    GError *local_err = NULL;
+    const gchar *active_json = json_str;
+    g_autofree gchar *recovered_buf = NULL;
+    gboolean recovered = FALSE;
+
+    if (!json_parser_load_from_data (parser, json_str, -1, &local_err)) {
+        recovered_buf = puls_smart_parser_recover_json_string (json_str);
+        if (recovered_buf != NULL &&
+            json_parser_load_from_data (parser, recovered_buf, -1, NULL)) {
+            g_clear_error (&local_err);
+            active_json = recovered_buf;
+            recovered = TRUE;
+            PULS_LOG_INFO ("Recovered partial/wrapped smartctl JSON (%zu -> %zu bytes)",
+                           strlen (json_str), strlen (recovered_buf));
+        } else {
+            g_propagate_error (error, local_err);
+            return NULL;
+        }
+    }
+
+    JsonNode *root_node = json_parser_get_root (parser);
+    if (root_node == NULL || !JSON_NODE_HOLDS_OBJECT (root_node)) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                     "smartctl JSON root is not an object");
+        return NULL;
+    }
+
+    JsonObject *root = json_node_get_object (root_node);
+    guint anomalies = count_schema_anomalies (root);
+    if (anomalies > 0) {
+        PULS_LOG_DEBUG ("Contained %u smartctl JSON schema anomalies; parsing remaining valid sections",
+                        anomalies);
+    }
+
+    if (out_recovered)
+        *out_recovered = recovered;
+    if (out_schema_warnings)
+        *out_schema_warnings = anomalies;
+
+    return parse_smart_root_object (root, active_json);
+}
+
+PulsSmartData *
+puls_smart_parser_parse_json (const gchar *json_str,
+                              GError     **error)
+{
+    return puls_smart_parser_parse_json_with_recovery (json_str, NULL, NULL, error);
 }
 
 static gboolean
@@ -870,8 +1329,12 @@ puls_smart_json_has_device_data (const gchar *json_str)
         return TRUE;
 
     g_autoptr(JsonParser) parser = json_parser_new ();
-    if (!json_parser_load_from_data (parser, json_str, -1, NULL))
-        return FALSE;
+    g_autofree gchar *recovered = NULL;
+    if (!json_parser_load_from_data (parser, json_str, -1, NULL)) {
+        recovered = puls_smart_parser_recover_json_string (json_str);
+        if (recovered == NULL || !json_parser_load_from_data (parser, recovered, -1, NULL))
+            return FALSE;
+    }
 
     JsonNode *root_node = json_parser_get_root (parser);
     if (root_node == NULL || !JSON_NODE_HOLDS_OBJECT (root_node))

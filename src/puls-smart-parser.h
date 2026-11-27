@@ -49,6 +49,14 @@ typedef struct {
 
 PulsSmartData       *puls_smart_parser_parse_json        (const gchar             *json_str,
                                                           GError                 **error);
+PulsSmartData       *puls_smart_parser_parse_json_with_recovery (const gchar      *json_str,
+                                                                        gboolean         *out_recovered,
+                                                                        guint            *out_schema_warnings,
+                                                                        GError          **error);
+gchar               *puls_smart_parser_recover_json_string (const gchar           *raw_input);
+gboolean             puls_smart_parser_validate_schema   (const gchar             *json_str,
+                                                          guint                   *out_warning_count,
+                                                          GError                 **error);
 
 void                 puls_smartctl_decode_exit_status    (gint                     exit_status,
                                                           PulsSmartctlExitInfo    *out_info);
