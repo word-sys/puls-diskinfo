@@ -250,10 +250,52 @@ gchar *
 puls_helper_format_read_smart (const gchar *device_path,
                                gboolean     check_standby)
 {
+    return puls_helper_format_read_smart_with_type (device_path, check_standby, NULL);
+}
+
+/**
+ * puls_helper_format_read_smart_with_type:
+ * @device_path: Device node path.
+ * @check_standby: Whether to include the `standby` power-check option.
+ * @device_type: (nullable): Optional whitelisted smartctl `-d` bridge type
+ *   (e.g. `"sat"`, `"sntasmedia"`, `"sntjmicron"`, `"sntrealtek"`), or %NULL.
+ *
+ * Returns: (transfer full) (nullable): Helper IPC command line ending in `\n`,
+ *   or %NULL if @device_type is non-empty and not whitelisted.
+ */
+gchar *
+puls_helper_format_read_smart_with_type (const gchar *device_path,
+                                         gboolean     check_standby,
+                                         const gchar *device_type)
+{
     g_return_val_if_fail (device_path != NULL, NULL);
 
-    if (check_standby)
-        return g_strdup_printf ("%s %s standby\n", PULS_HELPER_CMD_READ_SMART, device_path);
+    if (device_type != NULL && *device_type != '\0') {
+        if (!puls_helper_is_valid_device_type (device_type))
+            return NULL;
+
+        if (check_standby) {
+            return g_strdup_printf ("%s %s %s %s %s\n",
+                                    PULS_HELPER_CMD_READ_SMART,
+                                    device_path,
+                                    PULS_HELPER_READ_OPT_STANDBY,
+                                    PULS_HELPER_READ_OPT_DEVTYPE,
+                                    device_type);
+        }
+
+        return g_strdup_printf ("%s %s %s %s\n",
+                                PULS_HELPER_CMD_READ_SMART,
+                                device_path,
+                                PULS_HELPER_READ_OPT_DEVTYPE,
+                                device_type);
+    }
+
+    if (check_standby) {
+        return g_strdup_printf ("%s %s %s\n",
+                                PULS_HELPER_CMD_READ_SMART,
+                                device_path,
+                                PULS_HELPER_READ_OPT_STANDBY);
+    }
 
     return g_strdup_printf ("%s %s\n", PULS_HELPER_CMD_READ_SMART, device_path);
 }
@@ -2090,35 +2132,54 @@ spawn_smartctl_fallback_sync (const gchar       *cmdline,
 static gchar *
 prod_smartctl_direct_read (const gchar  *device_path,
                            gboolean      check_standby,
-                           gpointer      user_data G_GNUC_UNUSED,
+                           gpointer      user_data,
                            GError      **error)
 {
+    const gchar *dev_type = (const gchar *)user_data;
     const PulsSmartctlCaps *caps = puls_smartctl_get_capabilities ();
-    g_autofree gchar *cmdline = puls_build_smartctl_read_command_for_caps (device_path, check_standby, caps);
+    g_autofree gchar *cmdline = puls_build_smartctl_read_command_with_type (
+        device_path, check_standby, dev_type, caps);
+    if (cmdline == NULL) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                     "Disallowed smartctl device type: %s",
+                     dev_type ? dev_type : "(null)");
+        return NULL;
+    }
     return spawn_smartctl_direct_sync (cmdline, error);
 }
 
 static gchar *
 prod_smartctl_helper_read (const gchar  *device_path,
                            gboolean      check_standby,
-                           gpointer      user_data G_GNUC_UNUSED,
+                           gpointer      user_data,
                            GError      **error)
 {
+    const gchar *dev_type = (const gchar *)user_data;
     PulsElevationMode mode = puls_get_elevation_mode ();
 
     /* Use privileged or group-credential helper when elevation/group access applies */
     if (mode != PULS_ELEVATION_NONE) {
-        g_autofree gchar *cmd = puls_build_helper_read_command (device_path, check_standby);
-        gchar *res = communicate_with_helper (cmd, error);
-        if (res != NULL)
-            return res;
+        g_autofree gchar *cmd = puls_helper_format_read_smart_with_type (
+            device_path, check_standby, dev_type);
+        if (cmd != NULL) {
+            gchar *res = communicate_with_helper (cmd, error);
+            if (res != NULL)
+                return res;
 
-        if (error)
-            g_clear_error (error);
+            if (error)
+                g_clear_error (error);
+        }
     }
 
     const PulsSmartctlCaps *caps = puls_smartctl_get_capabilities ();
-    g_autofree gchar *cmdline = puls_build_smartctl_read_command_for_caps (device_path, check_standby, caps);
+    g_autofree gchar *cmdline = puls_build_smartctl_read_command_with_type (
+        device_path, check_standby, dev_type, caps);
+    if (cmdline == NULL) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                     "Disallowed smartctl device type: %s",
+                     dev_type ? dev_type : "(null)");
+        return NULL;
+    }
     return spawn_smartctl_fallback_sync (cmdline, mode, error);
 }
 
@@ -2127,10 +2188,26 @@ puls_run_smartctl_sync_with_options (const gchar *device_path,
                                      gboolean     check_standby,
                                      GError     **error)
 {
+    return puls_run_smartctl_sync_with_type (device_path, check_standby, NULL, error);
+}
+
+gchar *
+puls_run_smartctl_sync_with_type (const gchar *device_path,
+                                  gboolean     check_standby,
+                                  const gchar *device_type,
+                                  GError     **error)
+{
     if (!puls_device_path_is_valid (device_path)) {
         g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
                      "Invalid or unsafe device path: %s",
                      device_path ? device_path : "(null)");
+        return NULL;
+    }
+
+    const gchar *safe_type = (device_type != NULL && *device_type != '\0') ? device_type : NULL;
+    if (safe_type != NULL && !puls_helper_is_valid_device_type (safe_type)) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                     "Disallowed smartctl device type: %s", safe_type);
         return NULL;
     }
 
@@ -2143,13 +2220,15 @@ puls_run_smartctl_sync_with_options (const gchar *device_path,
         zero_elev,
         prod_smartctl_direct_read,
         prod_smartctl_helper_read,
-        NULL,
+        (gpointer)safe_type,
         &used_direct,
         error);
 
     if (used_direct && out != NULL) {
-        PULS_LOG_DEBUG ("Zero-elevation mode: direct smartctl read succeeded for %s (pkexec/helper bypassed)",
-                        device_path);
+        PULS_LOG_DEBUG ("Zero-elevation mode: direct smartctl read succeeded for %s%s%s (pkexec/helper bypassed)",
+                        device_path,
+                        safe_type ? " -d " : "",
+                        safe_type ? safe_type : "");
     }
 
     return out;
@@ -6129,14 +6208,44 @@ puls_should_use_standby_check (const gchar *device_path)
  *
  * Returns: (transfer full): Command line string for `smartctl`.
  */
+/**
+ * puls_build_smartctl_read_command_with_type:
+ * @device_path: Device node path.
+ * @check_standby: Whether to pass `-n standby` before `-a`.
+ * @device_type: (nullable): Optional whitelisted `-d` bridge type, or %NULL.
+ * @caps: (nullable): Probed smartctl capabilities, or %NULL for default flags.
+ *
+ * Builds the `smartctl` CLI command line for direct/fallback SMART reads,
+ * honoring @caps (e.g. omitting `-j` if the installed smartctl lacks JSON).
+ *
+ * Returns: (transfer full) (nullable): Formatted command string, or %NULL if
+ *   @device_type is non-empty and not whitelisted.
+ */
 gchar *
-puls_build_smartctl_read_command_for_caps (const gchar            *device_path,
-                                           gboolean                check_standby,
-                                           const PulsSmartctlCaps *caps)
+puls_build_smartctl_read_command_with_type (const gchar            *device_path,
+                                            gboolean                check_standby,
+                                            const gchar            *device_type,
+                                            const PulsSmartctlCaps *caps)
 {
     g_return_val_if_fail (device_path != NULL, NULL);
 
     gboolean use_json = (caps == NULL || !caps->available || caps->supports_json);
+    const gchar *safe_type = (device_type != NULL && *device_type != '\0') ? device_type : NULL;
+
+    if (safe_type != NULL && !puls_helper_is_valid_device_type (safe_type))
+        return NULL;
+
+    if (safe_type != NULL) {
+        if (use_json) {
+            if (check_standby)
+                return g_strdup_printf ("smartctl -n standby -d %s -a -j %s", safe_type, device_path);
+            return g_strdup_printf ("smartctl -d %s -a -j %s", safe_type, device_path);
+        }
+
+        if (check_standby)
+            return g_strdup_printf ("smartctl -n standby -d %s -a %s", safe_type, device_path);
+        return g_strdup_printf ("smartctl -d %s -a %s", safe_type, device_path);
+    }
 
     if (use_json) {
         if (check_standby)
@@ -6147,6 +6256,14 @@ puls_build_smartctl_read_command_for_caps (const gchar            *device_path,
     if (check_standby)
         return g_strdup_printf ("smartctl -n standby -a %s", device_path);
     return g_strdup_printf ("smartctl -a %s", device_path);
+}
+
+gchar *
+puls_build_smartctl_read_command_for_caps (const gchar            *device_path,
+                                           gboolean                check_standby,
+                                           const PulsSmartctlCaps *caps)
+{
+    return puls_build_smartctl_read_command_with_type (device_path, check_standby, NULL, caps);
 }
 
 gchar *

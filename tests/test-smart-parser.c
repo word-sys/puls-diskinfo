@@ -162,6 +162,177 @@ test_parser_invalid_json (void)
     g_clear_error (&error);
 }
 
+typedef struct {
+    PulsSmartDeviceType  winning_type;
+    const gchar         *success_json;
+    const gchar         *failure_json;
+    guint                call_count;
+    PulsSmartDeviceType  called_types[PULS_SMART_USB_PROBE_MAX_STEPS];
+} MockUsbProbeCtx;
+
+static gchar *
+mock_usb_probe_fn (const gchar         *device_path G_GNUC_UNUSED,
+                   PulsSmartDeviceType  dev_type,
+                   gpointer             user_data,
+                   GError             **error G_GNUC_UNUSED)
+{
+    MockUsbProbeCtx *ctx = user_data;
+    if (ctx->call_count < PULS_SMART_USB_PROBE_MAX_STEPS)
+        ctx->called_types[ctx->call_count] = dev_type;
+    ctx->call_count++;
+
+    if (dev_type == ctx->winning_type && ctx->success_json != NULL)
+        return g_strdup (ctx->success_json);
+
+    return ctx->failure_json ? g_strdup (ctx->failure_json) : NULL;
+}
+
+static void
+test_parser_usb_bridge_resolver (void)
+{
+    /* 1. Flag mapping */
+    g_assert_null (puls_smart_device_type_to_flag (PULS_SMART_DEVTYPE_AUTO));
+    g_assert_cmpstr (puls_smart_device_type_to_flag (PULS_SMART_DEVTYPE_SAT), ==, "sat");
+    g_assert_cmpstr (puls_smart_device_type_to_flag (PULS_SMART_DEVTYPE_SNT_ASMEDIA), ==, "sntasmedia");
+    g_assert_cmpstr (puls_smart_device_type_to_flag (PULS_SMART_DEVTYPE_SNT_JMICRON), ==, "sntjmicron");
+    g_assert_cmpstr (puls_smart_device_type_to_flag (PULS_SMART_DEVTYPE_SNT_REALTEK), ==, "sntrealtek");
+
+    /* 2. USB VID/PID bridge chipset prediction */
+    g_assert_cmpint (puls_smart_device_type_from_usb_ids ("174c", "2362", NULL), ==, PULS_SMART_DEVTYPE_SNT_ASMEDIA);
+    g_assert_cmpint (puls_smart_device_type_from_usb_ids ("174C", "55AA", NULL), ==, PULS_SMART_DEVTYPE_SAT);
+    g_assert_cmpint (puls_smart_device_type_from_usb_ids ("0bda", "9210", NULL), ==, PULS_SMART_DEVTYPE_SNT_REALTEK);
+    g_assert_cmpint (puls_smart_device_type_from_usb_ids ("152d", "0583", NULL), ==, PULS_SMART_DEVTYPE_SNT_JMICRON);
+    g_assert_cmpint (puls_smart_device_type_from_usb_ids ("152d", "0578", NULL), ==, PULS_SMART_DEVTYPE_SAT);
+    g_assert_cmpint (puls_smart_device_type_from_usb_ids ("05e3", "0749", NULL), ==, PULS_SMART_DEVTYPE_SAT);
+    g_assert_cmpint (puls_smart_device_type_from_usb_ids ("ffff", "0001", NULL), ==, PULS_SMART_DEVTYPE_AUTO);
+
+    /* 3. Ordered sequence deduplication and VID/PID prioritization */
+    PulsSmartDeviceType order[PULS_SMART_USB_PROBE_MAX_STEPS] = { 0 };
+    guint n = puls_smart_build_usb_probe_order (NULL, NULL, order, G_N_ELEMENTS (order));
+    g_assert_cmpuint (n, ==, 5);
+    g_assert_cmpint (order[0], ==, PULS_SMART_DEVTYPE_AUTO);
+    g_assert_cmpint (order[1], ==, PULS_SMART_DEVTYPE_SAT);
+    g_assert_cmpint (order[2], ==, PULS_SMART_DEVTYPE_SNT_ASMEDIA);
+    g_assert_cmpint (order[3], ==, PULS_SMART_DEVTYPE_SNT_JMICRON);
+    g_assert_cmpint (order[4], ==, PULS_SMART_DEVTYPE_SNT_REALTEK);
+
+    PulsUsbBridgeInfo asm_info = {
+        .vendor_id = "174c",
+        .product_id = "2362",
+        .bridge_chip = "ASMedia ASM2362 NVMe-USB Bridge",
+    };
+    n = puls_smart_build_usb_probe_order (&asm_info, NULL, order, G_N_ELEMENTS (order));
+    g_assert_cmpuint (n, ==, 5);
+    g_assert_cmpint (order[0], ==, PULS_SMART_DEVTYPE_AUTO);
+    g_assert_cmpint (order[1], ==, PULS_SMART_DEVTYPE_SNT_ASMEDIA);
+    g_assert_cmpint (order[2], ==, PULS_SMART_DEVTYPE_SAT);
+
+    /* 4. Version/capability gating via PulsSmartctlCaps */
+    PulsSmartctlCaps caps_70 = {
+        .available = TRUE,
+        .major = 7,
+        .minor = 0,
+        .supports_sat = TRUE,
+    };
+    n = puls_smart_build_usb_probe_order (&asm_info, &caps_70, order, G_N_ELEMENTS (order));
+    g_assert_cmpuint (n, ==, 2);
+    g_assert_cmpint (order[0], ==, PULS_SMART_DEVTYPE_AUTO);
+    g_assert_cmpint (order[1], ==, PULS_SMART_DEVTYPE_SAT);
+
+    /* 5. Usable JSON detection vs unknown-bridge stub */
+    const gchar *unknown_bridge_json =
+        "{"
+        "  \"smartctl\": {"
+        "    \"exit_status\": 1,"
+        "    \"messages\": [{"
+        "      \"string\": \"/dev/sdb: Unknown USB bridge [0x174c:0x2362]\\nPlease specify device type with the -d option.\","
+        "      \"severity\": \"error\""
+        "    }]"
+        "  }"
+        "}";
+    const gchar *usb_nvme_json =
+        "{"
+        "  \"smartctl\": { \"exit_status\": 0 },"
+        "  \"device\": { \"name\": \"/dev/sdb\", \"type\": \"sntasmedia\" },"
+        "  \"model_name\": \"WD Black SN770 USB\","
+        "  \"serial_number\": \"USB-NVME-001\","
+        "  \"smart_status\": { \"passed\": true },"
+        "  \"temperature\": { \"current\": 41 },"
+        "  \"nvme_smart_health_information_log\": {"
+        "    \"critical_warning\": 0,"
+        "    \"temperature\": 41,"
+        "    \"available_spare\": 100,"
+        "    \"percentage_used\": 2,"
+        "    \"power_on_hours\": 120"
+        "  }"
+        "}";
+
+    g_assert_false (puls_smart_json_has_device_data (NULL));
+    g_assert_false (puls_smart_json_has_device_data ("{ invalid"));
+    g_assert_false (puls_smart_json_has_device_data (unknown_bridge_json));
+    g_assert_true (puls_smart_json_has_device_data (usb_nvme_json));
+    g_assert_true (puls_smart_json_has_device_data (
+        "{\"smartctl\":{\"exit_status\":2,\"messages\":[{\"string\":\"Device is in STANDBY mode, exit(2)\"}]}}"));
+
+    /* 6. Full fallback chain starting from AUTO -> sat -> sntasmedia */
+    MockUsbProbeCtx ctx1 = {
+        .winning_type = PULS_SMART_DEVTYPE_SNT_ASMEDIA,
+        .success_json = usb_nvme_json,
+        .failure_json = unknown_bridge_json,
+    };
+    PulsSmartDeviceType resolved = PULS_SMART_DEVTYPE_AUTO;
+    GError *err = NULL;
+    g_autofree gchar *resolved_json = puls_smart_resolve_usb_bridge_json (
+        "/dev/sdb", NULL, NULL, NULL, mock_usb_probe_fn, &ctx1, &resolved, &err);
+    g_assert_no_error (err);
+    g_assert_nonnull (resolved_json);
+    g_assert_cmpint (resolved, ==, PULS_SMART_DEVTYPE_SNT_ASMEDIA);
+    g_assert_cmpuint (ctx1.call_count, ==, 3);
+    g_assert_cmpint (ctx1.called_types[0], ==, PULS_SMART_DEVTYPE_AUTO);
+    g_assert_cmpint (ctx1.called_types[1], ==, PULS_SMART_DEVTYPE_SAT);
+    g_assert_cmpint (ctx1.called_types[2], ==, PULS_SMART_DEVTYPE_SNT_ASMEDIA);
+
+    g_autoptr(PulsSmartData) parsed = puls_smart_parser_parse_json (resolved_json, &err);
+    g_assert_no_error (err);
+    g_assert_nonnull (parsed);
+    g_assert_cmpstr (puls_smart_data_get_model_name (parsed), ==, "WD Black SN770 USB");
+    g_assert_cmpint (puls_smart_data_get_health (parsed), ==, PULS_HEALTH_GOOD);
+
+    /* 7. VID/PID hint + pre-fetched initial_auto_json avoids redundant probes */
+    PulsUsbBridgeInfo rtl_info = {
+        .vendor_id = "0bda",
+        .product_id = "9210",
+        .bridge_chip = "Realtek RTL9210B NVMe/SATA Bridge",
+    };
+    MockUsbProbeCtx ctx2 = {
+        .winning_type = PULS_SMART_DEVTYPE_SNT_REALTEK,
+        .success_json = usb_nvme_json,
+        .failure_json = unknown_bridge_json,
+    };
+    resolved = PULS_SMART_DEVTYPE_AUTO;
+    g_autofree gchar *rtl_json = puls_smart_resolve_usb_bridge_json (
+        "/dev/sdc", &rtl_info, NULL, unknown_bridge_json, mock_usb_probe_fn, &ctx2, &resolved, &err);
+    g_assert_no_error (err);
+    g_assert_nonnull (rtl_json);
+    g_assert_cmpint (resolved, ==, PULS_SMART_DEVTYPE_SNT_REALTEK);
+    g_assert_cmpuint (ctx2.call_count, ==, 1);
+    g_assert_cmpint (ctx2.called_types[0], ==, PULS_SMART_DEVTYPE_SNT_REALTEK);
+
+    /* 8. All candidates fail -> falls back to initial stub rather than losing error JSON */
+    MockUsbProbeCtx ctx3 = {
+        .winning_type = PULS_SMART_DEVTYPE_AUTO,
+        .success_json = NULL,
+        .failure_json = unknown_bridge_json,
+    };
+    resolved = PULS_SMART_DEVTYPE_SAT;
+    g_autofree gchar *fallback_json = puls_smart_resolve_usb_bridge_json (
+        "/dev/sdd", NULL, NULL, unknown_bridge_json, mock_usb_probe_fn, &ctx3, &resolved, &err);
+    g_assert_no_error (err);
+    g_assert_cmpstr (fallback_json, ==, unknown_bridge_json);
+    g_assert_cmpint (resolved, ==, PULS_SMART_DEVTYPE_AUTO);
+    g_assert_cmpuint (ctx3.call_count, ==, 4);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -174,6 +345,7 @@ main (int argc, char **argv)
     g_test_add_func ("/parser/caution-drive", test_parser_caution_drive);
     g_test_add_func ("/parser/failing-drive", test_parser_failing_drive);
     g_test_add_func ("/parser/invalid-json", test_parser_invalid_json);
+    g_test_add_func ("/parser/usb-bridge-resolver", test_parser_usb_bridge_resolver);
 
     return g_test_run ();
 }

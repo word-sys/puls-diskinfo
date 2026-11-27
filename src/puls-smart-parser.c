@@ -14,6 +14,7 @@
 
 #include "puls-smart-parser.h"
 #include "puls-utils.h"
+#include "../helper/puls-helper-protocol.h"
 #include <json-glib/json-glib.h>
 #include <string.h>
 
@@ -598,4 +599,325 @@ puls_smart_parser_parse_json (const gchar *json_str,
     }
 
     return data;
+}
+
+static gboolean
+smart_device_type_supported_by_caps (PulsSmartDeviceType     dev_type,
+                                     const PulsSmartctlCaps *caps)
+{
+    if (caps == NULL || !caps->available)
+        return TRUE;
+
+    switch (dev_type) {
+    case PULS_SMART_DEVTYPE_AUTO:
+        return TRUE;
+    case PULS_SMART_DEVTYPE_SAT:
+        return caps->supports_sat;
+    case PULS_SMART_DEVTYPE_SNT_ASMEDIA:
+        return caps->supports_sntasmedia;
+    case PULS_SMART_DEVTYPE_SNT_JMICRON:
+        return caps->supports_sntjmicron;
+    case PULS_SMART_DEVTYPE_SNT_REALTEK:
+        return caps->supports_sntrealtek;
+    default:
+        return FALSE;
+    }
+}
+
+static gboolean
+usb_hint_contains (const gchar *lower_hint, const gchar *needle)
+{
+    return (lower_hint != NULL && needle != NULL && strstr (lower_hint, needle) != NULL);
+}
+
+/**
+ * puls_smart_device_type_to_flag:
+ * @dev_type: Device type enum value.
+ *
+ * Maps @dev_type to the whitelisted `smartctl -d` argument string, or %NULL for
+ * %PULS_SMART_DEVTYPE_AUTO.
+ *
+ * Returns: (nullable): Static device-type flag string or %NULL.
+ */
+const gchar *
+puls_smart_device_type_to_flag (PulsSmartDeviceType dev_type)
+{
+    switch (dev_type) {
+    case PULS_SMART_DEVTYPE_SAT:
+        return PULS_HELPER_DEVTYPE_SAT;
+    case PULS_SMART_DEVTYPE_SNT_ASMEDIA:
+        return PULS_HELPER_DEVTYPE_SNT_ASMEDIA;
+    case PULS_SMART_DEVTYPE_SNT_JMICRON:
+        return PULS_HELPER_DEVTYPE_SNT_JMICRON;
+    case PULS_SMART_DEVTYPE_SNT_REALTEK:
+        return PULS_HELPER_DEVTYPE_SNT_REALTEK;
+    case PULS_SMART_DEVTYPE_AUTO:
+    default:
+        return NULL;
+    }
+}
+
+/**
+ * puls_smart_device_type_from_usb_ids:
+ * @vid: (nullable): 4-digit hex USB vendor ID.
+ * @pid: (nullable): 4-digit hex USB product ID.
+ * @bridge_hint: (nullable): Human-readable chipset or USB product hint string.
+ *
+ * Infers the most likely `smartctl -d` passthrough type for a USB bridge.
+ *
+ * Returns: Predicted #PulsSmartDeviceType, or %PULS_SMART_DEVTYPE_AUTO when no
+ *   specific bridge preference is known.
+ */
+PulsSmartDeviceType
+puls_smart_device_type_from_usb_ids (const gchar *vid,
+                                     const gchar *pid,
+                                     const gchar *bridge_hint)
+{
+    g_autofree gchar *lower_vid = vid ? g_ascii_strdown (vid, -1) : NULL;
+    g_autofree gchar *lower_pid = pid ? g_ascii_strdown (pid, -1) : NULL;
+    g_autofree gchar *lower_hint = bridge_hint ? g_ascii_strdown (bridge_hint, -1) : NULL;
+
+    gboolean hint_nvme = usb_hint_contains (lower_hint, "nvme");
+    gboolean hint_sata = usb_hint_contains (lower_hint, "sata") ||
+                         usb_hint_contains (lower_hint, "hdd") ||
+                         usb_hint_contains (lower_hint, "ata");
+
+    /* ASMedia bridges (174c): SATA vs NVMe families */
+    if (g_strcmp0 (lower_vid, "174c") == 0 || usb_hint_contains (lower_hint, "asmedia")) {
+        if (g_strcmp0 (lower_pid, "55aa") == 0 ||
+            g_strcmp0 (lower_pid, "1153") == 0 ||
+            g_strcmp0 (lower_pid, "1051") == 0 ||
+            g_strcmp0 (lower_pid, "1053") == 0) {
+            return PULS_SMART_DEVTYPE_SAT;
+        }
+        if (g_strcmp0 (lower_pid, "2362") == 0 ||
+            g_strcmp0 (lower_pid, "2364") == 0 ||
+            g_strcmp0 (lower_pid, "2464") == 0 ||
+            hint_nvme) {
+            return PULS_SMART_DEVTYPE_SNT_ASMEDIA;
+        }
+        if (hint_sata && !hint_nvme)
+            return PULS_SMART_DEVTYPE_SAT;
+        return PULS_SMART_DEVTYPE_SNT_ASMEDIA;
+    }
+
+    /* Realtek bridges (0bda): RTL9210 / RTL9201 NVMe or USB-SATA */
+    if (g_strcmp0 (lower_vid, "0bda") == 0 || usb_hint_contains (lower_hint, "realtek")) {
+        if (g_strcmp0 (lower_pid, "9210") == 0 ||
+            g_strcmp0 (lower_pid, "9201") == 0 ||
+            hint_nvme) {
+            return PULS_SMART_DEVTYPE_SNT_REALTEK;
+        }
+        if (hint_sata && !hint_nvme)
+            return PULS_SMART_DEVTYPE_SAT;
+        return PULS_SMART_DEVTYPE_SNT_REALTEK;
+    }
+
+    /* JMicron bridges (152d): JMS567/578/580 SATA vs JMS583 NVMe */
+    if (g_strcmp0 (lower_vid, "152d") == 0 || usb_hint_contains (lower_hint, "jmicron")) {
+        if (g_strcmp0 (lower_pid, "0567") == 0 ||
+            g_strcmp0 (lower_pid, "0578") == 0 ||
+            g_strcmp0 (lower_pid, "0580") == 0) {
+            return PULS_SMART_DEVTYPE_SAT;
+        }
+        if (g_strcmp0 (lower_pid, "0583") == 0 || hint_nvme)
+            return PULS_SMART_DEVTYPE_SNT_JMICRON;
+        if (hint_sata && !hint_nvme)
+            return PULS_SMART_DEVTYPE_SAT;
+        return PULS_SMART_DEVTYPE_SNT_JMICRON;
+    }
+
+    /* Genesys Logic (05e3) / VIA Labs (2109) / generic SATA USB bridges */
+    if (g_strcmp0 (lower_vid, "05e3") == 0 ||
+        g_strcmp0 (lower_vid, "2109") == 0 ||
+        (hint_sata && !hint_nvme)) {
+        return PULS_SMART_DEVTYPE_SAT;
+    }
+
+    return PULS_SMART_DEVTYPE_AUTO;
+}
+
+static void
+append_probe_candidate (PulsSmartDeviceType     candidate,
+                        const PulsSmartctlCaps *caps,
+                        PulsSmartDeviceType    *out_order,
+                        guint                   max_len,
+                        guint                  *io_count)
+{
+    if (*io_count >= max_len)
+        return;
+
+    if (!smart_device_type_supported_by_caps (candidate, caps))
+        return;
+
+    for (guint i = 0; i < *io_count; i++) {
+        if (out_order[i] == candidate)
+            return;
+    }
+
+    out_order[*io_count] = candidate;
+    (*io_count)++;
+}
+
+/**
+ * puls_smart_build_usb_probe_order:
+ * @bridge_info: (nullable): USB bridge identity parsed from sysfs.
+ * @caps: (nullable): Installed `smartctl` feature flags for gating `-d` types.
+ * @out_order: (out caller-allocates): Output array receiving ordered candidates.
+ * @max_len: Capacity of @out_order (typically %PULS_SMART_USB_PROBE_MAX_STEPS).
+ *
+ * Builds the deduplicated probe sequence starting with default auto-detection
+ * (`-a`), followed by any prioritized chipset flag inferred from @bridge_info,
+ * then the standard USB bridge fallbacks (`sat`, `sntasmedia`, `sntjmicron`,
+ * `sntrealtek`), filtered to flags supported by @caps.
+ *
+ * Returns: Number of probe steps written into @out_order.
+ */
+guint
+puls_smart_build_usb_probe_order (const PulsUsbBridgeInfo *bridge_info,
+                                  const PulsSmartctlCaps  *caps,
+                                  PulsSmartDeviceType     *out_order,
+                                  guint                    max_len)
+{
+    g_return_val_if_fail (out_order != NULL, 0);
+    g_return_val_if_fail (max_len > 0, 0);
+
+    static const PulsSmartDeviceType fallback_seq[] = {
+        PULS_SMART_DEVTYPE_SAT,
+        PULS_SMART_DEVTYPE_SNT_ASMEDIA,
+        PULS_SMART_DEVTYPE_SNT_JMICRON,
+        PULS_SMART_DEVTYPE_SNT_REALTEK,
+    };
+
+    guint count = 0;
+    append_probe_candidate (PULS_SMART_DEVTYPE_AUTO, caps, out_order, max_len, &count);
+
+    if (bridge_info != NULL) {
+        const gchar *hint = bridge_info->bridge_chip ? bridge_info->bridge_chip : bridge_info->product;
+        PulsSmartDeviceType preferred = puls_smart_device_type_from_usb_ids (
+            bridge_info->vendor_id, bridge_info->product_id, hint);
+        if (preferred != PULS_SMART_DEVTYPE_AUTO)
+            append_probe_candidate (preferred, caps, out_order, max_len, &count);
+    }
+
+    for (guint i = 0; i < G_N_ELEMENTS (fallback_seq); i++)
+        append_probe_candidate (fallback_seq[i], caps, out_order, max_len, &count);
+
+    return count;
+}
+
+/**
+ * puls_smart_json_has_device_data:
+ * @json_str: (nullable): Raw `smartctl -j` JSON output.
+ *
+ * Checks whether @json_str is valid JSON containing either a valid standby/sleep
+ * power report or SMART device telemetry (`smart_status`, ATA attributes, NVMe
+ * health log, or SCSI cycle counters), rather than an unknown-bridge error stub.
+ *
+ * Returns: %TRUE if @json_str holds usable drive telemetry.
+ */
+gboolean
+puls_smart_json_has_device_data (const gchar *json_str)
+{
+    if (json_str == NULL || *json_str == '\0')
+        return FALSE;
+
+    if (puls_power_state_is_sleeping (puls_parse_smartctl_standby_json (json_str)))
+        return TRUE;
+
+    g_autoptr(JsonParser) parser = json_parser_new ();
+    if (!json_parser_load_from_data (parser, json_str, -1, NULL))
+        return FALSE;
+
+    JsonNode *root_node = json_parser_get_root (parser);
+    if (root_node == NULL || !JSON_NODE_HOLDS_OBJECT (root_node))
+        return FALSE;
+
+    JsonObject *root = json_node_get_object (root_node);
+    if (json_object_has_member (root, "smart_status") ||
+        json_object_has_member (root, "ata_smart_attributes") ||
+        json_object_has_member (root, "nvme_smart_health_information_log") ||
+        json_object_has_member (root, "scsi_start_stop_cycle_counter")) {
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+/**
+ * puls_smart_resolve_usb_bridge_json:
+ * @device_path: Block or controller device node path.
+ * @bridge_info: (nullable): Sysfs USB bridge details for prioritizing `-d` flags.
+ * @caps: (nullable): Installed `smartctl` capabilities for flag gating.
+ * @initial_auto_json: (nullable): Output from an already-completed default `-a`
+ *   probe, to avoid running default `AUTO` twice when the caller already tried it.
+ * @probe_fn: Callback executing `smartctl` with a chosen #PulsSmartDeviceType.
+ * @user_data: Opaque pointer forwarded to @probe_fn.
+ * @out_resolved_type: (out) (optional): Winning #PulsSmartDeviceType.
+ * @error: (out) (optional): Last error if all probes fail without usable JSON.
+ *
+ * Executes the ordered USB bridge `-d` fallback sequence until a probe returns
+ * usable SMART JSON. If no candidate yields complete SMART telemetry, returns
+ * the best non-empty raw JSON fallback (e.g. @initial_auto_json) so callers can
+ * still report model/error status.
+ *
+ * Returns: (transfer full) (nullable): Raw SMART JSON string.
+ */
+gchar *
+puls_smart_resolve_usb_bridge_json (const gchar             *device_path,
+                                    const PulsUsbBridgeInfo *bridge_info,
+                                    const PulsSmartctlCaps  *caps,
+                                    const gchar             *initial_auto_json,
+                                    PulsSmartProbeFunc       probe_fn,
+                                    gpointer                 user_data,
+                                    PulsSmartDeviceType     *out_resolved_type,
+                                    GError                 **error)
+{
+    g_return_val_if_fail (device_path != NULL, NULL);
+    g_return_val_if_fail (probe_fn != NULL, NULL);
+
+    if (out_resolved_type != NULL)
+        *out_resolved_type = PULS_SMART_DEVTYPE_AUTO;
+
+    if (puls_smart_json_has_device_data (initial_auto_json))
+        return g_strdup (initial_auto_json);
+
+    PulsSmartDeviceType order[PULS_SMART_USB_PROBE_MAX_STEPS];
+    guint n_steps = puls_smart_build_usb_probe_order (bridge_info, caps, order, G_N_ELEMENTS (order));
+
+    g_autofree gchar *fallback_raw = (initial_auto_json && *initial_auto_json != '\0')
+                                     ? g_strdup (initial_auto_json) : NULL;
+    GError *last_err = NULL;
+
+    for (guint i = 0; i < n_steps; i++) {
+        PulsSmartDeviceType dev_type = order[i];
+
+        if (dev_type == PULS_SMART_DEVTYPE_AUTO && initial_auto_json != NULL)
+            continue;
+
+        g_clear_error (&last_err);
+        gchar *candidate_json = probe_fn (device_path, dev_type, user_data, &last_err);
+
+        if (puls_smart_json_has_device_data (candidate_json)) {
+            g_clear_error (&last_err);
+            if (out_resolved_type != NULL)
+                *out_resolved_type = dev_type;
+            return candidate_json;
+        }
+
+        if (fallback_raw == NULL && candidate_json != NULL && *candidate_json != '\0')
+            fallback_raw = g_steal_pointer (&candidate_json);
+        else
+            g_free (candidate_json);
+    }
+
+    if (fallback_raw != NULL) {
+        g_clear_error (&last_err);
+        return g_steal_pointer (&fallback_raw);
+    }
+
+    if (last_err != NULL)
+        g_propagate_error (error, last_err);
+
+    return NULL;
 }

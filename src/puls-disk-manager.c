@@ -651,16 +651,18 @@ build_probed_smart_data (const gchar *dev_path,
 static gboolean
 smart_json_has_usable_info (const gchar *json)
 {
-    if (json == NULL || *json == '\0')
-        return FALSE;
+    return puls_smart_json_has_device_data (json);
+}
 
-    if (puls_power_state_is_sleeping (puls_parse_smartctl_standby_json (json)))
-        return TRUE;
-
-    return (strstr (json, "\"smart_status\"") != NULL ||
-            strstr (json, "\"ata_smart_attributes\"") != NULL ||
-            strstr (json, "\"nvme_smart_health_information_log\"") != NULL ||
-            strstr (json, "\"scsi_start_stop_cycle_counter\"") != NULL);
+static gchar *
+probe_smartctl_with_devtype (const gchar         *device_path,
+                             PulsSmartDeviceType  dev_type,
+                             gpointer             user_data G_GNUC_UNUSED,
+                             GError             **error)
+{
+    const gchar *flag = puls_smart_device_type_to_flag (dev_type);
+    gboolean use_standby = puls_should_use_standby_check (device_path);
+    return puls_run_smartctl_sync_with_type (device_path, use_standby, flag, error);
 }
 
 static gchar *
@@ -694,6 +696,43 @@ probe_device_data_blocking (const gchar *dev_path,
             GError *error = NULL;
             owned_json = puls_run_smartctl_sync (query_dev, &error);
             g_clear_error (&error);
+
+            if (!smart_json_has_usable_info (owned_json)) {
+                g_autofree gchar *base = g_path_get_basename (dev_path);
+                PulsUsbBridgeInfo usb_info = {0};
+                gboolean has_usb_bridge = puls_sysfs_read_usb_bridge_info (base, &usb_info);
+                gboolean is_usb = has_usb_bridge ||
+                                  (puls_detect_transport_protocol (dev_path) == PULS_TRANSPORT_USB);
+
+                if (is_usb) {
+                    PulsSmartDeviceType resolved_type = PULS_SMART_DEVTYPE_AUTO;
+                    const PulsSmartctlCaps *caps = puls_smartctl_get_capabilities ();
+                    GError *usb_err = NULL;
+                    gchar *usb_json = puls_smart_resolve_usb_bridge_json (
+                        query_dev,
+                        has_usb_bridge ? &usb_info : NULL,
+                        caps,
+                        owned_json,
+                        probe_smartctl_with_devtype,
+                        NULL,
+                        &resolved_type,
+                        &usb_err);
+                    g_clear_error (&usb_err);
+
+                    if (smart_json_has_usable_info (usb_json)) {
+                        const gchar *flag = puls_smart_device_type_to_flag (resolved_type);
+                        PULS_LOG_INFO ("USB bridge resolver succeeded for %s using -d %s",
+                                       query_dev, flag ? flag : "auto");
+                        g_free (owned_json);
+                        owned_json = usb_json;
+                    } else {
+                        g_free (usb_json);
+                    }
+                }
+
+                if (has_usb_bridge)
+                    puls_usb_bridge_info_clear (&usb_info);
+            }
 
             if (!smart_json_has_usable_info (owned_json)) {
                 g_autofree gchar *sg_dev = resolve_sg_passthrough_device (dev_path);

@@ -205,6 +205,7 @@ test_handshake_and_state_machine (void)
     g_assert_nonnull (strstr (payload, "\"version\":2"));
     g_assert_nonnull (strstr (payload, "\"streaming\":true"));
     g_assert_nonnull (strstr (payload, "\"chunk_frame\":\"CHUNK\""));
+    g_assert_nonnull (strstr (payload, "\"device_types\":[\"sat\",\"sntasmedia\",\"sntjmicron\",\"sntrealtek\"]"));
     g_clear_pointer (&payload, g_free);
 
     /* Re-handshake is idempotent */
@@ -649,6 +650,88 @@ test_parser_unit_fuzzer (void)
     }
 }
 
+/* =========================================================================
+ * 8. Whitelisted USB Bridge Device Type (-d) IPC Validation
+ * ========================================================================= */
+static void
+test_read_smart_device_type_whitelist (void)
+{
+    g_assert_true (puls_helper_is_valid_device_type ("sat"));
+    g_assert_true (puls_helper_is_valid_device_type ("sntasmedia"));
+    g_assert_true (puls_helper_is_valid_device_type ("sntjmicron"));
+    g_assert_true (puls_helper_is_valid_device_type ("sntrealtek"));
+    g_assert_false (puls_helper_is_valid_device_type (NULL));
+    g_assert_false (puls_helper_is_valid_device_type (""));
+    g_assert_false (puls_helper_is_valid_device_type ("SAT"));
+    g_assert_false (puls_helper_is_valid_device_type ("sat;id"));
+    g_assert_false (puls_helper_is_valid_device_type ("usbcypress"));
+
+    g_autofree gchar *ipc_sat = puls_helper_format_read_smart_with_type ("/dev/sdb", FALSE, "sat");
+    g_assert_cmpstr (ipc_sat, ==, "READ_SMART /dev/sdb type sat\n");
+    g_autofree gchar *ipc_standby_snt = puls_helper_format_read_smart_with_type ("/dev/sdb", TRUE, "sntasmedia");
+    g_assert_cmpstr (ipc_standby_snt, ==, "READ_SMART /dev/sdb standby type sntasmedia\n");
+    g_assert_null (puls_helper_format_read_smart_with_type ("/dev/sdb", FALSE, "badtype"));
+
+    g_autofree gchar *cli_snt = puls_build_smartctl_read_command_with_type ("/dev/sdb", FALSE, "sntjmicron", NULL);
+    g_assert_cmpstr (cli_snt, ==, "smartctl -d sntjmicron -a -j /dev/sdb");
+    g_autofree gchar *cli_standby = puls_build_smartctl_read_command_with_type ("/dev/sdb", TRUE, "sntrealtek", NULL);
+    g_assert_cmpstr (cli_standby, ==, "smartctl -n standby -d sntrealtek -a -j /dev/sdb");
+    g_assert_null (puls_build_smartctl_read_command_with_type ("/dev/sdb", FALSE, "nvme;id", NULL));
+
+    HelperHarness h;
+    harness_start (&h);
+    harness_handshake (&h);
+
+    static const gchar * const allowed_cmds[] = {
+        "READ_SMART /dev/sdzz type sat\n",
+        "READ_SMART /dev/sdzz type sntasmedia\n",
+        "READ_SMART /dev/sdzz type sntjmicron\n",
+        "READ_SMART /dev/sdzz type sntrealtek\n",
+        "READ_SMART /dev/sdzz standby type sat\n",
+        NULL
+    };
+    for (gsize i = 0; allowed_cmds[i] != NULL; i++) {
+        gboolean ok = TRUE;
+        g_autofree gchar *err_code = NULL;
+        g_autofree gchar *payload = NULL;
+        harness_send_line (&h, allowed_cmds[i], &ok, &err_code, &payload);
+        g_assert_false (ok);
+        g_assert_cmpstr (err_code, ==, PULS_HELPER_ERR_NOT_FOUND);
+    }
+
+    static const gchar * const disallowed_cmds[] = {
+        "READ_SMART /dev/sdzz type unknown\n",
+        "READ_SMART /dev/sdzz type nvme;id\n",
+        "READ_SMART /dev/sdzz standby type nvme\n",
+        "READ_SMART /dev/sdzz type\n",
+        NULL
+    };
+    for (gsize i = 0; disallowed_cmds[i] != NULL; i++) {
+        gboolean ok = TRUE;
+        g_autofree gchar *err_code = NULL;
+        g_autofree gchar *payload = NULL;
+        harness_send_line (&h, disallowed_cmds[i], &ok, &err_code, &payload);
+        g_assert_false (ok);
+        g_assert_cmpstr (err_code, ==, PULS_HELPER_ERR_INVALID_SUBCMD);
+    }
+
+    static const gchar * const bad_arg_cmds[] = {
+        "READ_SMART /dev/sdzz raw sat\n",
+        "READ_SMART /dev/sdzz standby raw sat\n",
+        NULL
+    };
+    for (gsize i = 0; bad_arg_cmds[i] != NULL; i++) {
+        gboolean ok = TRUE;
+        g_autofree gchar *err_code = NULL;
+        g_autofree gchar *payload = NULL;
+        harness_send_line (&h, bad_arg_cmds[i], &ok, &err_code, &payload);
+        g_assert_false (ok);
+        g_assert_cmpstr (err_code, ==, PULS_HELPER_ERR_INVALID_ARG);
+    }
+
+    harness_quit_and_cleanup (&h);
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -661,6 +744,7 @@ main (int argc, char *argv[])
     g_test_add_func ("/helper/cli-single-shot-harness", test_cli_single_shot_harness);
     g_test_add_func ("/helper/deterministic-protocol-fuzzer", test_deterministic_protocol_fuzzer);
     g_test_add_func ("/helper/parser-unit-fuzzer", test_parser_unit_fuzzer);
+    g_test_add_func ("/helper/read-smart-device-type", test_read_smart_device_type_whitelist);
 
     return g_test_run ();
 }

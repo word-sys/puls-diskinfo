@@ -70,6 +70,10 @@ gchar   *puls_run_smartctl_sync   (const gchar *device_path,
 gchar   *puls_run_smartctl_sync_with_options (const gchar *device_path,
                                               gboolean     check_standby,
                                               GError     **error);
+gchar   *puls_run_smartctl_sync_with_type    (const gchar *device_path,
+                                              gboolean     check_standby,
+                                              const gchar *device_type,
+                                              GError     **error);
 
 /* Drive Standby / Sleep State Detection (-n standby) */
 gboolean       puls_should_use_standby_check     (const gchar *device_path);
@@ -86,6 +90,9 @@ gboolean       puls_helper_action_is_valid       (const gchar *action);
 gchar         *puls_helper_format_hello          (guint        version);
 gchar         *puls_helper_format_read_smart     (const gchar *device_path,
                                                   gboolean     check_standby);
+gchar         *puls_helper_format_read_smart_with_type (const gchar *device_path,
+                                                        gboolean     check_standby,
+                                                        const gchar *device_type);
 gchar         *puls_helper_format_action         (const gchar *device_path,
                                                   const gchar *action);
 gchar         *puls_helper_format_stream_scan    (const gchar *device_path,
@@ -324,6 +331,10 @@ gboolean                puls_smartctl_parse_json_format_version  (const gchar   
 gchar                  *puls_build_smartctl_read_command_for_caps(const gchar            *device_path,
                                                                   gboolean                check_standby,
                                                                   const PulsSmartctlCaps *caps);
+gchar                  *puls_build_smartctl_read_command_with_type(const gchar            *device_path,
+                                                                   gboolean                check_standby,
+                                                                   const gchar            *device_type,
+                                                                   const PulsSmartctlCaps *caps);
 gboolean puls_device_path_is_valid          (const gchar *path);
 gboolean puls_validate_device_node_in_dir   (const gchar *dev_root,
                                              const gchar *device_path,

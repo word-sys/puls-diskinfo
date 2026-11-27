@@ -256,21 +256,44 @@ map_cli_subcmd_to_op (const char *subcmd, HelperSmartOp *out_op)
     return map_action_to_op (subcmd, out_op);
 }
 
+static const char *
+resolve_whitelisted_devtype (const char *dev_type)
+{
+    if (dev_type == NULL)
+        return NULL;
+    if (strcmp (dev_type, PULS_HELPER_DEVTYPE_SAT) == 0)
+        return PULS_HELPER_DEVTYPE_SAT;
+    if (strcmp (dev_type, PULS_HELPER_DEVTYPE_SNT_ASMEDIA) == 0)
+        return PULS_HELPER_DEVTYPE_SNT_ASMEDIA;
+    if (strcmp (dev_type, PULS_HELPER_DEVTYPE_SNT_JMICRON) == 0)
+        return PULS_HELPER_DEVTYPE_SNT_JMICRON;
+    if (strcmp (dev_type, PULS_HELPER_DEVTYPE_SNT_REALTEK) == 0)
+        return PULS_HELPER_DEVTYPE_SNT_REALTEK;
+    return NULL;
+}
+
 /**
  * exec_whitelisted_smartctl:
  * @op: Strictly whitelisted smartctl operation.
  * @device: Verified canonical device node path.
+ * @dev_type: Optional whitelisted `-d` bridge type for read ops, or NULL.
  *
  * Replaces the current process image with smartctl using a fixed argument
  * table and a sanitized minimal environment. Never returns.
  */
 static void
-exec_whitelisted_smartctl (HelperSmartOp op, const char *device)
+exec_whitelisted_smartctl (HelperSmartOp op, const char *device, const char *dev_type)
 {
     const char *bin = resolve_smartctl_binary ();
     if (bin == NULL) {
         fprintf (stderr, "Error: smartctl binary not found in trusted system paths\n");
         _exit (4);
+    }
+
+    const char *safe_dev_type = resolve_whitelisted_devtype (dev_type);
+    if (dev_type != NULL && safe_dev_type == NULL) {
+        fprintf (stderr, "Error: Disallowed device type flag\n");
+        _exit (5);
     }
 
     char * const safe_envp[] = {
@@ -281,16 +304,27 @@ exec_whitelisted_smartctl (HelperSmartOp op, const char *device)
 
     /* Cast away const only for POSIX execve signature (argv strings are never mutated). */
     char *dev_arg = (char *)(uintptr_t)device;
+    char *type_arg = (char *)(uintptr_t)safe_dev_type;
 
     switch (op) {
     case HELPER_OP_SMART_READ: {
-        char *argv[] = { "smartctl", "-a", "-j", dev_arg, NULL };
-        execve (bin, argv, safe_envp);
+        if (type_arg != NULL) {
+            char *argv[] = { "smartctl", "-d", type_arg, "-a", "-j", dev_arg, NULL };
+            execve (bin, argv, safe_envp);
+        } else {
+            char *argv[] = { "smartctl", "-a", "-j", dev_arg, NULL };
+            execve (bin, argv, safe_envp);
+        }
         break;
     }
     case HELPER_OP_SMART_READ_STANDBY: {
-        char *argv[] = { "smartctl", "-n", "standby", "-a", "-j", dev_arg, NULL };
-        execve (bin, argv, safe_envp);
+        if (type_arg != NULL) {
+            char *argv[] = { "smartctl", "-n", "standby", "-d", type_arg, "-a", "-j", dev_arg, NULL };
+            execve (bin, argv, safe_envp);
+        } else {
+            char *argv[] = { "smartctl", "-n", "standby", "-a", "-j", dev_arg, NULL };
+            execve (bin, argv, safe_envp);
+        }
         break;
     }
     case HELPER_OP_SELFTEST_SHORT: {
@@ -339,11 +373,11 @@ run_single_command (const char *device, const char *subcmd)
         exit (2);
     }
 
-    exec_whitelisted_smartctl (op, device);
+    exec_whitelisted_smartctl (op, device, NULL);
 }
 
 static void
-handle_smartctl_command (const char *device, HelperSmartOp op)
+handle_smartctl_command (const char *device, HelperSmartOp op, const char *dev_type)
 {
     const char *err_code = NULL;
     const char *err_json = NULL;
@@ -374,7 +408,7 @@ handle_smartctl_command (const char *device, HelperSmartOp op)
         dup2 (pfd[1], STDERR_FILENO);
         close (pfd[1]);
 
-        exec_whitelisted_smartctl (op, device);
+        exec_whitelisted_smartctl (op, device, dev_type);
     }
 
     close (pfd[1]);
@@ -508,7 +542,8 @@ handle_hello (const char *version_arg, int *handshake_done)
         "{\"protocol\":\"" PULS_HELPER_PROTO_TAG "\","
         "\"version\":2,"
         "\"capabilities\":[\"READ_SMART\",\"ACTION\",\"STREAM_SCAN\"],"
-        "\"read_options\":[\"standby\"],"
+        "\"read_options\":[\"standby\",\"type\"],"
+        "\"device_types\":[\"sat\",\"sntasmedia\",\"sntjmicron\",\"sntrealtek\"],"
         "\"actions\":[\"short\",\"long\",\"abort\"],"
         "\"streaming\":true,"
         "\"chunk_frame\":\"" PULS_HELPER_RESP_CHUNK "\"}\n";
@@ -604,17 +639,33 @@ dispatch_protocol_line (char *line, int *handshake_done)
 
     if (strcmp (toks[0], PULS_HELPER_CMD_READ_SMART) == 0) {
         if (n_toks == 2) {
-            handle_smartctl_command (toks[1], HELPER_OP_SMART_READ);
+            handle_smartctl_command (toks[1], HELPER_OP_SMART_READ, NULL);
         } else if (n_toks == 3) {
             if (!puls_helper_is_valid_read_option (toks[2])) {
                 send_frame_err (PULS_HELPER_ERR_INVALID_SUBCMD,
-                                "{\"error\":\"Invalid READ_SMART subcommand; only 'standby' is allowed\"}\n");
+                                "{\"error\":\"Invalid READ_SMART subcommand; only 'standby' or 'type <devtype>' is allowed\"}\n");
             } else {
-                handle_smartctl_command (toks[1], HELPER_OP_SMART_READ_STANDBY);
+                handle_smartctl_command (toks[1], HELPER_OP_SMART_READ_STANDBY, NULL);
+            }
+        } else if (n_toks == 4 && strcmp (toks[2], PULS_HELPER_READ_OPT_DEVTYPE) == 0) {
+            if (!puls_helper_is_valid_device_type (toks[3])) {
+                send_frame_err (PULS_HELPER_ERR_INVALID_SUBCMD,
+                                "{\"error\":\"Invalid READ_SMART device type; allowed: sat, sntasmedia, sntjmicron, sntrealtek\"}\n");
+            } else {
+                handle_smartctl_command (toks[1], HELPER_OP_SMART_READ, toks[3]);
+            }
+        } else if (n_toks == 5 &&
+                   strcmp (toks[2], PULS_HELPER_READ_OPT_STANDBY) == 0 &&
+                   strcmp (toks[3], PULS_HELPER_READ_OPT_DEVTYPE) == 0) {
+            if (!puls_helper_is_valid_device_type (toks[4])) {
+                send_frame_err (PULS_HELPER_ERR_INVALID_SUBCMD,
+                                "{\"error\":\"Invalid READ_SMART device type; allowed: sat, sntasmedia, sntjmicron, sntrealtek\"}\n");
+            } else {
+                handle_smartctl_command (toks[1], HELPER_OP_SMART_READ_STANDBY, toks[4]);
             }
         } else {
             send_frame_err (PULS_HELPER_ERR_INVALID_ARG,
-                            "{\"error\":\"Usage: READ_SMART <dev> [standby]\"}\n");
+                            "{\"error\":\"Usage: READ_SMART <dev> [standby] [type <sat|sntasmedia|sntjmicron|sntrealtek>]\"}\n");
         }
         return 0;
     }
@@ -632,7 +683,7 @@ dispatch_protocol_line (char *line, int *handshake_done)
                 send_frame_err (PULS_HELPER_ERR_INVALID_ACTION,
                                 "{\"error\":\"Invalid ACTION subcommand; only 'short', 'long', or 'abort' is allowed\"}\n");
             } else {
-                handle_smartctl_command (toks[1], op);
+                handle_smartctl_command (toks[1], op, NULL);
             }
         }
         return 0;

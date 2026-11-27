@@ -3033,7 +3033,8 @@ test_helper_command_whitelist (void)
     g_assert_no_error (err);
     g_assert_true (ok);
     g_assert_nonnull (strstr (payload, "\"actions\":[\"short\",\"long\",\"abort\"]"));
-    g_assert_nonnull (strstr (payload, "\"read_options\":[\"standby\"]"));
+    g_assert_nonnull (strstr (payload, "\"read_options\":[\"standby\",\"type\"]"));
+    g_assert_nonnull (strstr (payload, "\"device_types\":[\"sat\",\"sntasmedia\",\"sntjmicron\",\"sntrealtek\"]"));
     g_clear_pointer (&err_code, g_free);
     g_clear_pointer (&payload, g_free);
 

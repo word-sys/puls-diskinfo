@@ -43,6 +43,11 @@
 
 /* Whitelisted Subcommands / Options */
 #define PULS_HELPER_READ_OPT_STANDBY     "standby"
+#define PULS_HELPER_READ_OPT_DEVTYPE     "type"
+#define PULS_HELPER_DEVTYPE_SAT          "sat"
+#define PULS_HELPER_DEVTYPE_SNT_ASMEDIA  "sntasmedia"
+#define PULS_HELPER_DEVTYPE_SNT_JMICRON  "sntjmicron"
+#define PULS_HELPER_DEVTYPE_SNT_REALTEK  "sntrealtek"
 #define PULS_HELPER_ACTION_SHORT         "short"
 #define PULS_HELPER_ACTION_LONG          "long"
 #define PULS_HELPER_ACTION_ABORT         "abort"
@@ -240,6 +245,27 @@ puls_helper_is_valid_read_option (const char *opt)
         return 1;
 
     return (strcmp (opt, PULS_HELPER_READ_OPT_STANDBY) == 0);
+}
+
+/**
+ * puls_helper_is_valid_device_type:
+ * @dev_type: Smartctl `-d` device type bridge identifier.
+ *
+ * Strictly allows only the auditable USB bridge `-d` type subset:
+ * `"sat"`, `"sntasmedia"`, `"sntjmicron"`, `"sntrealtek"`.
+ *
+ * Returns: 1 if whitelisted, 0 otherwise.
+ */
+static inline int
+puls_helper_is_valid_device_type (const char *dev_type)
+{
+    if (dev_type == NULL)
+        return 0;
+
+    return (strcmp (dev_type, PULS_HELPER_DEVTYPE_SAT) == 0 ||
+            strcmp (dev_type, PULS_HELPER_DEVTYPE_SNT_ASMEDIA) == 0 ||
+            strcmp (dev_type, PULS_HELPER_DEVTYPE_SNT_JMICRON) == 0 ||
+            strcmp (dev_type, PULS_HELPER_DEVTYPE_SNT_REALTEK) == 0);
 }
 
 /**
